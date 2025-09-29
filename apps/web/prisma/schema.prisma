@@ -1,0 +1,106 @@
+// apps/web/prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String       @id @default(uuid())
+  email       String       @unique
+  name        String
+  role        Role
+  photoUrl    String?
+  createdAt   DateTime     @default(now())
+  assignments Assignment[]
+  scans       Scan[]
+  merits      MeritLog[]
+}
+
+model Job {
+  id              String     @id @default(uuid())
+  title           String
+  venue           String
+  lat             Float?
+  lng             Float?
+  date            DateTime
+  callTimeUtc     DateTime
+  endTimeUtc      DateTime?
+  jobType         String
+  headcountTarget Int?
+  sheetId         String?
+  status          JobStatus  @default(PUBLISHED)
+  createdBy       String
+  callGraceMins   Int        @default(15)
+  createdAt       DateTime   @default(now())
+  assignments     Assignment[]
+  scans           Scan[]
+  merits          MeritLog[]
+
+  /// --- Wage rules (added for pay computation) ---
+  baseHourly            Float    @default(12)   // e.g. RM/hour
+  minCallHours          Float    @default(4)    // minimum payable hours
+  otAfterHours          Float    @default(8)    // hours threshold before OT
+  otMultiplier          Float    @default(1.5)  // OT rate multiplier
+  breakMinutes          Int      @default(0)    // unpaid break deduction
+  ownTransportAllowance Float    @default(0)    // allowance if OWN transport selected
+}
+
+model Assignment {
+  id         String            @id @default(uuid())
+  user       User              @relation(fields: [userId], references: [id])
+  userId     String
+  job        Job               @relation(fields: [jobId], references: [id])
+  jobId      String
+  roleName   String
+  status     AssignmentStatus
+  transport  TransportMode
+  approvedBy String?
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+
+  @@index([jobId, userId, status])
+}
+
+model Scan {
+  id             String     @id @default(uuid())
+  job            Job        @relation(fields: [jobId], references: [id])
+  jobId          String
+  user           User       @relation(fields: [userId], references: [id])
+  userId         String
+  action         ScanAction
+  tsUtc          DateTime   @default(now())
+  pmDeviceId     String
+  result         ScanResult
+  tokenJti       String     @unique
+  sessionId      String
+  lat            Float?
+  lng            Float?
+  manualOverride Boolean    @default(false)
+  overrideReason String?
+}
+
+model MeritLog {
+  id     String   @id @default(uuid())
+  job    Job      @relation(fields: [jobId], references: [id])
+  jobId  String
+  user   User     @relation(fields: [userId], references: [id])
+  userId String
+  kind   MeritKind
+  points Int
+  reason String?
+  tsUtc  DateTime @default(now())
+
+  @@index([jobId, userId, kind])
+}
+
+enum MeritKind { LATE NO_SHOW EARLY_EXIT GOOD }
+enum Role { PART_TIMER PM ADMIN }
+enum JobStatus { DRAFT PUBLISHED CLOSED }
+enum AssignmentStatus { APPLIED APPROVED REJECTED WITHDRAWN }
+enum TransportMode { ATAG_BUS OWN }
+enum ScanAction { IN OUT }
+enum ScanResult { success duplicate out_of_vicinity invalid }
