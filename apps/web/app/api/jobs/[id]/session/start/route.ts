@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { redis } from "../../../../../lib/redis";
+import { redis } from '@/lib/redis';
 import { randomUUID } from "crypto";
 
 const SESSION_TTL_SECONDS = Number(process.env.SESSION_TTL_SECONDS || "21600");
