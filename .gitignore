@@ -1,0 +1,32 @@
+@"
+# Node
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# Next.js / builds
+.next/
+out/
+dist/
+build/
+.cache/
+.turbo/
+
+# TypeScript
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+apps/**/.env
+packages/**/.env
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+"@ | Set-Content -Encoding utf8 .gitignore

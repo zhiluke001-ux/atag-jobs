@@ -1,0 +1,11 @@
+{
+  "name": "atag-jobs",
+  "private": true,
+  "scripts": {
+    "db:generate": "npm run generate --prefix packages/db",
+    "db:migrate": "npm run migrate --prefix packages/db",
+    "db:seed": "npm run seed --prefix packages/db",
+    "dev:api": "npm run start:dev --prefix apps/api",
+    "dev:web": "npm run dev --prefix apps/web"
+  }
+}

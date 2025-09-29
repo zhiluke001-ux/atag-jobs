@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String       @id @default(uuid())
+  email       String       @unique
+  name        String
+  role        Role
+  photoUrl    String?
+  createdAt   DateTime     @default(now())
+  assignments Assignment[]
+  scans       Scan[]
+  merits      MeritLog[]
+  devices     Device[]
+  auditLogs   AuditLog[]   @relation("AuditActor")
+}
+
+model Job {
+  id              String     @id @default(uuid())
+  title           String
+  venue           String
+  lat             Float?
+  lng             Float?
+  date            DateTime
+  callTimeUtc     DateTime
+  endTimeUtc      DateTime?
+  jobType         String
+  headcountTarget Int?
+  sheetId         String?
+  status          JobStatus  @default(PUBLISHED)
+  createdBy       String
+  callGraceMins   Int        @default(15)
+  baseHourly          Float   @default(12.0)
+  minCallHours        Float   @default(4.0)
+  otAfterHours        Float   @default(8.0)
+  otMultiplier        Float   @default(1.5)
+  breakMinutes        Int     @default(0)
+  ownTransportAllowance Float @default(0.0)
+  createdAt       DateTime   @default(now())
+  assignments     Assignment[]
+  scans           Scan[]
+  merits          MeritLog[]
+  payCalcs        PayCalc[]
+  auditLogs       AuditLog[] @relation("AuditJob")
+}
+
+model Assignment {
+  id         String            @id @default(uuid())
+  user       User              @relation(fields: [userId], references: [id])
+  userId     String
+  job        Job               @relation(fields: [jobId], references: [id])
+  jobId      String
+  roleName   String
+  status     AssignmentStatus
+  transport  TransportMode
+  approvedBy String?
+  approvedAt DateTime?
+  createdAt  DateTime          @default(now())
+
+  @@index([jobId, userId, status])
+}
+
+model Scan {
+  id             String     @id @default(uuid())
+  job            Job        @relation(fields: [jobId], references: [id])
+  jobId          String
+  user           User       @relation(fields: [userId], references: [id])
+  userId         String
+  action         ScanAction
+  tsUtc          DateTime   @default(now())
+  pmDeviceId     String
+  result         ScanResult
+  tokenJti       String     @unique
+  sessionId      String
+  lat            Float?
+  lng            Float?
+  manualOverride Boolean    @default(false)
+  overrideReason String?
+}
+
+model MeritLog {
+  id     String   @id @default(uuid())
+  job    Job      @relation(fields: [jobId], references: [id])
+  jobId  String
+  user   User     @relation(fields: [userId], references: [id])
+  userId String
+  kind   MeritKind
+  points Int
+  reason String?
+  tsUtc  DateTime @default(now())
+
+  @@index([jobId, userId, kind])
+}
+
+model PayCalc {
+  id                  String   @id @default(uuid())
+  job                 Job      @relation(fields: [jobId], references: [id])
+  jobId               String
+  user                User     @relation(fields: [userId], references: [id])
+  userId              String
+  firstInUtc          DateTime?
+  lastOutUtc          DateTime?
+  baseHours           Float    @default(0)
+  otHours             Float    @default(0)
+  payableHours        Float    @default(0)
+  basePay             Float    @default(0)
+  otPay               Float    @default(0)
+  transportAllowance  Float    @default(0)
+  totalPay            Float    @default(0)
+  computedAt          DateTime @default(now())
+
+  @@index([jobId, userId])
+}
+
+model Device {
+  id        String @id @default(uuid())
+  user      User   @relation(fields: [userId], references: [id])
+  userId    String
+  kind      DeviceKind
+  label     String
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  actor     User?    @relation("AuditActor", fields: [actorId], references: [id])
+  actorId   String?
+  job       Job?     @relation("AuditJob", fields: [jobId], references: [id])
+  jobId     String?
+  action    String
+  entity    String
+  entityId  String
+  before    String?
+  after     String?
+  tsUtc     DateTime @default(now())
+}
+
+enum MeritKind { LATE NO_SHOW EARLY_EXIT GOOD }
+enum Role { PART_TIMER PM ADMIN }
+enum JobStatus { DRAFT PUBLISHED CLOSED }
+enum AssignmentStatus { APPLIED APPROVED REJECTED WITHDRAWN }
+enum TransportMode { ATAG_BUS OWN }
+enum ScanAction { IN OUT }
+enum ScanResult { success duplicate out_of_vicinity invalid }
+enum DeviceKind { PM_SCANNER }
