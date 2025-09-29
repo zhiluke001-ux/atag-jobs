@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { redis } from "../../../../../lib/redis";
+import { redis } from '@/lib/redis';
 const SESSION_TTL_SECONDS = Number(process.env.SESSION_TTL_SECONDS || "21600");
 export const runtime = "nodejs";
 export async function POST(req: Request, { params }: { params: { id: string } }) {
