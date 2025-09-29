@@ -22,9 +22,8 @@ const Ctx = createContext<AuthCtx>({
   refresh: async () => {},
 });
 
-const apiBase = () =>
-  (process.env.NEXT_PUBLIC_API_URL?.trim() ||
-    `${location.protocol}//${location.hostname}:4000`).replace(/\/+$/, '');
+const apiBase = () => ""; // same-origin API routes
+
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User>(null);
