@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from '@/lib/prisma';
 import { ensureCsrf, getCsrf, verifyCsrf } from '@/lib/csrf';
-import { signQR } from "../../../../lib/jwt";
-import { redis } from "../../../../lib/redis";
+import { signQR } from '@/lib/jwt';
+import { redis } from '@/lib/redis';
 
 const TOKEN_TTL_SECONDS = Number(process.env.QR_TOKEN_TTL_SECONDS || "60");
 
