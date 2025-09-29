@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { computePay } from "../../../../../lib/pay";
+import { computePayPreview } from '@/lib/pay';
 
 export const runtime = "nodejs";
 
