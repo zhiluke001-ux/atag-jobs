@@ -1,5 +1,3 @@
-// apps/web/prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -9,7 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/* ---- Enums (put first) ---- */
 enum MeritKind { LATE NO_SHOW EARLY_EXIT GOOD }
 enum Role { PART_TIMER PM ADMIN }
 enum JobStatus { DRAFT PUBLISHED CLOSED }
@@ -18,7 +15,6 @@ enum TransportMode { ATAG_BUS OWN }
 enum ScanAction { IN OUT }
 enum ScanResult { success duplicate out_of_vicinity invalid }
 
-/* ---- Models ---- */
 model User {
   id          String       @id @default(uuid())
   email       String       @unique
@@ -51,7 +47,6 @@ model Job {
   scans           Scan[]
   merits          MeritLog[]
 
-  // Wage rules used by pay preview/export
   baseHourly            Float  @default(12)
   minCallHours          Float  @default(4)
   otAfterHours          Float  @default(8)
