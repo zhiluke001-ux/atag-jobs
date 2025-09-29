@@ -22,7 +22,9 @@ const Ctx = createContext<AuthCtx>({
   refresh: async () => {},
 });
 
-const apiBase = () => ""; // same-origin API routes
+// was: const apiBase = () => "";
+const apiBase = () => "/api"; // same-origin, prefixed with /api
+
 
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
