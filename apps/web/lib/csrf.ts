@@ -1,29 +1,78 @@
-import { cookies } from "next/headers";
-import { redis } from "./redis";
-import { randomUUID } from "crypto";
+// apps/web/lib/csrf.ts
+import { Redis } from '@upstash/redis';
 
-const CSRF_PREFIX = "csrf:";
-const SESSION_TTL_SECONDS = Number(process.env.SESSION_TTL_SECONDS || "21600");
+const redis = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+  ? new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL!,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+    })
+  : null;
 
-export async function ensureCsrf(uid: string) {
-  const k = `${CSRF_PREFIX}${uid}`;
-  const existing = await redis.get<string>(k);
+// Fallback in dev if no Redis is configured
+const mem = new Map<string, { v: string; exp: number }>();
+
+const CSRF_TTL_SECONDS = 6 * 60 * 60; // 6h
+const key = (uid: string) => `csrf:${uid}`;
+
+function rnd(): string {
+  // 32-byte URL-safe token
+  const a = new Uint8Array(32);
+  if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
+    crypto.getRandomValues(a);
+  } else {
+    // node fallback
+    const { randomBytes } = require('crypto');
+    const b: Buffer = randomBytes(32);
+    b.forEach((v, i) => (a[i] = v));
+  }
+  return Buffer.from(a).toString('base64url');
+}
+
+export async function ensureCsrf(uid: string): Promise<string> {
+  if (!uid) throw new Error('uid required');
+
+  const existing = await getCsrf(uid);
   if (existing) return existing;
-  const token = randomUUID();
-  await redis.set(k, token, { ex: SESSION_TTL_SECONDS });
+
+  const token = rnd();
+
+  if (redis) {
+    await redis.setex(key(uid), CSRF_TTL_SECONDS, token);
+  } else {
+    mem.set(key(uid), { v: token, exp: Date.now() + CSRF_TTL_SECONDS * 1000 });
+  }
   return token;
 }
 
-export async function getCsrf(uid: string) {
-  return (await redis.get<string>(`${CSRF_PREFIX}${uid}`)) || null;
+export async function getCsrf(uid: string): Promise<string | null> {
+  if (!uid) return null;
+
+  if (redis) {
+    const v = await redis.get<string>(key(uid));
+    return v ?? null;
+  } else {
+    const entry = mem.get(key(uid));
+    if (!entry) return null;
+    if (entry.exp < Date.now()) {
+      mem.delete(key(uid));
+      return null;
+    }
+    return entry.v;
+  }
 }
 
-export async function requireCsrf(req: Request) {
-  if (process.env.NODE_ENV !== "production") return true;
-  const cookieStore = cookies();
-  const uid = cookieStore.get("uid")?.value;
+/**
+ * Simple checker for route handlers.
+ * Usage:
+ *   const ok = await verifyCsrf(req, userId)
+ *   if (!ok) return NextResponse.json({ error: 'csrf_invalid' }, { status: 403 })
+ */
+export async function verifyCsrf(req: Request, uid: string | null | undefined): Promise<boolean> {
   if (!uid) return false;
-  const sent = req.headers.get("x-csrf-token")?.trim() || "";
+  // In development you might skip; keep strict in prod
+  if (process.env.NODE_ENV !== 'production') return true;
+
   const expected = await getCsrf(uid);
-  return !!expected && sent === expected;
+  const sent = (req.headers.get('x-csrf-token') || '').trim();
+  return !!expected && !!sent && sent === expected;
 }
