@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "../../../../../lib/prisma";
-import { computePay } from "../../../../../lib/pay";
+import { prisma } from '@/lib/prisma';
+import { computePay } from '@/lib/pay';
 import { google } from "googleapis";
 
 export const runtime = "nodejs";
