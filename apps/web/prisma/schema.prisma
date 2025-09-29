@@ -1,4 +1,5 @@
 // apps/web/prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,6 +9,16 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/* ---- Enums (put first) ---- */
+enum MeritKind { LATE NO_SHOW EARLY_EXIT GOOD }
+enum Role { PART_TIMER PM ADMIN }
+enum JobStatus { DRAFT PUBLISHED CLOSED }
+enum AssignmentStatus { APPLIED APPROVED REJECTED WITHDRAWN }
+enum TransportMode { ATAG_BUS OWN }
+enum ScanAction { IN OUT }
+enum ScanResult { success duplicate out_of_vicinity invalid }
+
+/* ---- Models ---- */
 model User {
   id          String       @id @default(uuid())
   email       String       @unique
@@ -40,13 +51,13 @@ model Job {
   scans           Scan[]
   merits          MeritLog[]
 
-  /// --- Wage rules (added for pay computation) ---
-  baseHourly            Float    @default(12)   // e.g. RM/hour
-  minCallHours          Float    @default(4)    // minimum payable hours
-  otAfterHours          Float    @default(8)    // hours threshold before OT
-  otMultiplier          Float    @default(1.5)  // OT rate multiplier
-  breakMinutes          Int      @default(0)    // unpaid break deduction
-  ownTransportAllowance Float    @default(0)    // allowance if OWN transport selected
+  // Wage rules used by pay preview/export
+  baseHourly            Float  @default(12)
+  minCallHours          Float  @default(4)
+  otAfterHours          Float  @default(8)
+  otMultiplier          Float  @default(1.5)
+  breakMinutes          Int    @default(0)
+  ownTransportAllowance Float  @default(0)
 }
 
 model Assignment {
@@ -96,11 +107,3 @@ model MeritLog {
 
   @@index([jobId, userId, kind])
 }
-
-enum MeritKind { LATE NO_SHOW EARLY_EXIT GOOD }
-enum Role { PART_TIMER PM ADMIN }
-enum JobStatus { DRAFT PUBLISHED CLOSED }
-enum AssignmentStatus { APPLIED APPROVED REJECTED WITHDRAWN }
-enum TransportMode { ATAG_BUS OWN }
-enum ScanAction { IN OUT }
-enum ScanResult { success duplicate out_of_vicinity invalid }
