@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "../../../../../lib/prisma";
-import { redis } from "../../../../../lib/redis";
+import { prisma } from '@/lib/prisma';
+import { redis } from '@/lib/redis';
 
 export const runtime = "nodejs";
 
