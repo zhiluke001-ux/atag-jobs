@@ -2,104 +2,128 @@
 import { google } from 'googleapis';
 import prisma from '@/lib/prisma';
 
-/**
- * Uses a Google Service Account to append a row to the job's dedicated Sheet.
- * Env required:
- *   GS_SA_EMAIL   = <service-account-email>
- *   GS_SA_KEY_B64 = base64-encoded private key (-----BEGIN PRIVATE KEY----- ... END PRIVATE KEY-----)
- */
-async function getSheets() {
+
+const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+
+function getJwt() {
   const clientEmail = process.env.GS_SA_EMAIL;
   const keyB64 = process.env.GS_SA_KEY_B64;
   if (!clientEmail || !keyB64) {
-    // In prod, we just no-op if Sheets isn't configured
-    return null as const;
+    throw new Error("Google Sheets env not set (GS_SA_EMAIL / GS_SA_KEY_B64).");
   }
-  const privateKey = Buffer.from(keyB64, 'base64').toString('utf8');
-  const auth = new google.auth.JWT(clientEmail, undefined, privateKey, [
-    'https://www.googleapis.com/auth/spreadsheets',
-  ]);
-  return google.sheets({ version: 'v4', auth });
+  const privateKey = Buffer.from(keyB64, "base64").toString("utf8");
+  return new google.auth.JWT(clientEmail, undefined, privateKey, SCOPES);
 }
 
-/**
- * Append an attendance row to the job's sheet.
- * Will silently return if the job has no sheetId or Sheets env not set.
- *
- * values written: [ISO time, IN/OUT, Name, Email, Job Title, Venue, Late Note, PM Device, Session ID, JTI]
- */
-export async function appendAttendanceRow(
-  jobId: string,
-  userId: string,
-  scan: {
-    tsUtc: Date | string;
-    action: 'IN' | 'OUT';
-    pmDeviceId: string;
-    sessionId: string;
-    tokenJti: string;
-  },
-  late: boolean,
-  lateMins: number
-) {
-  // fetch job & user
-  const [job, user] = await Promise.all([
-    prisma.job.findUnique({ where: { id: jobId } }),
-    prisma.user.findUnique({ where: { id: userId } }),
-  ]);
-
-  // no sheet configured for this job or missing env → skip
-  if (!job?.sheetId) return;
-
-  const sheets = await getSheets();
-  if (!sheets) return;
-
-  const iso = new Date(scan.tsUtc).toISOString();
-  const values = [
-    [
-      iso,
-      scan.action,
-      user?.name ?? userId,
-      user?.email ?? '',
-      job?.title ?? jobId,
-      job?.venue ?? '',
-      late ? `LATE ${lateMins} min` : '',
-      scan.pmDeviceId,
-      scan.sessionId,
-      scan.tokenJti,
-    ],
-  ];
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: job.sheetId,
-    range: 'Attendance!A1',
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values },
-  });
+function sheetsApi() {
+  const auth = getJwt();
+  return google.sheets({ version: "v4", auth });
 }
 
-/**
- * (Optional) Create a new Google Sheet for a job and store the sheetId on Job.
- * Usage when you add a “Create Job” flow that provisions sheets.
- */
-export async function createJobSheet(jobId: string, title: string) {
-  const sheets = await getSheets();
-  if (!sheets) throw new Error('Google Sheets not configured');
+async function ensureTabs(spreadsheetId: string) {
+  const s = sheetsApi();
+  const meta = await s.spreadsheets.get({ spreadsheetId });
+  const tabs = (meta.data.sheets || []).map((sh) => sh.properties?.title);
 
-  // Create spreadsheet with useful tabs
-  const createResp = await sheets.spreadsheets.create({
+  const needed = ["Attendance", "Summary", "Payout"].filter(
+    (t) => !tabs.includes(t)
+  );
+  if (!needed.length) return;
+
+  await s.spreadsheets.batchUpdate({
+    spreadsheetId,
     requestBody: {
-      properties: { title },
-      sheets: [
-        { properties: { title: 'Attendance' } },
-        { properties: { title: 'Summary' } },
-        { properties: { title: 'Payout' } },
-      ],
+      requests: needed.map((title) => ({
+        addSheet: { properties: { title } },
+      })),
     },
   });
 
-  const sheetId = createResp.data.spreadsheetId!;
-  await prisma.job.update({ where: { id: jobId }, data: { sheetId } });
-  return sheetId;
+  // Headers for Attendance + Payout
+  await s.spreadsheets.values.update({
+    spreadsheetId,
+    range: "Attendance!A1",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[
+        "Timestamp", "Action", "Name", "Email", "Role",
+        "Job Title", "Venue", "Late/Notes", "PM Device", "Session", "JTI"
+      ]]
+    }
+  });
+
+  await s.spreadsheets.values.update({
+    spreadsheetId,
+    range: "Payout!A1",
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[
+        "Name","Email","Transport","First IN","Last OUT",
+        "Base Hours","OT Hours","Payable Hours",
+        "Base Pay","OT Pay","Transport Allow.","Total"
+      ]]
+    }
+  });
 }
 
-export default { appendAttendanceRow, createJobSheet };
+async function createJobSheet(jobId: string, title: string) {
+  const s = sheetsApi();
+  const resp = await s.spreadsheets.create({
+    requestBody: {
+      properties: { title: `ATAG – ${title}` },
+      sheets: [
+        { properties: { title: "Attendance" } },
+        { properties: { title: "Summary" } },
+        { properties: { title: "Payout" } },
+      ],
+    },
+  });
+  const spreadsheetId = resp.data.spreadsheetId!;
+  await ensureTabs(spreadsheetId);
+  return spreadsheetId;
+}
+
+async function appendAttendanceRow(
+  spreadsheetId: string,
+  row: (string | number)[]
+) {
+  const s = sheetsApi();
+  await s.spreadsheets.values.append({
+    spreadsheetId,
+    range: "Attendance!A1",
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [row] },
+  });
+}
+
+async function rewritePayoutTab(
+  spreadsheetId: string,
+  rows: (string | number)[][]
+) {
+  const s = sheetsApi();
+
+  // Clear old rows below header
+  await s.spreadsheets.values.clear({
+    spreadsheetId,
+    range: "Payout!A2:Z9999",
+  });
+
+  if (rows.length === 0) return;
+
+  await s.spreadsheets.values.update({
+    spreadsheetId,
+    range: "Payout!A2",
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: rows },
+  });
+}
+
+export default {
+  ensureTabs,
+  createJobSheet,
+  appendAttendanceRow,
+  rewritePayoutTab,
+};
+
+// also expose named exports for existing imports that do destructuring
+export { ensureTabs, createJobSheet, appendAttendanceRow, rewritePayoutTab };
