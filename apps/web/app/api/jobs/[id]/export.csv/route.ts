@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { computePay } from "@/lib/pay";
+import { computePayFromScans } from "@/lib/pay";
 
 export const runtime = "nodejs";
 
@@ -9,23 +9,18 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    // Fetch job with assignments + user info + scans separately
+    // Fetch job with assignments + scans
     const job = await prisma.job.findUnique({
       where: { id: params.id },
       include: {
-        assignments: {
-          include: { user: true }, // ✅ user info inside assignment
-        },
-        scans: true, // ✅ all scan records for the job
+        assignments: { include: { user: true } },
+        scans: true,
       },
     });
 
     if (!job) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
-
-    // Compute pay rows
-    const { rows } = await computePay(params.id);
 
     // CSV header
     const header = [
@@ -44,22 +39,32 @@ export async function GET(
     ];
     const lines = [header.join(",")];
 
-    // Build CSV from rows
-    for (const r of rows) {
-      lines.push([
-        r.user.name,
-        r.user.email,
-        r.transport,
-        r.firstIn ?? "",
-        r.lastOut ?? "",
-        r.hours.base,
-        r.hours.ot,
-        r.hours.payable,
-        r.money.base,
-        r.money.ot,
-        r.money.transport,
-        r.money.total,
-      ].join(","));
+    // Loop assignments (each worker)
+    for (const assignment of job.assignments) {
+      const user = assignment.user;
+
+      // Get this user’s scans
+      const scans = job.scans.filter((s) => s.userId === user.id);
+
+      // Compute pay
+      const pay = computePayFromScans(job, scans, assignment.transport);
+
+      lines.push(
+        [
+          user.name,
+          user.email,
+          assignment.transport,
+          pay.window.start ?? "",
+          pay.window.end ?? "",
+          pay.hours.base,
+          pay.hours.ot,
+          pay.hours.payable,
+          pay.money.basePay,
+          pay.money.otPay,
+          pay.money.transportAllowance,
+          pay.money.total,
+        ].join(",")
+      );
     }
 
     // Return CSV response
@@ -72,6 +77,9 @@ export async function GET(
     });
   } catch (err) {
     console.error("Export CSV error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }
