@@ -3,7 +3,9 @@ import { useEffect, useState } from 'react';
 import { formatJobRange } from '../../lib/time';
 
 type Job = { id:string; title:string; venue:string; jobType:string; callTimeUtc:string; endTimeUtc?:string|null; status:string };
-const API = () => (process.env.NEXT_PUBLIC_API_URL?.trim() || `${location.protocol}//${location.hostname}:4000`).replace(/\/+$/,'');
+
+const base = (process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/,'') || '');
+const api = (p: string) => `${base}/api${p.startsWith('/') ? p : `/${p}`}`;
 
 export default function AvailablePage(){
   const [jobs,setJobs]=useState<Job[]>([]);
@@ -11,7 +13,7 @@ export default function AvailablePage(){
 
   useEffect(()=>{ (async()=>{
     try{
-      const r=await fetch(`${API()}/jobs`,{mode:'cors',credentials:'include'});
+      const r = await fetch(api('/jobs'), { credentials:'include', cache:'no-store' });
       if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
       setJobs(await r.json());
     }catch(e:any){ setErr(e?.message||'Failed to fetch'); }
