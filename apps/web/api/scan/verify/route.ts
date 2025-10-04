@@ -59,10 +59,49 @@ export async function POST(req: Request) {
       }
     }
 
-    try {
-      const { appendAttendanceRow } = await import("@/lib/sheets");
-      await appendAttendanceRow(String(job), String(sub), scan, late, minutesLate);
-    } catch {}
+// ⬇️ REPLACE your current try/catch block that calls appendAttendanceRow with this:
+try {
+  // lazy import so build works in edge/serverless
+  const { appendAttendanceRow } = await import("@/lib/sheets");
+
+  // fetch user / assignment / job to compose the row
+  const user = await prisma.user.findUnique({
+    where: { id: String(sub) },
+    select: { name: true, email: true },
+  });
+
+  const assignment = await prisma.assignment.findFirst({
+    where: { jobId: String(job), userId: String(sub) },
+    select: { roleName: true },
+  });
+
+  const jobRec = await prisma.job.findUnique({
+    where: { id: String(job) },
+    select: { sheetId: true, title: true, venue: true },
+  });
+
+  // only append if this job already has a Google Sheet
+  if (jobRec?.sheetId) {
+    const row: (string | number)[] = [
+      new Date(scan.tsUtc).toISOString(),                 // Timestamp
+      scan.action,                                        // Action (IN/OUT)
+      user?.name ?? "",                                   // Name
+      user?.email ?? "",                                  // Email
+      assignment?.roleName ?? "",                         // Role
+      jobRec.title ?? "",                                 // Job Title
+      jobRec.venue ?? "",                                 // Venue
+      late ? `LATE (+${minutesLate}m)` : "",              // Late/Notes
+      scan.pmDeviceId,                                    // PM Device
+      scan.sessionId,                                     // Session
+      scan.tokenJti,                                      // JTI (token id)
+    ];
+
+    await appendAttendanceRow(jobRec.sheetId, row);
+  }
+} catch (_err) {
+  // do not block attendance if Sheets write fails
+}
+
 
     const user = await prisma.user.findUnique({ where: { id: String(sub) } });
     return NextResponse.json({ result: "success", user: { name: user?.name, photo: user?.photoUrl }, late, minutesLate });
