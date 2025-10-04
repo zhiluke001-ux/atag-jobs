@@ -6,8 +6,6 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { computePayFromScans } from "@/lib/pay";
 
-export const runtime = "nodejs";
-
 export async function GET(
   _: Request,
   { params }: { params: { id: string } }
