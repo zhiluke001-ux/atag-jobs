@@ -1,56 +1,132 @@
 import { NextResponse } from "next/server";
-import { prisma } from '@/lib/prisma';
-import { computePay } from '@/lib/pay';
-import { google } from "googleapis";
+import prisma from "@/lib/prisma";
+import { computePayFromScans } from "@/lib/pay";
+import { sheets } from "@/lib/sheets";
 
 export const runtime = "nodejs";
 
-function sheets() {
-  const email = process.env.GS_SA_EMAIL;
-  const keyB64 = process.env.GS_SA_KEY_B64;
-  if (!email || !keyB64) throw new Error("sheets_not_configured");
-  const key = Buffer.from(keyB64, "base64").toString("utf8");
-  const jwt = new google.auth.JWT(email, undefined, key, ["https://www.googleapis.com/auth/spreadsheets"]);
-  return google.sheets({ version: "v4", auth: jwt });
-}
+export async function POST(
+  _req: Request,
+  { params }: { params: { id: string } }
+) {
+  try {
+    // 1) Load job (with assignments + all scans for this job)
+    const job = await prisma.job.findUnique({
+      where: { id: params.id },
+      include: {
+        assignments: { include: { user: true } },
+        scans: true,
+      },
+    });
 
-export async function POST(_: Request, { params }: { params: { id: string } }) {
-  const job = await prisma.job.findUnique({ where: { id: params.id } });
-  if (!job?.sheetId) return NextResponse.json({ error: "no_sheet_for_job" }, { status: 400 });
+    if (!job) {
+      return NextResponse.json({ error: "job_not_found" }, { status: 404 });
+    }
+    if (!job.sheetId) {
+      return NextResponse.json({ error: "no_sheet_for_job" }, { status: 400 });
+    }
 
-  const { rows } = await computePay(params.id);
-  const s = sheets();
+    // 2) Build payout rows (one row per approved assignment)
+    const payoutHeader = [
+      "Name",
+      "Email",
+      "Transport",
+      "First IN",
+      "Last OUT",
+      "Base Hours",
+      "OT Hours",
+      "Payable Hours",
+      "Base Pay",
+      "OT Pay",
+      "Transport Allow.",
+      "Total Pay",
+    ];
 
-  // Payout tab
-  const payout = rows.map(r => [
-    r.name, r.email, r.transport,
-    r.firstInUtc ? new Date(r.firstInUtc).toISOString() : "",
-    r.lastOutUtc ? new Date(r.lastOutUtc).toISOString() : "",
-    r.baseHours, r.otHours, r.payableHours, r.basePay, r.otPay, r.transportAllowance, r.totalPay
-  ]);
+    const payoutRows: (string | number)[][] = [];
+    let sumBase = 0;
+    let sumOT = 0;
+    let sumTrans = 0;
+    let sumTotal = 0;
 
-  await s.spreadsheets.values.clear({ spreadsheetId: job.sheetId, range: "Payout!A2:Z9999" });
-  if (payout.length) {
+    for (const a of job.assignments) {
+      // (If you only want APPROVED folks, uncomment below)
+      // if (a.status !== "APPROVED") continue;
+
+      const scans = job.scans.filter((s) => s.userId === a.userId);
+      const pay = computePayFromScans(job, scans, a.transport);
+
+      // Track totals
+      sumBase += pay.money.basePay;
+      sumOT += pay.money.otPay;
+      sumTrans += pay.money.transportAllowance;
+      sumTotal += pay.money.total;
+
+      payoutRows.push([
+        a.user.name,
+        a.user.email,
+        a.transport,
+        pay.window.start ?? "",
+        pay.window.end ?? "",
+        pay.hours.base,
+        pay.hours.ot,
+        pay.hours.payable,
+        pay.money.basePay,
+        pay.money.otPay,
+        pay.money.transportAllowance,
+        pay.money.total,
+      ]);
+    }
+
+    // 3) Summary tab values
+    const headcount = job.assignments.length;
+    const uniqueParticipants = new Set(job.assignments.map((a) => a.userId)).size;
+
+    const summaryValues = [
+      ["Job Title", job.title],
+      ["Venue", job.venue],
+      ["Call Time (UTC)", job.callTimeUtc.toISOString()],
+      ["End Time (UTC)", job.endTimeUtc ? job.endTimeUtc.toISOString() : ""],
+      ["Headcount (assignments)", headcount],
+      ["Unique Participants", uniqueParticipants],
+      ["Base Pay Total (RM)", round2(sumBase)],
+      ["OT Pay Total (RM)", round2(sumOT)],
+      ["Transport Allow. Total (RM)", round2(sumTrans)],
+      ["Grand Total (RM)", round2(sumTotal)],
+    ];
+
+    // 4) Push to Google Sheets
+    const s = sheets();
+
+    // Ensure Payout tab has header + rows
     await s.spreadsheets.values.update({
       spreadsheetId: job.sheetId,
-      range: "Payout!A2",
+      range: "Payout!A1",
       valueInputOption: "USER_ENTERED",
-      requestBody: { values: payout }
+      requestBody: { values: [payoutHeader, ...payoutRows] },
     });
+
+    // Write Summary tab
+    await s.spreadsheets.values.update({
+      spreadsheetId: job.sheetId,
+      range: "Summary!A1",
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: summaryValues },
+    });
+
+    return NextResponse.json({
+      ok: true,
+      wrote: {
+        payoutRows: payoutRows.length,
+        summaryLines: summaryValues.length,
+      },
+    });
+  } catch (err) {
+    console.error("sheets/rewrite error:", err);
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
+}
 
-  const headcount = rows.length;
-  const unique = rows.filter(r => r.firstInUtc).length;
-  const late = await prisma.meritLog.count({ where: { jobId: params.id, kind: "LATE" } });
-  const noShow = await prisma.meritLog.count({ where: { jobId: params.id, kind: "NO_SHOW" } });
-  const totalHours = Number(rows.reduce((s,v)=>s+v.payableHours,0).toFixed(2));
-  const totalWage  = Number(rows.reduce((s,v)=>s+v.totalPay,0).toFixed(2));
-
-  await s.spreadsheets.values.update({
-    spreadsheetId: job.sheetId, range: "Summary!A2",
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [[headcount, unique, late, noShow, totalHours, totalWage]] }
-  });
-
-  return NextResponse.json({ ok: true, headcount, unique, late, noShow, totalHours, totalWage });
+/* local helper */
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
 }
