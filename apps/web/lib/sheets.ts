@@ -2,23 +2,16 @@
 import { google } from "googleapis";
 
 /**
- * Append a single row to the "Attendance" sheet.
- * Expects:
- *   row = [
- *     ISO timestamp, "IN"/"OUT", name, email, role, jobTitle, venue,
- *     notes, pmDeviceId, sessionId, tokenJti
- *   ]
+ * Auth – uses service account envs you already configured on Vercel:
+ *   GS_SA_EMAIL     = atag-966@atag-jobs.iam.gserviceaccount.com
+ *   GS_SA_KEY_B64   = base64 of the service account private key (including header/footer)
  */
-export async function appendAttendanceRow(
-  spreadsheetId: string,
-  row: (string | number)[]
-) {
+function getSheetsClient() {
   const clientEmail = process.env.GS_SA_EMAIL;
   const keyB64 = process.env.GS_SA_KEY_B64;
 
   if (!clientEmail || !keyB64) {
-    // no credentials configured → silently skip (don’t break scans)
-    return;
+    throw new Error("Google Sheets service account envs missing (GS_SA_EMAIL / GS_SA_KEY_B64).");
   }
 
   const privateKey = Buffer.from(keyB64, "base64").toString("utf8");
@@ -29,67 +22,165 @@ export async function appendAttendanceRow(
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
 
-  const sheets = google.sheets({ version: "v4", auth });
-
-  // Ensure the sheet/tab exists; if not, create it once.
-  await ensureAttendanceTab(sheets, spreadsheetId);
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: "Attendance!A1",
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [row] },
-  });
+  return google.sheets({ version: "v4", auth });
 }
 
-/** Ensure an "Attendance" tab exists. Creates it if missing. */
-async function ensureAttendanceTab(
-  sheets: ReturnType<typeof google.sheets>,
-  spreadsheetId: string
+/** ---------- Public API (used by your routes) ---------- */
+
+/** Append one row to Attendance tab.  */
+export async function appendAttendanceRow(
+  spreadsheetId: string,
+  row: (string | number)[]
 ) {
-  const meta = await sheets.spreadsheets.get({ spreadsheetId });
-  const hasAttendance = (meta.data.sheets || []).some(
-    (s) => s.properties?.title === "Attendance"
-  );
-
-  if (!hasAttendance) {
-    await sheets.spreadsheets.batchUpdate({
+  try {
+    const sheets = getSheetsClient();
+    await ensureTabs(spreadsheetId, sheets);
+    await sheets.spreadsheets.values.append({
       spreadsheetId,
-      requestBody: {
-        requests: [
-          {
-            addSheet: {
-              properties: { title: "Attendance" },
-            },
-          },
-        ],
-      },
-    });
-
-    // add a header row (optional)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: "Attendance!A1:K1",
+      range: "Attendance!A1",
       valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [
-          [
-            "Timestamp",
-            "Action",
-            "Name",
-            "Email",
-            "Role",
-            "Job Title",
-            "Venue",
-            "Notes",
-            "PM Device",
-            "Session",
-            "JTI",
-          ],
-        ],
-      },
+      requestBody: { values: [row] },
     });
+  } catch {
+    // Swallow errors so attendance flow never breaks.
   }
 }
 
-export default { appendAttendanceRow };
+/** Ensure all tabs exist with headers. Safe to call repeatedly. */
+export async function ensureTabs(
+  spreadsheetId: string,
+  sheets = getSheetsClient()
+) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const titles = new Set((meta.data.sheets || []).map(s => s.properties?.title));
+
+  const want = ["Attendance", "Summary", "Payout"];
+  const missing = want.filter(t => !titles.has(t));
+
+  if (missing.length) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: missing.map(title => ({ addSheet: { properties: { title } } })),
+      },
+    });
+  }
+
+  // Ensure headers (idempotent updates)
+  await setHeaders(sheets, spreadsheetId, "Attendance!A1:K1", [
+    "Timestamp",
+    "Action",
+    "Name",
+    "Email",
+    "Role",
+    "Job Title",
+    "Venue",
+    "Notes",
+    "PM Device",
+    "Session",
+    "JTI",
+  ]);
+
+  await setHeaders(sheets, spreadsheetId, "Summary!A1:F1", [
+    "Headcount",
+    "Unique Participants",
+    "Late Count",
+    "No-Show Count",
+    "Total Payable Hours",
+    "Total Wages (RM)",
+  ]);
+
+  await setHeaders(sheets, spreadsheetId, "Payout!A1:L1", [
+    "Name",
+    "Email",
+    "Transport",
+    "First IN",
+    "Last OUT",
+    "Base Hours",
+    "OT Hours",
+    "Payable Hours",
+    "Base Pay (RM)",
+    "OT Pay (RM)",
+    "Transport Allow. (RM)",
+    "Total Pay (RM)",
+  ]);
+}
+
+/** Create a new spreadsheet with the 3 tabs, returns sheetId (spreadsheetId). */
+export async function createJobSheet(title: string): Promise<string> {
+  const sheets = getSheetsClient();
+  const res = await sheets.spreadsheets.create({
+    requestBody: {
+      properties: { title },
+      sheets: [
+        { properties: { title: "Attendance" } },
+        { properties: { title: "Summary" } },
+        { properties: { title: "Payout" } },
+      ],
+    },
+  });
+
+  const spreadsheetId = res.data.spreadsheetId!;
+  // set headers
+  await ensureTabs(spreadsheetId, sheets);
+  return spreadsheetId;
+}
+
+/** Overwrite the Payout tab (header + rows). */
+export async function rewritePayoutTab(
+  spreadsheetId: string,
+  rows: (string | number)[][]
+) {
+  const sheets = getSheetsClient();
+  await ensureTabs(spreadsheetId, sheets);
+
+  // Clear then write
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: "Payout!A1:Z9999",
+  });
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: "Payout!A1",
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [
+        [
+          "Name",
+          "Email",
+          "Transport",
+          "First IN",
+          "Last OUT",
+          "Base Hours",
+          "OT Hours",
+          "Payable Hours",
+          "Base Pay (RM)",
+          "OT Pay (RM)",
+          "Transport Allow. (RM)",
+          "Total Pay (RM)",
+        ],
+        ...rows,
+      ],
+    },
+  });
+}
+
+/** ---------- Internal helpers ---------- */
+
+async function setHeaders(
+  sheets: ReturnType<typeof getSheetsClient>,
+  spreadsheetId: string,
+  range: string,
+  headers: string[]
+) {
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [headers] },
+  });
+}
+
+const api = { appendAttendanceRow, ensureTabs, createJobSheet, rewritePayoutTab };
+export default api;
