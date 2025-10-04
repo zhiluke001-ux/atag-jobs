@@ -7,7 +7,6 @@ import { cookies } from "next/headers";
 import prisma from '@/lib/prisma';
 import { ensureCsrf, getCsrf, verifyCsrf } from '@/lib/csrf';
 
-export const runtime = "nodejs";
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const uid = cookies().get("uid")?.value;
