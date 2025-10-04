@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     }
 
     try {
-      const { appendAttendanceRow } = await import("@lib/sheets");
+      const { appendAttendanceRow } = await import("@/lib/sheets");
       await appendAttendanceRow(String(job), String(sub), scan, late, minutesLate);
     } catch {}
 
