@@ -7,8 +7,6 @@ import prisma from '@/lib/prisma';
 import { ensureCsrf, getCsrf, verifyCsrf } from '@/lib/csrf';
 
 
-export const runtime = "nodejs";
-
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const start = new Date(); start.setUTCHours(0,0,0,0);
   const end = new Date();   end.setUTCHours(23,59,59,999);
