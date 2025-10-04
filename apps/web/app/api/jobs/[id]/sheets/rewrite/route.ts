@@ -7,7 +7,6 @@ import prisma from "@/lib/prisma";
 import { computePayFromScans } from "@/lib/pay";
 import sheets from "@/lib/sheets"; // default export is an OBJECT
 
-export const runtime = "nodejs";
 
 // POST /api/jobs/:id/sheets/rewrite
 export async function POST(
