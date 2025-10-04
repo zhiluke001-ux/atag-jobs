@@ -8,8 +8,6 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import sheets from "@/lib/sheets";
 
-export const runtime = "nodejs";
-
 // Creates a new Google Sheet for the job (Attendance/Summary/Payout)
 // and stores spreadsheetId as job.sheetId.
 // If the job already has a sheet, we just ensure tabs and return it.
