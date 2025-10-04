@@ -17,8 +17,6 @@ async function currentSessionId(jobId: string){
   return JSON.parse(d).sessionId as string;
 }
 
-export const runtime = "nodejs";
-
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const uid = cookies().get("uid")?.value;
   if (!uid) return NextResponse.json({ error: "login_required" }, { status: 401 });
