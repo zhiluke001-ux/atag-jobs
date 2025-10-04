@@ -8,9 +8,6 @@
     "start": "next start",
     "postinstall": "prisma generate --schema=./prisma/schema.prisma"
   },
-  "prisma": {
-    "schema": "prisma/schema.prisma"
-  },
   "dependencies": {
     "@prisma/client": "^5.22.0",
     "ioredis": "^5.3.2",
@@ -30,4 +27,3 @@
     "typescript": "^5.4.0"
   }
 }
-
