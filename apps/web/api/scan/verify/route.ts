@@ -9,8 +9,6 @@ import { redis } from '@/lib/redis';
 
 const TOKEN_TTL_SECONDS = Number(process.env.QR_TOKEN_TTL_SECONDS || "60");
 
-export const runtime = "nodejs";
-
 export async function POST(req: Request) {
   const { token, pmDeviceId, sessionId, coords } = await req.json().catch(() => ({}));
   if (!token || !pmDeviceId || !sessionId)
