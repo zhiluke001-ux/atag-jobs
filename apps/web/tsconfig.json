@@ -1,25 +1,33 @@
 {
   "compilerOptions": {
     "target": "ES2021",
-    "module": "ESNext",
-    "jsx": "preserve",
-    "moduleResolution": "Bundler",
+
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+
     "strict": true,
+    "noEmit": true,
+    "incremental": true,
+
+    "esModuleInterop": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+
+    "jsx": "preserve",
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"]
     },
 
-    /* strongly recommended for Next */
-    "esModuleInterop": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-
-    /* nice-to-haves */
-    "skipLibCheck": true,
-    "allowJs": true,
-    "lib": ["dom", "dom.iterable", "esnext"],
-    "types": ["node", "next", "next/image-types"]
+    "types": [
+      "node",
+      "next",
+      "next/types/global",
+      "next/image-types/global"
+    ]
   },
   "include": [
     "next-env.d.ts",
