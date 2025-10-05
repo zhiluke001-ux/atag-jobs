@@ -27,6 +27,7 @@ export async function POST(req: Request){
   // set uid cookie + ensure CSRF cookie exists
   ensureCsrf();
   const res = NextResponse.json({ ok:true, user:{ id:user.id, name:user.name, email:user.email, role:user.role } });
-  res.cookies.set('uid', user.id, { httpOnly:true, secure:true, sameSite:'lax', path:'/' });
+  const secure = process.env.NODE_ENV === 'production';
+  res.cookies.set('uid', user.id, { httpOnly:true, secure, sameSite:'lax', path:'/' });
   return res;
 }
