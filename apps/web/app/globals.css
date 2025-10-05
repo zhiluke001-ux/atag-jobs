@@ -82,3 +82,22 @@ html, body {
 .site-footer ul { list-style: none; padding: 0; margin: 0; }
 .site-footer li { margin: 6px 0; }
 .site-footer a { color: #111; text-decoration: none; }
+
+/* ...keep your existing file; append/adjust these bits ... */
+
+/* Center big cards consistently on all pages */
+.centered { max-width: 860px; margin: 0 auto; }
+.elevated  { border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.06); }
+
+/* Make the home “Welcome” card sit slightly into the hero */
+.home-lead { transform: translateY(-24px); }
+@media (max-width: 768px){ .home-lead { transform:none; } }
+
+/* Navbar vertical alignment and spacing */
+.topbar .inner { gap: 12px; }
+.navlinks { display:flex; align-items:center; gap:14px; }
+.navlinks .btn.dark { padding: 8px 14px; border-radius: 10px; }
+
+/* Ensure footer cards align and have equal visual weight */
+.site-footer .card { border-radius:12px; }
+
