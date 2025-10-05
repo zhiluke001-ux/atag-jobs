@@ -1,14 +1,12 @@
 'use client';
-import { useAuth } from '../../components/Auth';
+import { useAuth } from '@/components/Auth';
 import { useEffect, useState } from 'react';
-import { formatJobRange } from '../../lib/time';
+import { formatJobRange } from '@/lib/time';
 
 type Job = { id:string; title:string; venue:string; jobType:string; callTimeUtc:string; endTimeUtc?:string|null; status:'PUBLISHED'|'DRAFT'|'CLOSED' };
 type ApplicantRow = { id:string; status:string };
 
-// same-origin API
-const base = (process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/,'') || '');
-const api = (p: string) => `${base}/api${p.startsWith('/') ? p : `/${p}`}`;
+const API = (p:string) => `/api${p}`;
 
 export default function Dashboard(){
   const { user } = useAuth();
@@ -18,12 +16,10 @@ export default function Dashboard(){
   useEffect(()=>{ (async()=>{
     if (!user) return;
     if (user.role==='PM' || user.role==='ADMIN') {
-      const r = await fetch(api('/jobs'), { credentials:'include', cache:'no-store' });
-      const js:Job[] = await r.json();
-      setJobs(js ?? []);
+      const r=await fetch(API('/jobs'),{credentials:'include'}); const js:Job[]=await r.json(); setJobs(js);
       const counts:Record<string,number> = {};
-      await Promise.all((js ?? []).map(async j=>{
-        const resp=await fetch(api(`/jobs/${j.id}/applicants`),{credentials:'include'});
+      await Promise.all(js.map(async j=>{
+        const resp=await fetch(API(`/jobs/${j.id}/applicants`),{credentials:'include'});
         if(resp.ok){ const a:ApplicantRow[]=await resp.json(); counts[j.id]=a.length; }
       }));
       setAppCounts(counts);
