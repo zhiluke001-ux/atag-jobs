@@ -2,13 +2,13 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
 type Role = 'PART_TIMER' | 'PM' | 'ADMIN';
-type User = { id: string; name: string; role: Role; email: string } | null;
+type AuthUser = { id: string; name: string; role: Role; email: string } | null;
 
 type AuthCtx = {
-  user: User;
+  user: AuthUser;
   loading: boolean;
   csrf: string | null;
-  login: (email: string) => Promise<void>;  // returns void (prevents type clash)
+  login: (email: string) => Promise<void>;   // IMPORTANT: Promise<void>
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -25,11 +25,11 @@ const Ctx = createContext<AuthCtx>({
 const api = (p: string) => `/api${p}`;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User>(null);
+  const [user, setUser] = useState<AuthUser>(null);
   const [csrf, setCsrf] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function fetchMe() {
+  async function fetchMe(): Promise<void> {
     try {
       const r = await fetch(api('/auth/me'), { credentials: 'include' });
       const j = await r.json();
@@ -39,7 +39,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function fetchCsrf() {
+  async function fetchCsrf(): Promise<void> {
     try {
       const r = await fetch(api('/auth/csrf'), { credentials: 'include' });
       if (r.ok) {
@@ -51,7 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function refresh() {
+  async function refresh(): Promise<void> {
     await fetchMe();
     await fetchCsrf();
     setLoading(false);
@@ -63,8 +63,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // Side-effect only; do not return a value
-  async function login(email: string) {
+  // SIDE-EFFECT ONLY. DO NOT return anything.
+  async function login(email: string): Promise<void> {
     await fetch(api('/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -72,9 +72,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ email }),
     });
     await refresh();
+    // DO NOT return user here. Keep it as Promise<void>.
   }
 
-  async function logout() {
+  async function logout(): Promise<void> {
     await fetch(api('/auth/logout'), {
       method: 'POST',
       headers: { 'x-csrf-token': csrf || '' },
