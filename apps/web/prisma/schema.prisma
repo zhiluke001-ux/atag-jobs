@@ -75,7 +75,7 @@ model Job {
   headcountTarget Int?
   sheetId         String?
   status          JobStatus  @default(PUBLISHED)
-  createdBy       String
+  createdBy       String  @db.Uuid
   callGraceMins   Int        @default(15)
   createdAt       DateTime   @default(now())
   assignments     Assignment[]
