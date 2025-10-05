@@ -9,8 +9,7 @@ type AuthCtx = {
   user: User;
   loading: boolean;
   csrf: string | null;
-  // KEEP: we don't rely on a return value from login
-  login: (email: string) => Promise<void>;
+  login: (email: string) => Promise<void>;   // <-- MUST be Promise<void>
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -63,8 +62,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // EXPLICITLY return void so inference can't drift
-  async function login(email: string): Promise<void> {
+  // Force the exact type from AuthCtx and ensure no return value
+  const login: AuthCtx['login'] = async (email: string) => {
     await fetch(api('/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -72,10 +71,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ email }),
     });
     await refresh();
-    return; // ensure Promise<void>
-  }
+    return; // explicitly void
+  };
 
-  async function logout(): Promise<void> {
+  const logout: AuthCtx['logout'] = async () => {
     await fetch(api('/auth/logout'), {
       method: 'POST',
       headers: { 'x-csrf-token': csrf || '' },
@@ -84,9 +83,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setCsrf(null);
     await fetchMe();
-  }
+    return;
+  };
 
-  // Make TS verify the shape exactly
   const value: AuthCtx = { user, loading, csrf, login, logout, refresh };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
