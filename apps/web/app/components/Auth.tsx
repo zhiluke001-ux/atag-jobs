@@ -8,11 +8,12 @@ type AuthCtx = {
   user: AuthUser;
   loading: boolean;
   csrf: string | null;
-  login: (email: string) => Promise<void>;   // IMPORTANT: Promise<void>
+  login: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
 
+// Default value just to satisfy createContext at init
 const Ctx = createContext<AuthCtx>({
   user: null,
   loading: true,
@@ -29,7 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [csrf, setCsrf] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function fetchMe(): Promise<void> {
+  const fetchMe: AuthCtx['refresh'] = async () => {
     try {
       const r = await fetch(api('/auth/me'), { credentials: 'include' });
       const j = await r.json();
@@ -37,9 +38,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       setUser(null);
     }
-  }
+  };
 
-  async function fetchCsrf(): Promise<void> {
+  const fetchCsrf: AuthCtx['refresh'] = async () => {
     try {
       const r = await fetch(api('/auth/csrf'), { credentials: 'include' });
       if (r.ok) {
@@ -49,13 +50,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore
     }
-  }
+  };
 
-  async function refresh(): Promise<void> {
+  const refresh: AuthCtx['refresh'] = async () => {
     await fetchMe();
     await fetchCsrf();
     setLoading(false);
-  }
+  };
 
   useEffect(() => {
     (async () => {
@@ -63,8 +64,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // SIDE-EFFECT ONLY. DO NOT return anything.
-  async function login(email: string): Promise<void> {
+  // IMPORTANT: hard-type to Promise<void> and do NOT return anything
+  const login: AuthCtx['login'] = async (email: string) => {
     await fetch(api('/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -72,10 +73,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ email }),
     });
     await refresh();
-    // DO NOT return user here. Keep it as Promise<void>.
-  }
+  };
 
-  async function logout(): Promise<void> {
+  const logout: AuthCtx['logout'] = async () => {
     await fetch(api('/auth/logout'), {
       method: 'POST',
       headers: { 'x-csrf-token': csrf || '' },
@@ -84,10 +84,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setCsrf(null);
     await fetchMe();
-  }
+  };
 
   return (
-    <Ctx.Provider value={{ user, loading, csrf, login, logout, refresh }}>
+    <Ctx.Provider
+      value={{
+        user,
+        loading,
+        csrf,
+        login,   // <-- explicitly typed above as AuthCtx['login']
+        logout,  // <-- explicitly typed above as AuthCtx['logout']
+        refresh, // <-- explicitly typed above as AuthCtx['refresh']
+      }}
+    >
       {children}
     </Ctx.Provider>
   );
