@@ -3,11 +3,12 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 
 type Role = 'PART_TIMER'|'PM'|'ADMIN';
 type User = { id:string; name:string; role:Role; email:string } | null;
+
 type AuthCtx = {
   user:User; loading:boolean; csrf:string|null;
   login:(email:string)=>Promise<void>;
   logout:()=>Promise<void>;
-  refresh:()=>Promise<void>
+  refresh:()=>Promise<void>;
 };
 
 const Ctx = createContext<AuthCtx>({
@@ -15,7 +16,6 @@ const Ctx = createContext<AuthCtx>({
   login:async()=>{}, logout:async()=>{}, refresh:async()=>{}
 });
 
-// Use same-origin App Router API
 const api = (p:string) => `/api${p}`;
 
 export function AuthProvider({ children }:{children:React.ReactNode}){
@@ -30,12 +30,14 @@ export function AuthProvider({ children }:{children:React.ReactNode}){
       setUser(j?.user||null);
     }catch{ setUser(null); }
   }
+
   async function fetchCsrf(){
     try{
       const r=await fetch(api('/auth/csrf'),{credentials:'include'});
       if(r.ok){ const j=await r.json(); setCsrf(j?.token||null); }
     }catch{}
   }
+
   async function refresh(){ await fetchMe(); await fetchCsrf(); setLoading(false); }
 
   useEffect(()=>{ (async()=>{ await refresh(); })(); },[]);
