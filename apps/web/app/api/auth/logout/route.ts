@@ -1,17 +1,14 @@
 import { NextResponse } from 'next/server';
 import { verifyCsrf } from '@/lib/csrf';
-import { headers } from 'next/headers';
+import { cookies } from 'next/headers';
 
-export const runtime   = 'nodejs';
-export const dynamic   = 'force-dynamic';
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function POST(){
-  const h = headers();
-  const ok = verifyCsrf(h.get('x-csrf-token'));
-  if (!ok) return NextResponse.json({ error:'bad_csrf' }, { status:403 });
-
-  const res = NextResponse.json({ ok:true });
-  res.cookies.set('uid','', { path:'/', maxAge:0 });
-  return res;
+export async function POST(req: Request) {
+  const csrf = req.headers.get('x-csrf-token');
+  if (!verifyCsrf(csrf)) return NextResponse.json({ error:'csrf_invalid' }, { status:403 });
+  cookies().delete('uid');
+  return NextResponse.json({ ok:true });
 }
