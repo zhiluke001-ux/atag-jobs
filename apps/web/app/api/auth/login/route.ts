@@ -1,23 +1,32 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { ensureCsrf, getCsrf, verifyCsrf } from '@/lib/csrf';
+import { ensureCsrf } from '@/lib/csrf';
 
+export const runtime   = 'nodejs';
+export const dynamic   = 'force-dynamic';
+export const revalidate = 0;
 
-export const runtime = "nodejs";
+export async function POST(req: Request){
+  const { email } = await req.json();
+  if (!email || typeof email !== 'string') {
+    return NextResponse.json({ error:'invalid_email' }, { status:400 });
+  }
 
-export async function POST(req: Request) {
-  const { email } = await req.json().catch(() => ({}));
-  if (!email) return NextResponse.json({ error: "email required" }, { status: 400 });
-  const u = await prisma.user.findUnique({ where: { email } });
-  if (!u) return NextResponse.json({ error: "user_not_found" }, { status: 404 });
+  // Simple role mapping for quick testing; adjust as you like.
+  let role:'PART_TIMER'|'PM'|'ADMIN' = 'PART_TIMER';
+  if (email.toLowerCase().startsWith('pm@')) role = 'PM';
+  if (email.toLowerCase().startsWith('admin@')) role = 'ADMIN';
 
-  const res = NextResponse.json({ ok: true, user: { id: u.id, name: u.name, role: u.role, email: u.email } });
-  res.cookies.set("uid", u.id, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: true,
-    maxAge: 7 * 24 * 3600
-  });
-  await ensureCsrf(u.id).catch(() => {});
+  let user = await prisma.user.findUnique({ where:{ email: email.toLowerCase() } });
+  if (!user){
+    user = await prisma.user.create({
+      data: { email: email.toLowerCase(), name: email.split('@')[0], role }
+    });
+  }
+
+  // set uid cookie + ensure CSRF cookie exists
+  ensureCsrf();
+  const res = NextResponse.json({ ok:true, user:{ id:user.id, name:user.name, email:user.email, role:user.role } });
+  res.cookies.set('uid', user.id, { httpOnly:true, secure:true, sameSite:'lax', path:'/' });
   return res;
 }
