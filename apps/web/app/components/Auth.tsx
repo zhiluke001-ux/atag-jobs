@@ -5,15 +5,17 @@ type Role = 'PART_TIMER'|'PM'|'ADMIN';
 type User = { id:string; name:string; role:Role; email:string } | null;
 
 type AuthCtx = {
-  user:User; loading:boolean; csrf:string|null;
-  login:(email:string)=>Promise<void>;
-  logout:()=>Promise<void>;
-  refresh:()=>Promise<void>;
+  user: User;
+  loading: boolean;
+  csrf: string | null;
+  login: (email: string) => Promise<void>;   // <-- Promise<void>
+  logout: () => Promise<void>;
+  refresh: () => Promise<void>;
 };
 
 const Ctx = createContext<AuthCtx>({
-  user:null, loading:true, csrf:null,
-  login:async()=>{}, logout:async()=>{}, refresh:async()=>{}
+  user: null, loading: true, csrf: null,
+  login: async () => {}, logout: async () => {}, refresh: async () => {}
 });
 
 const api = (p:string) => `/api${p}`;
@@ -38,10 +40,15 @@ export function AuthProvider({ children }:{children:React.ReactNode}){
     }catch{}
   }
 
-  async function refresh(){ await fetchMe(); await fetchCsrf(); setLoading(false); }
+  async function refresh(){
+    await fetchMe();
+    await fetchCsrf();
+    setLoading(false);
+  }
 
   useEffect(()=>{ (async()=>{ await refresh(); })(); },[]);
 
+  // Keep login side-effect only; do not return a value
   async function login(email:string){
     await fetch(api('/auth/login'),{
       method:'POST',
@@ -58,11 +65,16 @@ export function AuthProvider({ children }:{children:React.ReactNode}){
       headers:{'x-csrf-token': csrf || ''},
       credentials:'include'
     });
-    setUser(null); setCsrf(null);
+    setUser(null);
+    setCsrf(null);
     await fetchMe();
   }
 
-  return <Ctx.Provider value={{user,loading,csrf,login,logout,refresh}}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={{user,loading,csrf,login,logout,refresh}}>
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function useAuth(){ return useContext(Ctx); }
