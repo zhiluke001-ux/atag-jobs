@@ -7,12 +7,41 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum MeritKind { LATE NO_SHOW EARLY_EXIT GOOD }
-enum Role { PART_TIMER PM ADMIN }
-enum JobStatus { DRAFT PUBLISHED CLOSED }
-enum AssignmentStatus { APPLIED APPROVED REJECTED WITHDRAWN }
-enum TransportMode { ATAG_BUS OWN }
-enum ScanAction { IN OUT }
+enum MeritKind {
+  LATE
+  NO_SHOW
+  EARLY_EXIT
+  GOOD
+}
+
+enum Role {
+  PART_TIMER
+  PM
+  ADMIN
+}
+
+enum JobStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum AssignmentStatus {
+  APPLIED
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+enum TransportMode {
+  ATAG_BUS
+  OWN
+}
+
+enum ScanAction {
+  IN
+  OUT
+}
 
 enum ScanResult {
   success
