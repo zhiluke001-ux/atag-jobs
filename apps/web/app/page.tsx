@@ -8,16 +8,17 @@ export default function Home() {
         </div>
       </section>
 
-      <div className="container home-lead">
-        <section className="card elevated centered">
-          <h2>Welcome to ATAG Jobs</h2>
-          <p className="kv">Hire, approve, and track event part-timers with secure, single-use QR attendance.</p>
-          <div className="row" style={{marginTop:10}}>
-            <a className="btn primary" href="/available">Browse Jobs</a>
-            <a className="btn" href="/login">Log In</a>
+      {/* Overlapping welcome card, perfectly centered by the container */}
+      <section className="home-lead">
+        <div className="container">
+          <div className="card elevated center-card">
+            <h2>Welcome to ATAG Jobs</h2>
+            <p className="kv">
+              Hire, approve, and track event part-timers with secure, single-use QR attendance.
+            </p>
+            <div className="row" style={{ marginTop: 10 }}>
+              <a className="btn primary" href="/available">Browse Jobs</a>
+              <a className="btn" href="/login">Log In</a>
+            </div>
           </div>
-        </section>
-      </div>
-    </>
-  );
-}
+        </
