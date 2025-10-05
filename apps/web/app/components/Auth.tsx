@@ -1,4 +1,3 @@
-
 'use client';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
@@ -9,7 +8,7 @@ type AuthCtx = {
   user: User;
   loading: boolean;
   csrf: string | null;
-  login: (email: string) => Promise<void>;
+  login: (email: string) => Promise<void>;  // returns void (prevents type clash)
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -47,7 +46,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const j = await r.json();
         setCsrf(j?.token || null);
       }
-    } catch {}
+    } catch {
+      // ignore
+    }
   }
 
   async function refresh() {
@@ -62,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // IMPORTANT: no return value
+  // Side-effect only; do not return a value
   async function login(email: string) {
     await fetch(api('/auth/login'), {
       method: 'POST',
