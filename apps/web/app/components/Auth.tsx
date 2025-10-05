@@ -9,6 +9,8 @@ type AuthCtx = {
   user: User;
   loading: boolean;
   csrf: string | null;
+  // Allow either Promise<void> or Promise<User> implementations
+  login: (email: string) => Promise<unknown>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -17,6 +19,7 @@ const Ctx = createContext<AuthCtx>({
   user: null,
   loading: true,
   csrf: null,
+  login: async () => {},   // ok: Promise<void>
   logout: async () => {},
   refresh: async () => {},
 });
@@ -55,10 +58,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    (async () => {
-      await refresh();
-    })();
+    (async () => { await refresh(); })();
   }, []);
+
+  // You can return void *or* the user; both satisfy Promise<unknown>
+  async function login(email: string): Promise<unknown> {
+    const r = await fetch(api('/auth/login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email }),
+    });
+    const j = await r.json().catch(() => null);
+    await refresh();
+    return j?.user ?? null; // ok even if callers ignore it
+  }
 
   async function logout(): Promise<void> {
     await fetch(api('/auth/logout'), {
@@ -71,11 +85,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await fetchMe();
   }
 
-  return (
-    <Ctx.Provider value={{ user, loading, csrf, logout, refresh }}>
-      {children}
-    </Ctx.Provider>
-  );
+  const value: AuthCtx = { user, loading, csrf, login, logout, refresh };
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {
