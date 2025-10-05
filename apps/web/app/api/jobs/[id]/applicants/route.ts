@@ -1,18 +1,14 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
-import { ensureCsrf, getCsrf, verifyCsrf } from '@/lib/csrf';
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
-export const runtime = "nodejs";
-
-export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const uid = cookies().get("uid")?.value;
-  if (!uid) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  const me = await prisma.user.findUnique({ where: { id: uid } });
-  if (!me || (me.role !== "PM" && me.role !== "ADMIN")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-
-  const asns = await prisma.assignment.findMany({ where: { jobId: params.id }, include: { user: true }, orderBy: { approvedAt: "desc" } });
-  const rows = asns.map(a => ({ id: a.id, userId: a.userId, name: a.user.name, email: a.user.email, roleName: a.roleName, transport: a.transport, status: a.status, approvedBy: a.approvedBy || null, approvedAt: a.approvedAt || null }));
+export async function GET(_: Request, { params }: { params:{ id:string } }) {
+  const rows = await prisma.assignment.findMany({
+    where: { jobId: params.id },
+    select: { id:true, status:true }
+  });
   return NextResponse.json(rows);
 }
