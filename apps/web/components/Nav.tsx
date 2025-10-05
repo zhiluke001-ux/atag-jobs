@@ -9,66 +9,22 @@ export default function Nav() {
   const { user, loading, logout } = useAuth();
 
   const is = (p: string) => pathname === p;
+  const jobsHref = () => (user?.role === 'PM' || user?.role === 'ADMIN') ? '/pm/jobs' : '/available';
 
-  const can = {
-    jobsPublic: true, // show “Jobs” to logged-out users too
-    dashboard: !!user,
-    available: true,
-    myjobs: user?.role === 'PART_TIMER',
-    payments: user?.role === 'PART_TIMER',
-    pm: user?.role === 'PM',
-    admin: user?.role === 'ADMIN',
-  };
-
-  async function onLogout() {
-    await logout();
-    router.replace('/'); // smooth redirect without showing flicker
-  }
+  async function onLogout(){ await logout(); router.replace('/'); }
 
   return (
     <div className="nav container">
       <div className="brand">
         <div className="logo">AT</div>
-        <Link href="/" style={{ fontWeight: 800 }}>
-          ATAG Jobs
-        </Link>
+        <Link href="/" style={{fontWeight:800}}>ATAG Jobs</Link>
       </div>
       <nav className="navlinks">
-        {can.dashboard && (
-          <Link className={is('/dashboard') ? 'active' : ''} href="/dashboard">
-            Dashboard
-          </Link>
-        )}
-        {can.jobsPublic && (
-          <Link className={is('/available') ? 'active' : ''} href="/available">
-            Jobs
-          </Link>
-        )}
-        {can.myjobs && (
-          <Link className={is('/my-jobs') ? 'active' : ''} href="/my-jobs">
-            My Jobs
-          </Link>
-        )}
-        {can.payments && (
-          <Link className={is('/payments') ? 'active' : ''} href="/payments">
-            Payments
-          </Link>
-        )}
-        {can.pm && (
-          <Link className={is('/pm') ? 'active' : ''} href="/pm">
-            PM
-          </Link>
-        )}
-        {can.admin && (
-          <Link className={is('/admin') ? 'active' : ''} href="/admin">
-            Admin
-          </Link>
-        )}
-        {!loading && !user && (
-          <Link href="/login" className="btn grey">
-            Log In
-          </Link>
-        )}
+        {user && <Link className={is('/dashboard')?'active':''} href="/dashboard">Dashboard</Link>}
+        <Link className={is('/available')||is('/pm/jobs')?'active':''} href={jobsHref()}>Jobs</Link>
+        {user?.role==='PART_TIMER' && <Link className={is('/my-jobs')?'active':''} href="/my-jobs">My Jobs</Link>}
+        {user?.role==='PART_TIMER' && <Link className={is('/payments')?'active':''} href="/payments">Payments</Link>}
+        {!loading && !user && <Link href="/login" className="btn grey">Log In</Link>}
         {!loading && user && (
           <>
             <span className="badge">{user.name} · {user.role}</span>
@@ -76,6 +32,17 @@ export default function Nav() {
           </>
         )}
       </nav>
+      <style jsx>{`
+        .container{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;}
+        .brand{display:flex;gap:10px;align-items:center}
+        .logo{width:28px;height:28px;border-radius:8px;background:#111;color:#fff;display:grid;place-items:center;font-weight:800}
+        .navlinks{display:flex;gap:12px;align-items:center}
+        .btn{padding:8px 12px;border:1px solid var(--border,#ddd);border-radius:8px;background:#fff}
+        .btn.grey{background:#f4f4f4}
+        .btn.primary{background:#111;color:#fff;border-color:#111}
+        .badge{font-size:12px;color:#666}
+        a.active{font-weight:700;text-decoration:underline}
+      `}</style>
     </div>
   );
 }
