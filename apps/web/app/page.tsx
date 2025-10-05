@@ -18,8 +18,10 @@ export default function Home() {
         Lightweight system to hire part-timers per event, approve applicants, and capture attendance
         with secure, single-use QR codes synced to Google Sheets.
       </p>
-      <div className="row" style={{marginTop:10}}>
-        <a className="btn primary" href={user ? '/dashboard' : '/available'}>{user?'Go to Dashboard':'Browse Jobs'}</a>
+      <div className="row" style={{ marginTop: 10 }}>
+        <a className="btn primary" href={user ? '/dashboard' : '/available'}>
+          {user ? 'Go to Dashboard' : 'Browse Jobs'}
+        </a>
         {!user && <a className="btn" href="/login">Log In</a>}
       </div>
     </section>
