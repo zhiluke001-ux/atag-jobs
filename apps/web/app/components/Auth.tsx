@@ -9,7 +9,7 @@ type AuthCtx = {
   user: User;
   loading: boolean;
   csrf: string | null;
-  // IMPORTANT: keep login as Promise<void> (we don't rely on its return)
+  // KEEP: we don't rely on a return value from login
   login: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -63,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // NOTE: no return value — callers should call /api/auth/me if they need data
+  // EXPLICITLY return void so inference can't drift
   async function login(email: string): Promise<void> {
     await fetch(api('/auth/login'), {
       method: 'POST',
@@ -72,9 +72,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       body: JSON.stringify({ email }),
     });
     await refresh();
+    return; // ensure Promise<void>
   }
 
-  async function logout() {
+  async function logout(): Promise<void> {
     await fetch(api('/auth/logout'), {
       method: 'POST',
       headers: { 'x-csrf-token': csrf || '' },
@@ -85,11 +86,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await fetchMe();
   }
 
-  return (
-    <Ctx.Provider value={{ user, loading, csrf, login, logout, refresh }}>
-      {children}
-    </Ctx.Provider>
-  );
+  // Make TS verify the shape exactly
+  const value: AuthCtx = { user, loading, csrf, login, logout, refresh };
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {
