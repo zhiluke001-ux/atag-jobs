@@ -1,33 +1,30 @@
-// apps/web/app/api/auth/login/route.ts
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/prisma';
+import { cookies } from 'next/headers';
+import prisma from '@/lib/prisma';
+
+const DEMO: Record<string,{name:string;role:'PART_TIMER'|'PM'|'ADMIN'}> = {
+  'alice@example.com': { name:'Alice', role:'PART_TIMER' },
+  'pm@example.com':    { name:'Project Manager', role:'PM' },
+  'admin@example.com': { name:'Admin', role:'ADMIN' },
+};
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export async function POST(req: Request) {
-  try {
-    const body = await req.json().catch(() => ({}));
-    const email = (body?.email || '').toString().trim().toLowerCase();
-    if (!email) {
-      return NextResponse.json({ error: 'email_required' }, { status: 400 });
-    }
+  const { email } = await req.json();
+  if (!email) return NextResponse.json({ error:'email_required' }, { status:400 });
 
-    // Create or find user
-    let user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      user = await prisma.user.create({ data: { email } });
-    }
+  const demo = DEMO[email.toLowerCase()] ?? { name: email.split('@')[0] || 'User', role: 'PART_TIMER' as const };
 
-    const res = NextResponse.json({ id: user.id, email: user.email }, { status: 200 });
-    // Set session cookie (simple uid cookie). In production you should use a proper signed token.
-    res.cookies.set('uid', user.id, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 60 * 60 * 24 * 30, // 30d
-    });
-    return res;
-  } catch (e) {
-    console.error('POST /api/auth/login error', e);
-    return NextResponse.json({ error: 'login_failed' }, { status: 500 });
-  }
+  const user = await prisma.user.upsert({
+    where: { email: email.toLowerCase() },
+    update: { name: demo.name, role: demo.role },
+    create: { email: email.toLowerCase(), name: demo.name, role: demo.role },
+    select: { id:true, email:true, name:true, role:true }
+  });
+
+  cookies().set('uid', user.id, { httpOnly:true, sameSite:'lax', path:'/' });
+  return NextResponse.json({ ok:true, user });
 }
