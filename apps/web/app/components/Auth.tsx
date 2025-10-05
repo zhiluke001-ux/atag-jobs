@@ -1,69 +1,82 @@
 'use client';
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
-type Role = 'PART_TIMER'|'PM'|'ADMIN';
-type User = { id:string; name:string; role:Role; email:string } | null;
+type Role = 'PART_TIMER' | 'PM' | 'ADMIN';
+type User = { id: string; name: string; role: Role; email: string } | null;
 
 type AuthCtx = {
   user: User;
   loading: boolean;
   csrf: string | null;
-  login: (email: string) => Promise<void>;   // <-- Promise<void>
+  login: (email: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
 
 const Ctx = createContext<AuthCtx>({
-  user: null, loading: true, csrf: null,
-  login: async () => {}, logout: async () => {}, refresh: async () => {}
+  user: null,
+  loading: true,
+  csrf: null,
+  login: async () => {},
+  logout: async () => {},
+  refresh: async () => {},
 });
 
-const api = (p:string) => `/api${p}`;
+const api = (p: string) => `/api${p}`;
 
-export function AuthProvider({ children }:{children:React.ReactNode}){
-  const [user,setUser]=useState<User>(null);
-  const [csrf,setCsrf]=useState<string|null>(null);
-  const [loading,setLoading]=useState(true);
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User>(null);
+  const [csrf, setCsrf] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  async function fetchMe(){
-    try{
-      const r=await fetch(api('/auth/me'),{credentials:'include'});
-      const j=await r.json();
-      setUser(j?.user||null);
-    }catch{ setUser(null); }
+  async function fetchMe() {
+    try {
+      const r = await fetch(api('/auth/me'), { credentials: 'include' });
+      const j = await r.json();
+      setUser(j?.user || null);
+    } catch {
+      setUser(null);
+    }
   }
 
-  async function fetchCsrf(){
-    try{
-      const r=await fetch(api('/auth/csrf'),{credentials:'include'});
-      if(r.ok){ const j=await r.json(); setCsrf(j?.token||null); }
-    }catch{}
+  async function fetchCsrf() {
+    try {
+      const r = await fetch(api('/auth/csrf'), { credentials: 'include' });
+      if (r.ok) {
+        const j = await r.json();
+        setCsrf(j?.token || null);
+      }
+    } catch {}
   }
 
-  async function refresh(){
+  async function refresh() {
     await fetchMe();
     await fetchCsrf();
     setLoading(false);
   }
 
-  useEffect(()=>{ (async()=>{ await refresh(); })(); },[]);
+  useEffect(() => {
+    (async () => {
+      await refresh();
+    })();
+  }, []);
 
-  // Keep login side-effect only; do not return a value
-  async function login(email:string){
-    await fetch(api('/auth/login'),{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      credentials:'include',
-      body:JSON.stringify({email})
+  // IMPORTANT: no return value
+  async function login(email: string) {
+    await fetch(api('/auth/login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email }),
     });
     await refresh();
   }
 
-  async function logout(){
-    await fetch(api('/auth/logout'),{
-      method:'POST',
-      headers:{'x-csrf-token': csrf || ''},
-      credentials:'include'
+  async function logout() {
+    await fetch(api('/auth/logout'), {
+      method: 'POST',
+      headers: { 'x-csrf-token': csrf || '' },
+      credentials: 'include',
     });
     setUser(null);
     setCsrf(null);
@@ -71,10 +84,12 @@ export function AuthProvider({ children }:{children:React.ReactNode}){
   }
 
   return (
-    <Ctx.Provider value={{user,loading,csrf,login,logout,refresh}}>
+    <Ctx.Provider value={{ user, loading, csrf, login, logout, refresh }}>
       {children}
     </Ctx.Provider>
   );
 }
 
-export function useAuth(){ return useContext(Ctx); }
+export function useAuth() {
+  return useContext(Ctx);
+}
