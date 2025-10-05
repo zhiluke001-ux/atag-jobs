@@ -1,3 +1,4 @@
+// apps/web/app/login/page.tsx
 'use client';
 import { useState } from 'react';
 import { useAuth } from '@/components/Auth';
@@ -16,15 +17,13 @@ export default function LoginPage() {
     if (!email.trim()) return;
     setBusy(true);
     try {
-      // 1) Perform login (we do not depend on its return type)
-      await login(email.trim());
-
-      // 2) Fetch current user and redirect by role
-      const me = await fetch('/api/auth/me', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+      await login(email.trim()); // no return value
+      const me = await fetch('/api/auth/me', { credentials: 'include' })
+        .then(r => r.json())
+        .catch(() => null);
       const role = (me?.user?.role ?? '') as Role;
-
       if (role === 'PART_TIMER') router.replace('/available');
-      else router.replace('/dashboard'); // PM or ADMIN
+      else router.replace('/dashboard');
     } finally {
       setBusy(false);
     }
