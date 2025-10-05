@@ -1,27 +1,31 @@
-import './globals.css';
-import Nav from '../components/Nav';
-import { AuthProvider } from '../components/Auth';
+import type { Metadata } from 'next';
+import { AuthProvider } from '@/components/Auth';
+import Nav from '@/components/Nav';
 
-export const metadata = { title: 'ATAG Jobs', description: 'Jobs & QR Attendance' };
+export const metadata: Metadata = {
+  title: 'ATAG Jobs',
+  description: 'Event staffing, QR attendance, wage calc',
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <head><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
-      <body>
+      <body style={{margin:0,fontFamily:'Inter, system-ui, Arial'}}>
         <AuthProvider>
           <Nav />
-          <div className="hero"><div className="container"><h1>ATAG Jobs & Attendance</h1><p>Hire, approve, and track event part-timers with secure QR attendance.</p></div></div>
-          <main className="container">{children}</main>
-          <footer className="footer">
-            <div className="container cols">
-              <div><div style={{fontWeight:700,marginBottom:6}}>ATAG Jobs & Attendance</div><div className="kv">Streamlined workforce management for events</div><div className="kv" style={{marginTop:12}}>© {new Date().getFullYear()} ATAG</div></div>
-              <div><h4>Features</h4><div className="kv">Dashboard</div><div className="kv">Job Management</div><div className="kv">Attendance</div><div className="kv">Wage Calculation</div></div>
-              <div><h4>Support</h4><div className="kv">Contact</div><div className="kv">Help Center</div><div className="kv">Privacy</div></div>
-              <div />
-            </div>
-          </footer>
+          <main style={{maxWidth:1100, margin:'10px auto', padding:'0 16px'}}>
+            {children}
+          </main>
         </AuthProvider>
+        <style jsx global>{`
+          :root{--border:#e5e5e5}
+          .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+          .cards .card{border:1px solid var(--border);border-radius:12px;padding:16px;background:#fff}
+          .card{border:1px solid var(--border);border-radius:12px;padding:16px;background:#fff}
+          .row{display:flex;gap:8px;flex-wrap:wrap}
+          .kv{color:#666;font-size:14px}
+          .hint{color:#777}
+        `}</style>
       </body>
     </html>
   );
