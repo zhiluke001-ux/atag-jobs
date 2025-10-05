@@ -1,24 +1,19 @@
+// apps/web/app/api/jobs/route.ts
 import { NextResponse } from 'next/server';
-import prisma from '@/lib/prisma';
+import { prisma } from '@/lib/prisma';
 
-export const runtime   = 'nodejs';
-export const dynamic   = 'force-dynamic';
-export const revalidate = 0;
-
-export async function GET(){
-  try{
+export async function GET() {
+  try {
+    // Adjust fields/where to match your schema
     const jobs = await prisma.job.findMany({
       where: { status: 'PUBLISHED' },
       orderBy: { callTimeUtc: 'asc' },
-      select: {
-        id:true, title:true, venue:true, jobType:true,
-        callTimeUtc:true, endTimeUtc:true, status:true
-      }
+      take: 100,
     });
-    return NextResponse.json(jobs);
-  }catch(e:any){
-    // Log on server; keep client clean
+    return NextResponse.json(jobs, { status: 200 });
+  } catch (e) {
     console.error('GET /api/jobs error', e);
-    return NextResponse.json([], { status:200 }); // empty list instead of 500
+    // ⛔️ Don’t swallow DB errors. Return 500 so you can see the real issue.
+    return NextResponse.json({ error: 'db_error' }, { status: 500 });
   }
 }
