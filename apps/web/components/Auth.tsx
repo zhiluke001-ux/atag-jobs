@@ -43,13 +43,15 @@ export function AuthProvider({ children }:{children:React.ReactNode}){
   useEffect(()=>{ (async()=>{ await refresh(); })(); },[]);
 
   async function login(email:string){
-    await fetch(api('/auth/login'),{
+    const r = await fetch(api('/auth/login'),{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       credentials:'include',
       body:JSON.stringify({email})
     });
+    const j = await r.json();
     await refresh();
+    return j?.user as User | null;   // <-- return user so caller can route by role
   }
 
   async function logout(){
