@@ -1,14 +1,11 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import prisma from '@/lib/prisma';
-import { ensureCsrf, getCsrf, verifyCsrf } from '@/lib/csrf';
+import { NextResponse } from 'next/server';
+import { ensureCsrf } from '@/lib/csrf';
 
+export const runtime   = 'nodejs';
+export const dynamic   = 'force-dynamic';
+export const revalidate = 0;
 
-export const runtime = "nodejs";
-
-export async function GET() {
-  const uid = cookies().get("uid")?.value;
-  if (!uid) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  const token = await ensureCsrf(uid);
+export async function GET(){
+  const token = ensureCsrf();
   return NextResponse.json({ token });
 }
