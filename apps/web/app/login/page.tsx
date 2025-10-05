@@ -26,12 +26,9 @@ export default function LoginPage(){
         Try: <code>alice@example.com</code> (PART_TIMER), <code>pm@example.com</code> (PM), <code>admin@example.com</code> (ADMIN)
       </p>
       <form onSubmit={onSubmit} className="row" style={{marginTop:10}}>
-        <input
-          value={email}
-          onChange={e=>setEmail(e.target.value)}
-          placeholder="you@example.com"
-          style={{flex:1,padding:10,border:'1px solid var(--border)',borderRadius:8}}
-        />
+        <input value={email} onChange={e=>setEmail(e.target.value)}
+               placeholder="you@example.com"
+               style={{flex:1,padding:10,border:'1px solid var(--border)',borderRadius:8}} />
         <button className="btn primary" disabled={busy||!email.trim()}>
           {busy?'Logging in…':'Log In'}
         </button>
