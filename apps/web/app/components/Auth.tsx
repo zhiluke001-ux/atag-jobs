@@ -9,7 +9,6 @@ type AuthCtx = {
   user: User;
   loading: boolean;
   csrf: string | null;
-  login: (email: string) => Promise<void>;   // <-- MUST be Promise<void>
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -18,7 +17,6 @@ const Ctx = createContext<AuthCtx>({
   user: null,
   loading: true,
   csrf: null,
-  login: async () => {},
   logout: async () => {},
   refresh: async () => {},
 });
@@ -62,19 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
-  // Force the exact type from AuthCtx and ensure no return value
-  const login: AuthCtx['login'] = async (email: string) => {
-    await fetch(api('/auth/login'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ email }),
-    });
-    await refresh();
-    return; // explicitly void
-  };
-
-  const logout: AuthCtx['logout'] = async () => {
+  async function logout(): Promise<void> {
     await fetch(api('/auth/logout'), {
       method: 'POST',
       headers: { 'x-csrf-token': csrf || '' },
@@ -83,12 +69,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setCsrf(null);
     await fetchMe();
-    return;
-  };
+  }
 
-  const value: AuthCtx = { user, loading, csrf, login, logout, refresh };
-
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={{ user, loading, csrf, logout, refresh }}>
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function useAuth() {
