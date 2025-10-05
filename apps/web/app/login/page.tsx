@@ -3,6 +3,8 @@ import { useState } from 'react';
 import { useAuth } from '@/components/Auth';
 import { useRouter } from 'next/navigation';
 
+type Role = 'PART_TIMER' | 'PM' | 'ADMIN';
+
 export default function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
@@ -14,8 +16,14 @@ export default function LoginPage() {
     if (!email.trim()) return;
     setBusy(true);
     try {
-      const user = await login(email.trim()); // typed: UserRecord | null
-      if (user && user.role === 'PART_TIMER') router.replace('/available');
+      // 1) Perform login (we do not depend on its return type)
+      await login(email.trim());
+
+      // 2) Fetch current user and redirect by role
+      const me = await fetch('/api/auth/me', { credentials: 'include' }).then(r => r.json()).catch(() => null);
+      const role = (me?.user?.role ?? '') as Role;
+
+      if (role === 'PART_TIMER') router.replace('/available');
       else router.replace('/dashboard'); // PM or ADMIN
     } finally {
       setBusy(false);
@@ -26,8 +34,7 @@ export default function LoginPage() {
     <section className="card elevated centered">
       <h3>Log In</h3>
       <p className="kv">
-        Try: <code>alice@example.com</code> (PART_TIMER), <code>pm@example.com</code> (PM),{' '}
-        <code>admin@example.com</code> (ADMIN)
+        Try: <code>alice@example.com</code> (PART_TIMER), <code>pm@example.com</code> (PM), <code>admin@example.com</code> (ADMIN)
       </p>
       <form onSubmit={onSubmit} className="row" style={{ marginTop: 10 }}>
         <input
