@@ -9,7 +9,7 @@ export default function Home() {
       </section>
 
       <div className="container home-lead">
-        <section className="card" style={{maxWidth:860,margin:'0 auto'}}>
+        <section className="card elevated centered">
           <h2>Welcome to ATAG Jobs</h2>
           <p className="kv">Hire, approve, and track event part-timers with secure, single-use QR attendance.</p>
           <div className="row" style={{marginTop:10}}>
