@@ -14,13 +14,14 @@ export default function LoginPage(){
     if(!email.trim()) return;
     setBusy(true);
     try{
-      await login(email.trim());
-      router.replace('/dashboard');
+      const user = await login(email.trim());
+      if (user?.role === 'PART_TIMER') router.replace('/available');
+      else router.replace('/dashboard'); // PM or ADMIN
     } finally { setBusy(false); }
   }
 
   return (
-    <section className="card" style={{maxWidth:520,margin:'0 auto'}}>
+    <section className="card elevated centered">
       <h3>Log In</h3>
       <p className="kv">
         Try: <code>alice@example.com</code> (PART_TIMER), <code>pm@example.com</code> (PM), <code>admin@example.com</code> (ADMIN)
