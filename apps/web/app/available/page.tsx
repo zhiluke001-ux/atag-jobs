@@ -4,8 +4,7 @@ import { formatJobRange } from '../../lib/time';
 
 type Job = { id:string; title:string; venue:string; jobType:string; callTimeUtc:string; endTimeUtc?:string|null; status:string };
 
-const base = (process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/,'') || '');
-const api = (p: string) => `${base}/api${p.startsWith('/') ? p : `/${p}`}`;
+const API = () => '/api'; // <<< important: single API
 
 export default function AvailablePage(){
   const [jobs,setJobs]=useState<Job[]>([]);
@@ -13,8 +12,8 @@ export default function AvailablePage(){
 
   useEffect(()=>{ (async()=>{
     try{
-      const r = await fetch(api('/jobs'), { credentials:'include', cache:'no-store' });
-      if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      const r = await fetch(`${API()}/jobs`, { credentials:'include' });
+      if(!r.ok) throw new Error(`${r.status}`);
       setJobs(await r.json());
     }catch(e:any){ setErr(e?.message||'Failed to fetch'); }
   })(); },[]);
