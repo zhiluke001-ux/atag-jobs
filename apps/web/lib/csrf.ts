@@ -1,21 +1,22 @@
 import { cookies } from 'next/headers';
-import crypto from 'crypto';
+import { randomBytes } from 'crypto';
 
 const CSRF_COOKIE = 'csrf';
-export function getCsrf(){
-  const v = cookies().get(CSRF_COOKIE)?.value;
-  return v || null;
+
+export function getCsrf() {
+  return cookies().get(CSRF_COOKIE)?.value || '';
 }
-export function ensureCsrf(){
-  let v = getCsrf();
-  if (!v){
-    v = crypto.randomBytes(20).toString('hex');
-    cookies().set(CSRF_COOKIE, v, { httpOnly:false, secure:true, sameSite:'lax', path:'/' });
+
+export async function ensureCsrf() {
+  let token = cookies().get(CSRF_COOKIE)?.value;
+  if (!token) {
+    token = randomBytes(16).toString('hex');
+    cookies().set(CSRF_COOKIE, token, { httpOnly: true, sameSite: 'lax', path: '/' });
   }
-  return v;
+  return token;
 }
-export function verifyCsrf(header?:string|null){
-  const t = header || '';
-  const v = getCsrf() || '';
-  return t && v && t === v;
+
+export function verifyCsrf(header?: string | null) {
+  const token = getCsrf();
+  return !!token && !!header && token === header;
 }
