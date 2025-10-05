@@ -9,7 +9,7 @@ type AuthCtx = {
   user: User;
   loading: boolean;
   csrf: string | null;
-  // NOTE: return the logged-in user or null
+  // IMPORTANT: login returns the user (or null)
   login: (email: string) => Promise<User>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -19,7 +19,7 @@ const Ctx = createContext<AuthCtx>({
   user: null,
   loading: true,
   csrf: null,
-  // default implementation to satisfy TS at runtime
+  // default impls so TS is happy
   login: async () => null,
   logout: async () => {},
   refresh: async () => {},
@@ -64,6 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  // Return the user so callers can redirect by role
   async function login(email: string): Promise<User> {
     const r = await fetch(api('/auth/login'), {
       method: 'POST',
@@ -73,7 +74,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     const j = await r.json();
     await refresh();
-    // return the user we just logged in as
     return (j?.user as User) ?? null;
   }
 
