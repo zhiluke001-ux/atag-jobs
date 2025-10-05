@@ -1,39 +1,38 @@
 'use client';
-import { useState } from 'react';
+
+import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 
-export default function LoginPage(){
-  const [email,setEmail]=useState('');
-  const [busy,setBusy]=useState(false);
-  const [err,setErr]=useState<string|undefined>();
+export default function LoginPage() {
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
 
-  async function onSubmit(e:React.FormEvent){
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if(!email.trim()) return;
-    setBusy(true); setErr(undefined);
-    try{
-      // 1) Log in (sets cookie)
+    const value = email.trim();
+    if (!value) return;
+
+    setBusy(true);
+    setErr(null);
+
+    try {
       const r = await fetch('/api/auth/login', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        credentials:'include',
-        body: JSON.stringify({ email: email.trim() })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: value }),
       });
-      if(!r.ok){ throw new Error('Login failed'); }
+      if (!r.ok) throw new Error('Login failed');
 
-      // 2) Ask who I am, then redirect by role (no AuthProvider dependency)
-      const me = await fetch('/api/auth/me', { credentials:'include' });
-      const j  = await me.json();
-      const role = j?.user?.role as 'PART_TIMER'|'PM'|'ADMIN'|undefined;
+      const me = await fetch('/api/auth/me', { credentials: 'include' });
+      const j = await me.json();
+      const role = j?.user?.role as 'PART_TIMER' | 'PM' | 'ADMIN' | undefined;
 
-      if (role === 'PART_TIMER') {
-        router.replace('/available');
-      } else {
-        // PM or ADMIN (change to '/pm/jobs' if you prefer)
-        router.replace('/dashboard');
-      }
-    } catch (e:any){
+      if (role === 'PART_TIMER') router.replace('/available');
+      else router.replace('/dashboard');
+    } catch (e: any) {
       setErr(e?.message || 'Something went wrong');
     } finally {
       setBusy(false);
@@ -41,10 +40,26 @@ export default function LoginPage(){
   }
 
   return (
-    <section className="card elevated centered">
-      <h3>Log In</h3>
-      <p className="kv">
-        Try: <code>alice@example.com</code> (PART_TIMER), <code>pm@example.com</code> (PM), <code>admin@example.com</code> (ADMIN)
-      </p>
-      {err && <div className="kv" style={{color:'#b60603',marginTop:8}}>Error: {err}</div>}
-      <form o
+    <div className="container" style={{ marginTop: 16 }}>
+      <section className="card elevated centered">
+        <h3>Log In</h3>
+        <p className="kv">
+          Try: <code>alice@example.com</code> (PART_TIMER), <code>pm@example.com</code> (PM),
+          <code>admin@example.com</code> (ADMIN)
+        </p>
+        {err && <div className="kv" style={{ color:'#b60603', marginTop:8 }}>Error: {err}</div>}
+        <form onSubmit={onSubmit} className="row" style={{ marginTop: 10 }}>
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            style={{ flex: 1, padding: 10, border: '1px solid var(--border)', borderRadius: 8 }}
+          />
+          <button className="btn primary" disabled={busy || !email.trim()}>
+            {busy ? 'Logging in…' : 'Log In'}
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+}
