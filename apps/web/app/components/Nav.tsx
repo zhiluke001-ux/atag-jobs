@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useAuth } from './Auth';
+import { useAuth } from '@/components/Auth'; // uses re-export → AuthContext
+
 
 export default function Nav() {
   const pathname = usePathname();
