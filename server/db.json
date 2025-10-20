@@ -1,0 +1,6160 @@
+{
+  "config": {
+    "jwtSecret": "super-secret-and-long-string-change-me",
+    "timezone": "Asia/Kuala_Lumpur",
+    "rates": {
+      "virtualHourly": {
+        "junior": 20,
+        "senior": 20,
+        "lead": 30
+      },
+      "physicalSession": {
+        "halfDay": {
+          "junior": 80,
+          "senior": 100,
+          "lead": 44
+        },
+        "fullDay": {
+          "junior": 150,
+          "senior": 180,
+          "lead": 88
+        },
+        "twoD1N": {
+          "junior": 230,
+          "senior": 270,
+          "lead": null
+        },
+        "threeD2N": {
+          "junior": 300,
+          "senior": 350,
+          "lead": null
+        }
+      },
+      "physicalHourly": {
+        "junior": 20,
+        "senior": 30,
+        "lead": 30
+      },
+      "loadingUnloading": {
+        "amount": 30
+      },
+      "earlyCall": {
+        "defaultAmount": 20
+      }
+    },
+    "scanMaxDistanceMeters": 500
+  },
+  "users": [
+    {
+      "id": "u1",
+      "email": "alice@example.com",
+      "name": "Alice",
+      "role": "part-timer"
+    },
+    {
+      "id": "u2",
+      "email": "pm@example.com",
+      "name": "Pat",
+      "role": "pm"
+    },
+    {
+      "id": "u3",
+      "email": "admin@example.com",
+      "name": "Amin",
+      "role": "admin"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "j2",
+      "title": "Expo Registration Desk",
+      "venue": "MITEC Level 1",
+      "description": "Check-in badges, hand out lanyards.",
+      "startTime": "2025-10-11T16:00:00.000Z",
+      "endTime": "2025-10-12T02:00:00.000Z",
+      "status": "upcoming",
+      "rate": {
+        "base": 12,
+        "transportBus": 20,
+        "ownTransport": 0,
+        "payMode": "specific_plus_hourly",
+        "minCallHours": 4,
+        "otThresholdHours": 8,
+        "otMultiplier": 1.5,
+        "breakDeductionHours": 0.5,
+        "transportAllowance": 0,
+        "specificPayment": 12,
+        "lduPrice": 30,
+        "lduEnabled": false,
+        "earlyCallAmount": 20,
+        "earlyCallThresholdHours": 3,
+        "paymentPrice": 12
+      },
+      "headcount": 8,
+      "applications": [
+        {
+          "userId": "u1",
+          "email": "alice@example.com",
+          "transport": "ATAG Bus",
+          "appliedAt": "2025-10-16T06:42:01.682Z"
+        }
+      ],
+      "approved": [
+        "u1"
+      ],
+      "rejected": [],
+      "attendance": {},
+      "events": {
+        "startedAt": "2025-10-19T14:31:46.643Z",
+        "endedAt": null,
+        "scanner": {
+          "lat": 3.0900224,
+          "lng": 101.433344,
+          "updatedAt": "2025-10-19T14:32:02.374Z"
+        }
+      },
+      "transportOptions": {
+        "bus": true,
+        "own": true
+      },
+      "loadingUnload": {
+        "enabled": false,
+        "quota": 0,
+        "price": 30,
+        "applicants": [],
+        "participants": []
+      },
+      "earlyCall": {
+        "enabled": false,
+        "amount": 20,
+        "thresholdHours": 3
+      }
+    },
+    {
+      "id": "j3",
+      "title": "Mall Promo Crew",
+      "venue": "1 Utama",
+      "description": "Product sampling & flyer distribution.",
+      "startTime": "2025-10-19T10:00:00.000Z",
+      "endTime": "2025-10-18T16:00:00.000Z",
+      "status": "upcoming",
+      "rate": {
+        "base": 100,
+        "transportBus": 15,
+        "ownTransport": 0,
+        "minCallHours": 4,
+        "otThresholdHours": 8,
+        "otMultiplier": 1.5,
+        "breakDeductionHours": 0.5,
+        "transportAllowance": 0
+      },
+      "headcount": 6,
+      "applications": [
+        {
+          "userId": "u1",
+          "email": "alice@example.com",
+          "transport": "ATAG Bus",
+          "appliedAt": "2025-10-16T08:48:21.891Z"
+        }
+      ],
+      "approved": [],
+      "rejected": [
+        "u1"
+      ],
+      "attendance": {},
+      "events": {
+        "startedAt": null,
+        "endedAt": null
+      },
+      "transportOptions": {
+        "bus": true,
+        "own": false
+      }
+    },
+    {
+      "id": "j94wlkg",
+      "title": "KL OPEN DAY",
+      "venue": "KLGCC",
+      "description": "KLGCC, 29 October 2025\n7:00am - 6:00pm\nJunior Marshall: RM150. Senior Marshall: RM180\n*Backend loading: RM30 \n\n\n\n*Terms and Conditions Apply",
+      "startTime": "2025-10-28T15:00:00.000Z",
+      "endTime": "2025-10-28T02:00:00.000Z",
+      "status": "upcoming",
+      "transportOptions": {
+        "bus": true,
+        "own": true
+      },
+      "rate": {
+        "base": 12,
+        "minCallHours": 4,
+        "otThresholdHours": 8,
+        "otMultiplier": 1.5,
+        "breakDeductionHours": 0.5,
+        "transportAllowance": 0
+      },
+      "headcount": 10,
+      "applications": [
+        {
+          "userId": "u1",
+          "email": "alice@example.com",
+          "transport": "Own Transport",
+          "appliedAt": "2025-10-16T08:56:49.477Z"
+        }
+      ],
+      "approved": [],
+      "rejected": [],
+      "attendance": {},
+      "events": {
+        "startedAt": null,
+        "endedAt": null
+      }
+    }
+  ],
+  "audit": [
+    {
+      "id": "am677yj",
+      "time": "2025-10-19T14:32:12.861Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "abzekbi",
+      "time": "2025-10-19T14:32:02.379Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0900224,
+        "lng": 101.433344
+      }
+    },
+    {
+      "id": "ar14u6q",
+      "time": "2025-10-19T14:31:47.330Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0900224,
+        "lng": 101.433344
+      }
+    },
+    {
+      "id": "a1kb39k",
+      "time": "2025-10-19T14:31:46.647Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "afozrqx",
+      "time": "2025-10-19T14:31:44.920Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "aoq53xm",
+      "time": "2025-10-19T14:31:43.659Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "anht7wh",
+      "time": "2025-10-19T14:31:40.442Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "end_event",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "az4en0q",
+      "time": "2025-10-19T14:31:26.844Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "alf7uj3",
+      "time": "2025-10-19T14:31:13.582Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "adikfi8",
+      "time": "2025-10-19T10:30:13.421Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "avkcvo2",
+      "time": "2025-10-19T09:57:45.594Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "delete_job",
+      "details": {
+        "jobId": "jp014uj"
+      }
+    },
+    {
+      "id": "avuhlnp",
+      "time": "2025-10-19T09:51:52.890Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "a3n5yuq",
+      "time": "2025-10-19T09:51:52.819Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "update_job_rate",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "ayx05k0",
+      "time": "2025-10-19T09:47:09.959Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "ahq2kua",
+      "time": "2025-10-19T09:44:48.053Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a6uf6o4",
+      "time": "2025-10-19T09:40:23.964Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "apwuzbv",
+      "time": "2025-10-19T09:30:54.764Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reject",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "avdxc7c",
+      "time": "2025-10-19T09:30:52.904Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a9hefdf",
+      "time": "2025-10-19T09:19:21.102Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "axzglrh",
+      "time": "2025-10-19T07:12:56.729Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a0dasrr",
+      "time": "2025-10-19T06:46:01.879Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a1chfzl",
+      "time": "2025-10-19T06:25:06.106Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ao6rble",
+      "time": "2025-10-19T06:20:31.484Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a7aw4dy",
+      "time": "2025-10-19T06:18:51.584Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aoubutg",
+      "time": "2025-10-19T05:58:12.287Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "agv0z8r",
+      "time": "2025-10-19T05:57:02.916Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ar7nlaq",
+      "time": "2025-10-19T05:56:57.436Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a3priz2",
+      "time": "2025-10-19T05:30:00.364Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aswy45m",
+      "time": "2025-10-16T11:46:13.858Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ai5t1yw",
+      "time": "2025-10-16T11:45:29.684Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aknod4i",
+      "time": "2025-10-16T11:44:29.669Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "agey1ug",
+      "time": "2025-10-16T11:43:29.680Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aq5yc8u",
+      "time": "2025-10-16T11:42:29.659Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aypopnk",
+      "time": "2025-10-16T11:41:29.677Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "amh1hcs",
+      "time": "2025-10-16T11:40:29.670Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "anzf5zm",
+      "time": "2025-10-16T11:39:29.679Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azphu6r",
+      "time": "2025-10-16T11:38:29.680Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "atty25m",
+      "time": "2025-10-16T11:37:29.714Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "amfuyc3",
+      "time": "2025-10-16T11:36:29.662Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azae8ix",
+      "time": "2025-10-16T11:35:29.664Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a7uin1n",
+      "time": "2025-10-16T11:34:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a231283",
+      "time": "2025-10-16T11:33:29.677Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "abj3owx",
+      "time": "2025-10-16T11:32:29.676Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "am7fo7b",
+      "time": "2025-10-16T11:31:29.679Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "afxrlq5",
+      "time": "2025-10-16T11:30:29.687Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "au4mkdo",
+      "time": "2025-10-16T11:29:29.678Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ajfei3b",
+      "time": "2025-10-16T11:28:29.673Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "alz3c5y",
+      "time": "2025-10-16T11:27:29.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ate06xp",
+      "time": "2025-10-16T11:26:29.669Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ab7vfo8",
+      "time": "2025-10-16T11:25:29.680Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aiww7mc",
+      "time": "2025-10-16T11:24:29.698Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ab9v35m",
+      "time": "2025-10-16T11:23:29.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aee5o82",
+      "time": "2025-10-16T11:22:29.674Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aaz2mc0",
+      "time": "2025-10-16T11:21:29.665Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a8xujdn",
+      "time": "2025-10-16T11:20:29.662Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aaaoxaf",
+      "time": "2025-10-16T11:19:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "awtitqw",
+      "time": "2025-10-16T11:18:29.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "akfpkh6",
+      "time": "2025-10-16T11:17:30.065Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a2e0g69",
+      "time": "2025-10-16T11:16:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "au3oyvf",
+      "time": "2025-10-16T11:15:29.671Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azm0crv",
+      "time": "2025-10-16T11:14:29.703Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4tjxe8",
+      "time": "2025-10-16T11:13:29.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ar19ts6",
+      "time": "2025-10-16T11:12:29.670Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "af3aabb",
+      "time": "2025-10-16T11:11:29.671Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a7r8nc3",
+      "time": "2025-10-16T11:10:29.658Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "apx3oue",
+      "time": "2025-10-16T11:09:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "addgovq",
+      "time": "2025-10-16T11:08:29.682Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aeacggl",
+      "time": "2025-10-16T11:07:29.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ao0rbzn",
+      "time": "2025-10-16T11:06:29.705Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "axe6fta",
+      "time": "2025-10-16T11:05:29.663Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azb6m3m",
+      "time": "2025-10-16T11:04:29.678Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "atan4uh",
+      "time": "2025-10-16T11:03:29.773Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "asmt6my",
+      "time": "2025-10-16T11:02:29.708Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4nmply",
+      "time": "2025-10-16T11:01:29.683Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aplfl8y",
+      "time": "2025-10-16T11:00:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ag1q8yz",
+      "time": "2025-10-16T10:59:29.663Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a32sh2o",
+      "time": "2025-10-16T10:58:29.678Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a373m8y",
+      "time": "2025-10-16T10:57:29.676Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aniwqxm",
+      "time": "2025-10-16T10:56:29.708Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "apjsejw",
+      "time": "2025-10-16T10:55:29.682Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ayo3ryu",
+      "time": "2025-10-16T10:54:29.836Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "anc3eez",
+      "time": "2025-10-16T10:53:29.670Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aov15qk",
+      "time": "2025-10-16T10:52:29.692Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a7ddfjl",
+      "time": "2025-10-16T10:51:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aqjdmde",
+      "time": "2025-10-16T10:50:29.658Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aqksukx",
+      "time": "2025-10-16T10:49:29.673Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "acbtz4c",
+      "time": "2025-10-16T10:48:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a3d65q8",
+      "time": "2025-10-16T10:47:29.864Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ajirjey",
+      "time": "2025-10-16T10:46:29.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "akfi2h9",
+      "time": "2025-10-16T10:45:29.665Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "asgclna",
+      "time": "2025-10-16T10:44:29.677Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aqds08t",
+      "time": "2025-10-16T10:43:29.686Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "atg6neo",
+      "time": "2025-10-16T10:42:29.699Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "asb7f09",
+      "time": "2025-10-16T10:41:29.679Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "amchpj3",
+      "time": "2025-10-16T10:40:29.663Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "abl664f",
+      "time": "2025-10-16T10:39:29.679Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a52x0tq",
+      "time": "2025-10-16T10:38:29.685Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "avf8qji",
+      "time": "2025-10-16T10:37:29.672Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aqedtle",
+      "time": "2025-10-16T10:36:29.665Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aq4xqda",
+      "time": "2025-10-16T10:35:29.676Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ayqdhn4",
+      "time": "2025-10-16T10:34:29.674Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aon4a6a",
+      "time": "2025-10-16T10:33:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ay47c9e",
+      "time": "2025-10-16T10:32:29.661Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "adkshj1",
+      "time": "2025-10-16T10:31:29.662Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "addn589",
+      "time": "2025-10-16T10:30:29.674Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a076iw5",
+      "time": "2025-10-16T10:29:29.683Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "an1r27x",
+      "time": "2025-10-16T10:28:29.674Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "acex2hp",
+      "time": "2025-10-16T10:27:29.677Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a9wladl",
+      "time": "2025-10-16T10:26:29.687Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a1besj1",
+      "time": "2025-10-16T10:25:29.673Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azzftve",
+      "time": "2025-10-16T10:24:29.674Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aty9rbu",
+      "time": "2025-10-16T10:23:29.660Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ad921i8",
+      "time": "2025-10-16T10:22:29.677Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "agywto4",
+      "time": "2025-10-16T10:21:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "arfmlhc",
+      "time": "2025-10-16T10:20:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ate2n8k",
+      "time": "2025-10-16T10:19:29.661Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4zmy5e",
+      "time": "2025-10-16T10:18:29.680Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "axhx9rd",
+      "time": "2025-10-16T10:17:29.872Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a2zpkvq",
+      "time": "2025-10-16T10:16:29.658Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aukhwm3",
+      "time": "2025-10-16T10:15:29.677Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azg2fpv",
+      "time": "2025-10-16T10:14:29.703Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "as6dhdq",
+      "time": "2025-10-16T10:13:29.685Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ag0fe4t",
+      "time": "2025-10-16T10:12:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ajs3x2q",
+      "time": "2025-10-16T10:11:29.663Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a8sk068",
+      "time": "2025-10-16T10:10:29.658Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aeflo1g",
+      "time": "2025-10-16T10:09:29.693Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4a6g2g",
+      "time": "2025-10-16T10:08:29.693Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "awdpk63",
+      "time": "2025-10-16T10:07:29.663Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "agwdncc",
+      "time": "2025-10-16T10:06:29.669Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aj87a8v",
+      "time": "2025-10-16T10:05:29.768Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aqachbv",
+      "time": "2025-10-16T10:04:29.682Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4acrdp",
+      "time": "2025-10-16T10:03:29.701Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aj1g8xk",
+      "time": "2025-10-16T10:02:29.669Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "abi6r38",
+      "time": "2025-10-16T10:01:29.684Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a55t8cb",
+      "time": "2025-10-16T10:00:29.672Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a83oghp",
+      "time": "2025-10-16T09:59:29.671Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aoucmio",
+      "time": "2025-10-16T09:58:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a53vaii",
+      "time": "2025-10-16T09:57:29.664Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ajzm02b",
+      "time": "2025-10-16T09:56:29.672Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a35y8sa",
+      "time": "2025-10-16T09:55:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aeukspi",
+      "time": "2025-10-16T09:54:29.696Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aeeat8t",
+      "time": "2025-10-16T09:53:29.681Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ak0okug",
+      "time": "2025-10-16T09:52:29.676Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "at7kbz6",
+      "time": "2025-10-16T09:51:29.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "atxfmw3",
+      "time": "2025-10-16T09:50:29.661Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "alr3lmt",
+      "time": "2025-10-16T09:49:29.674Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aohdb2q",
+      "time": "2025-10-16T09:48:29.681Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "axx17ub",
+      "time": "2025-10-16T09:47:29.837Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "am2cicc",
+      "time": "2025-10-16T09:46:29.676Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "afuvtop",
+      "time": "2025-10-16T09:45:29.673Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "axvupis",
+      "time": "2025-10-16T09:44:29.689Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ajl45oh",
+      "time": "2025-10-16T09:43:29.698Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "acfmycy",
+      "time": "2025-10-16T09:42:29.688Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a53ieog",
+      "time": "2025-10-16T09:41:29.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "abg8gfs",
+      "time": "2025-10-16T09:40:29.695Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "acgctwm",
+      "time": "2025-10-16T09:39:29.694Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aciqpnt",
+      "time": "2025-10-16T09:38:29.681Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "angevzz",
+      "time": "2025-10-16T09:37:29.711Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a07hljl",
+      "time": "2025-10-16T09:36:29.708Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "av1ibrq",
+      "time": "2025-10-16T09:35:29.668Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4nwksu",
+      "time": "2025-10-16T09:34:29.695Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "am1w5bt",
+      "time": "2025-10-16T09:33:29.726Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ae4gsmk",
+      "time": "2025-10-16T09:32:29.671Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "anb3wy7",
+      "time": "2025-10-16T09:31:29.706Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a6ipz9d",
+      "time": "2025-10-16T09:30:29.692Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ajh9778",
+      "time": "2025-10-16T09:29:29.681Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "af0hul1",
+      "time": "2025-10-16T09:28:29.672Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a5jrlnc",
+      "time": "2025-10-16T09:27:29.678Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ax76h1n",
+      "time": "2025-10-16T09:26:29.696Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azj5h6c",
+      "time": "2025-10-16T09:25:29.686Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a133ik5",
+      "time": "2025-10-16T09:24:29.694Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ayzbcdz",
+      "time": "2025-10-16T09:23:29.729Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ay8fxaw",
+      "time": "2025-10-16T09:22:29.677Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a0oorn6",
+      "time": "2025-10-16T09:21:29.724Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azzxnjf",
+      "time": "2025-10-16T09:20:29.718Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a71l1ak",
+      "time": "2025-10-16T09:19:29.678Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "avpec3h",
+      "time": "2025-10-16T09:18:29.664Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "at83819",
+      "time": "2025-10-16T09:17:29.847Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aa1l30k",
+      "time": "2025-10-16T09:16:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aczz5ju",
+      "time": "2025-10-16T09:15:29.664Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ah66i6y",
+      "time": "2025-10-16T09:14:29.699Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "acp00vg",
+      "time": "2025-10-16T09:13:29.689Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "arzzs67",
+      "time": "2025-10-16T09:12:29.690Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "asvqie3",
+      "time": "2025-10-16T09:11:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "arws3so",
+      "time": "2025-10-16T09:10:29.690Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "axj90kg",
+      "time": "2025-10-16T09:09:29.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ab26xm0",
+      "time": "2025-10-16T09:08:29.692Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "auvktld",
+      "time": "2025-10-16T09:07:29.664Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "acoqbyw",
+      "time": "2025-10-16T09:06:29.660Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ac5wqty",
+      "time": "2025-10-16T09:05:30.309Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aszab2z",
+      "time": "2025-10-16T09:04:29.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a8eej0x",
+      "time": "2025-10-16T09:03:29.678Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "am45lyd",
+      "time": "2025-10-16T09:02:29.656Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "adb4ckg",
+      "time": "2025-10-16T09:01:29.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a7qkk1r",
+      "time": "2025-10-16T09:00:29.681Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "agte0gg",
+      "time": "2025-10-16T08:59:29.670Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a0kxzgy",
+      "time": "2025-10-16T08:58:29.670Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "arqh6qi",
+      "time": "2025-10-16T08:57:29.738Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aj9mkhi",
+      "time": "2025-10-16T08:56:56.887Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "aef1df5",
+      "time": "2025-10-16T08:56:49.481Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "apply",
+      "details": {
+        "jobId": "j94wlkg",
+        "userId": "u1",
+        "transport": "Own Transport"
+      }
+    },
+    {
+      "id": "a3lvw63",
+      "time": "2025-10-16T08:56:41.875Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aut6lnd",
+      "time": "2025-10-16T08:56:36.818Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j94wlkg"
+      }
+    },
+    {
+      "id": "aax0dof",
+      "time": "2025-10-16T08:56:29.714Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a1e2c6k",
+      "time": "2025-10-16T08:56:21.005Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "create_job",
+      "details": {
+        "jobId": "j94wlkg",
+        "title": "KL OPEN DAY"
+      }
+    },
+    {
+      "id": "aa9exg3",
+      "time": "2025-10-16T08:55:29.682Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ayimzsb",
+      "time": "2025-10-16T08:54:29.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "axe3s3k",
+      "time": "2025-10-16T08:53:29.680Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "acqoq7x",
+      "time": "2025-10-16T08:52:39.582Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "ad4ypda",
+      "time": "2025-10-16T08:52:29.708Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aqw56t5",
+      "time": "2025-10-16T08:51:57.040Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "azl6o8u",
+      "time": "2025-10-16T08:51:50.069Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "reject",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "agz1mpz",
+      "time": "2025-10-16T08:51:49.362Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "reject",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a0rmvrk",
+      "time": "2025-10-16T08:51:47.904Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "reject",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "at6ehdi",
+      "time": "2025-10-16T08:51:45.662Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "reject",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a2r92eg",
+      "time": "2025-10-16T08:51:42.934Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "reject",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a08iibi",
+      "time": "2025-10-16T08:51:29.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ak3e73q",
+      "time": "2025-10-16T08:51:22.772Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "atdyagi",
+      "time": "2025-10-16T08:50:29.690Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4y4rd2",
+      "time": "2025-10-16T08:49:29.691Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "awzhtgt",
+      "time": "2025-10-16T08:48:29.659Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a4p24do",
+      "time": "2025-10-16T08:48:21.898Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "apply",
+      "details": {
+        "jobId": "j3",
+        "userId": "u1",
+        "transport": "ATAG Bus"
+      }
+    },
+    {
+      "id": "ala1bj1",
+      "time": "2025-10-16T08:48:18.565Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "ayzmw6e",
+      "time": "2025-10-16T08:48:09.540Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "alt95cu",
+      "time": "2025-10-16T08:47:29.858Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ash3gb9",
+      "time": "2025-10-16T08:46:29.676Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ayhvs3s",
+      "time": "2025-10-16T08:45:29.865Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aqqden8",
+      "time": "2025-10-16T08:44:31.819Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a9w7vgz",
+      "time": "2025-10-16T08:44:29.735Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "afqxxzj",
+      "time": "2025-10-16T08:43:29.819Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "askmct4",
+      "time": "2025-10-16T08:42:29.707Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "azswwii",
+      "time": "2025-10-16T08:41:29.729Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a1te98s",
+      "time": "2025-10-16T08:40:29.714Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aoil0zo",
+      "time": "2025-10-16T08:39:57.769Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "avo6scc",
+      "time": "2025-10-16T08:39:51.561Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a7xc8e1",
+      "time": "2025-10-16T08:39:29.760Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "an8iz20",
+      "time": "2025-10-16T08:39:17.027Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a47d26j",
+      "time": "2025-10-16T08:38:29.705Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "av7zh15",
+      "time": "2025-10-16T08:38:03.763Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ae6mt8a",
+      "time": "2025-10-16T08:37:48.964Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "avk9p03",
+      "time": "2025-10-16T08:37:33.698Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aldyf6e",
+      "time": "2025-10-16T08:37:18.716Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a3396uo",
+      "time": "2025-10-16T08:36:48.707Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a00a96b",
+      "time": "2025-10-16T08:36:34.372Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "a7pm4ob",
+      "time": "2025-10-16T08:36:20.088Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "az9iwfz",
+      "time": "2025-10-16T08:36:02.947Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "anodmvj",
+      "time": "2025-10-16T08:35:47.904Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aw92iim",
+      "time": "2025-10-16T08:35:32.909Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "ax4s2op",
+      "time": "2025-10-16T08:35:17.900Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4530048
+      }
+    },
+    {
+      "id": "aovnquo",
+      "time": "2025-10-16T08:35:02.601Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "ak183eb",
+      "time": "2025-10-16T08:34:29.651Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "a1ffkn0",
+      "time": "2025-10-16T08:34:18.431Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ac04awp",
+      "time": "2025-10-16T08:33:36.659Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "a2tzamg",
+      "time": "2025-10-16T08:33:21.662Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "a2xwobf",
+      "time": "2025-10-16T08:33:06.665Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "as9eqc9",
+      "time": "2025-10-16T08:32:51.641Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "abaqe0p",
+      "time": "2025-10-16T08:32:36.651Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "aao8etk",
+      "time": "2025-10-16T08:32:21.780Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081137,
+        "lng": 101.6205501
+      }
+    },
+    {
+      "id": "agkcgu9",
+      "time": "2025-10-16T08:32:11.101Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "avfglfg",
+      "time": "2025-10-16T08:32:09.600Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "a2kltf7",
+      "time": "2025-10-16T08:32:07.116Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "ah2eviv",
+      "time": "2025-10-16T08:32:01.664Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a4vzp8x",
+      "time": "2025-10-16T08:31:59.011Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "end_event",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "a9iu251",
+      "time": "2025-10-16T08:31:39.489Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aloagda",
+      "time": "2025-10-16T08:23:03.015Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "att8zd8",
+      "time": "2025-10-16T08:22:58.091Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "jp014uj",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "ap3gkxz",
+      "time": "2025-10-16T08:22:50.172Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aq3chlk",
+      "time": "2025-10-16T08:22:36.672Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "apply",
+      "details": {
+        "jobId": "jp014uj",
+        "userId": "u1",
+        "transport": "ATAG Bus"
+      }
+    },
+    {
+      "id": "aodsfny",
+      "time": "2025-10-16T08:22:00.571Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aor0jlk",
+      "time": "2025-10-16T08:21:45.411Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081113,
+        "lng": 101.6205442
+      }
+    },
+    {
+      "id": "arcomn9",
+      "time": "2025-10-16T08:21:30.389Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081113,
+        "lng": 101.6205442
+      }
+    },
+    {
+      "id": "akdkvgv",
+      "time": "2025-10-16T08:21:15.427Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081113,
+        "lng": 101.6205442
+      }
+    },
+    {
+      "id": "ajj01wl",
+      "time": "2025-10-16T08:21:00.438Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081113,
+        "lng": 101.6205442
+      }
+    },
+    {
+      "id": "afludps",
+      "time": "2025-10-16T08:20:45.410Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081113,
+        "lng": 101.6205442
+      }
+    },
+    {
+      "id": "afkl1rs",
+      "time": "2025-10-16T08:20:30.408Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081113,
+        "lng": 101.6205442
+      }
+    },
+    {
+      "id": "a9k2xky",
+      "time": "2025-10-16T08:20:09.903Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "akror4l",
+      "time": "2025-10-16T08:19:54.870Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "aydpqcn",
+      "time": "2025-10-16T08:19:39.883Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "aet27h9",
+      "time": "2025-10-16T08:19:24.895Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "a4mbixw",
+      "time": "2025-10-16T08:19:09.921Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "a7yareh",
+      "time": "2025-10-16T08:18:54.897Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "a8a2e6d",
+      "time": "2025-10-16T08:18:39.942Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "ajr1f4k",
+      "time": "2025-10-16T08:18:24.873Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "auo4chu",
+      "time": "2025-10-16T08:18:10.383Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.108115,
+        "lng": 101.6205474
+      }
+    },
+    {
+      "id": "aotu0r5",
+      "time": "2025-10-16T08:17:31.727Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "create_job",
+      "details": {
+        "jobId": "jp014uj",
+        "title": "Mock"
+      }
+    },
+    {
+      "id": "a22wiyn",
+      "time": "2025-10-16T08:11:04.918Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ainuius",
+      "time": "2025-10-16T08:07:55.704Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "au0tut9",
+      "time": "2025-10-16T08:07:41.676Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.10812,
+        "lng": 101.62055
+      }
+    },
+    {
+      "id": "ao1i9dn",
+      "time": "2025-10-16T08:07:29.696Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "atvsnn3",
+      "time": "2025-10-16T08:06:29.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aabx7sq",
+      "time": "2025-10-16T08:05:29.684Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a0mpwmy",
+      "time": "2025-10-16T08:04:29.645Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ay7rfn8",
+      "time": "2025-10-16T08:03:29.811Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "atu59o0",
+      "time": "2025-10-16T08:02:28.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "akco87p",
+      "time": "2025-10-16T08:01:23.652Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ajqtb5x",
+      "time": "2025-10-16T08:01:08.671Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a5gqd0p",
+      "time": "2025-10-16T08:00:53.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a37oeiv",
+      "time": "2025-10-16T08:00:38.648Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aft2qb4",
+      "time": "2025-10-16T08:00:23.662Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aaixvfh",
+      "time": "2025-10-16T08:00:08.650Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aeapwr3",
+      "time": "2025-10-16T07:59:53.651Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "apbr31y",
+      "time": "2025-10-16T07:59:47.958Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.05725,
+        "lng": 101.46939
+      }
+    },
+    {
+      "id": "a1y6o21",
+      "time": "2025-10-16T07:59:45.423Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.05725,
+        "lng": 101.46939
+      }
+    },
+    {
+      "id": "a4ivf1p",
+      "time": "2025-10-16T07:59:37.532Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081185,
+        "lng": 101.6205516
+      }
+    },
+    {
+      "id": "ahrsxtv",
+      "time": "2025-10-16T07:59:22.797Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081185,
+        "lng": 101.6205516
+      }
+    },
+    {
+      "id": "aiu6ghj",
+      "time": "2025-10-16T07:59:07.664Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081185,
+        "lng": 101.6205516
+      }
+    },
+    {
+      "id": "aypxuku",
+      "time": "2025-10-16T07:58:52.653Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081185,
+        "lng": 101.6205516
+      }
+    },
+    {
+      "id": "aocry8n",
+      "time": "2025-10-16T07:58:37.656Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081185,
+        "lng": 101.6205516
+      }
+    },
+    {
+      "id": "auy6a88",
+      "time": "2025-10-16T07:58:22.675Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081185,
+        "lng": 101.6205516
+      }
+    },
+    {
+      "id": "acknqrp",
+      "time": "2025-10-16T07:58:07.653Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.1081185,
+        "lng": 101.6205516
+      }
+    },
+    {
+      "id": "ak8ew7p",
+      "time": "2025-10-16T07:57:45.667Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "abpttg3",
+      "time": "2025-10-16T07:57:30.645Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aj26i5k",
+      "time": "2025-10-16T07:57:14.896Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ax1cr6z",
+      "time": "2025-10-16T07:57:00.672Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "atu0pmc",
+      "time": "2025-10-16T07:56:45.684Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ac7xjiu",
+      "time": "2025-10-16T07:56:29.868Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ayxh4kj",
+      "time": "2025-10-16T07:56:14.896Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "azth2q7",
+      "time": "2025-10-16T07:56:00.633Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "afmi49s",
+      "time": "2025-10-16T07:55:45.673Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "armt7k9",
+      "time": "2025-10-16T07:55:35.561Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.05725,
+        "lng": 101.46939
+      }
+    },
+    {
+      "id": "aknmoez",
+      "time": "2025-10-16T07:55:31.164Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.05725,
+        "lng": 101.46939
+      }
+    },
+    {
+      "id": "ab3rsl1",
+      "time": "2025-10-16T07:55:30.640Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ayd7ecj",
+      "time": "2025-10-16T07:55:28.691Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.05725,
+        "lng": 101.46939
+      }
+    },
+    {
+      "id": "altdwmr",
+      "time": "2025-10-16T07:55:15.037Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a4056kl",
+      "time": "2025-10-16T07:54:29.692Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ajbga3q",
+      "time": "2025-10-16T07:53:29.679Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "as52qvv",
+      "time": "2025-10-16T07:52:29.692Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aykp0ru",
+      "time": "2025-10-16T07:51:29.732Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a1m4hce",
+      "time": "2025-10-16T07:51:13.676Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a63bho3",
+      "time": "2025-10-16T07:50:58.681Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ase3seu",
+      "time": "2025-10-16T07:50:43.650Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ajawnjf",
+      "time": "2025-10-16T07:50:28.672Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "am1at8h",
+      "time": "2025-10-16T07:50:13.658Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "asickfw",
+      "time": "2025-10-16T07:49:58.663Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "afceejj",
+      "time": "2025-10-16T07:49:43.514Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "akkzgta",
+      "time": "2025-10-16T07:48:50.094Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "apc8vku",
+      "time": "2025-10-16T07:48:17.807Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "adccint",
+      "time": "2025-10-16T07:47:16.750Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "agq09nt",
+      "time": "2025-10-16T07:46:15.666Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "apm7ufp",
+      "time": "2025-10-16T07:46:00.659Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "apf1ytw",
+      "time": "2025-10-16T07:45:45.670Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a0uxond",
+      "time": "2025-10-16T07:45:30.685Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "awytg8s",
+      "time": "2025-10-16T07:45:15.658Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "ase3dto",
+      "time": "2025-10-16T07:45:00.798Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a2k4nfn",
+      "time": "2025-10-16T07:44:45.311Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aurwczb",
+      "time": "2025-10-16T07:29:56.255Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "a46ld9l",
+      "time": "2025-10-16T07:29:49.531Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "aferupt",
+      "time": "2025-10-16T07:29:45.822Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "arg7apn",
+      "time": "2025-10-16T07:29:43.988Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scanner_heartbeat",
+      "details": {
+        "jobId": "j2",
+        "lat": 3.0572544,
+        "lng": 101.4693888
+      }
+    },
+    {
+      "id": "atqecnn",
+      "time": "2025-10-16T07:12:35.295Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.05725,
+        "lng": 101.46939
+      }
+    },
+    {
+      "id": "a57cp2w",
+      "time": "2025-10-16T07:12:11.433Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "awrvret",
+      "time": "2025-10-16T07:12:03.954Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "atb2q6y",
+      "time": "2025-10-16T07:12:01.686Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "alc8eyb",
+      "time": "2025-10-16T07:11:17.108Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j2",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "aqm5rjn",
+      "time": "2025-10-16T07:11:16.183Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reject",
+      "details": {
+        "jobId": "j2",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a6p9wri",
+      "time": "2025-10-16T07:11:12.974Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j2",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "ag9wzyf",
+      "time": "2025-10-16T07:11:12.018Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j2",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a6zi7u8",
+      "time": "2025-10-16T07:06:34.645Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "arv9zpx",
+      "time": "2025-10-16T07:05:50.736Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j2",
+        "dir": "in",
+        "userId": "u1",
+        "lat": 3.05725,
+        "lng": 101.46939
+      }
+    },
+    {
+      "id": "ah6nih7",
+      "time": "2025-10-16T06:45:35.019Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aqlmvip",
+      "time": "2025-10-16T06:44:28.514Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j2",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a5hxlsy",
+      "time": "2025-10-16T06:42:52.852Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a27l0k4",
+      "time": "2025-10-16T06:42:40.444Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aauw43q",
+      "time": "2025-10-16T06:42:11.776Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "aejzmax",
+      "time": "2025-10-16T06:42:07.644Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ajfm04s",
+      "time": "2025-10-16T06:42:01.694Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "apply",
+      "details": {
+        "jobId": "j2",
+        "userId": "u1",
+        "transport": "ATAG Bus"
+      }
+    },
+    {
+      "id": "a7aga53",
+      "time": "2025-10-16T06:41:57.258Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "asr4obx",
+      "time": "2025-10-16T06:41:44.145Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "delete_job",
+      "details": {
+        "jobId": "jc8ll00"
+      }
+    },
+    {
+      "id": "agl0ms6",
+      "time": "2025-10-16T06:41:38.333Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "az8t4tf",
+      "time": "2025-10-16T06:40:38.039Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a15tno7",
+      "time": "2025-10-16T06:39:52.231Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "arq468k",
+      "time": "2025-10-16T06:24:19.391Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "ahx8hx1",
+      "time": "2025-10-16T06:21:36.161Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "ax2pja9",
+      "time": "2025-10-16T06:21:32.103Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "adae3j0",
+      "time": "2025-10-16T06:21:19.625Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a98st5z",
+      "time": "2025-10-16T06:20:56.109Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a4k93nc",
+      "time": "2025-10-16T06:20:50.713Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "jc8ll00"
+      }
+    },
+    {
+      "id": "avthywq",
+      "time": "2025-10-16T06:20:36.107Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a0peljz",
+      "time": "2025-10-16T06:20:24.633Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aei8s5y",
+      "time": "2025-10-16T06:20:19.513Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "ah9nyx9",
+      "time": "2025-10-16T06:20:14.182Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ay5rqjj",
+      "time": "2025-10-16T06:20:01.693Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "am9zuq1",
+      "time": "2025-10-16T06:19:40.490Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aoqdv3c",
+      "time": "2025-10-16T06:19:30.568Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a6otqtt",
+      "time": "2025-10-16T06:19:23.923Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j3"
+      }
+    },
+    {
+      "id": "agkifu5",
+      "time": "2025-10-16T06:19:18.377Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j3"
+      }
+    },
+    {
+      "id": "ad1bpns",
+      "time": "2025-10-16T06:15:30.964Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "create_job",
+      "details": {
+        "jobId": "jc8ll00",
+        "title": "aa"
+      }
+    },
+    {
+      "id": "a5jyus8",
+      "time": "2025-10-16T06:15:12.647Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "amoyff7",
+      "time": "2025-10-16T06:15:07.429Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "ax0vjip",
+      "time": "2025-10-16T06:15:02.007Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "delete_job",
+      "details": {
+        "jobId": "j9u1aww"
+      }
+    },
+    {
+      "id": "a23km3j",
+      "time": "2025-10-16T06:14:56.347Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j9u1aww"
+      }
+    },
+    {
+      "id": "adyuqh2",
+      "time": "2025-10-16T06:14:43.885Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "create_job",
+      "details": {
+        "jobId": "j9u1aww",
+        "title": "aaa"
+      }
+    },
+    {
+      "id": "a350eil",
+      "time": "2025-10-16T06:14:33.577Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "delete_job",
+      "details": {
+        "jobId": "jtg5f6i"
+      }
+    },
+    {
+      "id": "acf5aqv",
+      "time": "2025-10-16T06:13:41.197Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "create_job",
+      "details": {
+        "jobId": "jtg5f6i",
+        "title": "aaa"
+      }
+    },
+    {
+      "id": "a7zr8zm",
+      "time": "2025-10-16T06:13:22.639Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "aayhcta",
+      "time": "2025-10-16T06:13:13.924Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "delete_job",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "amlhh69",
+      "time": "2025-10-16T06:13:09.891Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "delete_job",
+      "details": {
+        "jobId": "jzy81vs"
+      }
+    },
+    {
+      "id": "a44v3ej",
+      "time": "2025-10-16T06:13:05.388Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "edit_job",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "auhxkwi",
+      "time": "2025-10-16T06:12:50.427Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "jzy81vs",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "aree6y3",
+      "time": "2025-10-16T06:12:47.904Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "jzy81vs"
+      }
+    },
+    {
+      "id": "a0n2ksb",
+      "time": "2025-10-16T06:12:47.229Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "jzy81vs",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "ab3g710",
+      "time": "2025-10-16T06:12:44.950Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "jzy81vs",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "a0tdjj5",
+      "time": "2025-10-16T06:12:41.382Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "create_job",
+      "details": {
+        "jobId": "jzy81vs",
+        "title": "s"
+      }
+    },
+    {
+      "id": "adchqvg",
+      "time": "2025-10-16T06:04:29.030Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aqw0e5h",
+      "time": "2025-10-16T05:53:14.520Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "reapply",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1",
+        "transport": "Own Transport"
+      }
+    },
+    {
+      "id": "alrgsc8",
+      "time": "2025-10-16T05:53:10.511Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "ay48i1s",
+      "time": "2025-10-16T05:37:21.583Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "aq4s987",
+      "time": "2025-10-16T05:37:15.345Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "as9uf1a",
+      "time": "2025-10-16T05:36:25.206Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a7teyxs",
+      "time": "2025-10-16T05:35:48.694Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "aa14orp",
+      "time": "2025-10-16T05:33:11.784Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a8tmaut",
+      "time": "2025-10-16T05:32:48.213Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "apcutzx",
+      "time": "2025-10-16T05:13:04.571Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aktkufj",
+      "time": "2025-10-16T05:09:36.837Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a4gpbv9",
+      "time": "2025-10-16T05:09:33.392Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reject",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "aahwgxs",
+      "time": "2025-10-16T05:09:29.824Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ail4ylp",
+      "time": "2025-10-16T05:09:25.026Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "ag81nke",
+      "time": "2025-10-16T05:09:21.920Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "afslgp1",
+      "time": "2025-10-16T04:55:15.373Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "a8juc69",
+      "time": "2025-10-16T04:54:01.183Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "am1u1ij",
+      "time": "2025-10-16T04:53:54.446Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a2x3mlo",
+      "time": "2025-10-16T04:51:26.147Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aii024l",
+      "time": "2025-10-16T04:51:20.136Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aaavtxg",
+      "time": "2025-10-16T04:46:58.135Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "aueufaq",
+      "time": "2025-10-16T04:46:55.268Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "afd8twp",
+      "time": "2025-10-16T04:46:52.630Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "a467ujq",
+      "time": "2025-10-16T04:46:49.796Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "adntin4",
+      "time": "2025-10-16T04:46:45.252Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "end_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "an821pk",
+      "time": "2025-10-16T04:46:36.250Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "aeroh43",
+      "time": "2025-10-16T04:46:35.579Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "ate0qdo",
+      "time": "2025-10-16T04:46:33.429Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "a1pvaix",
+      "time": "2025-10-16T04:46:27.433Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j2"
+      }
+    },
+    {
+      "id": "awnc2mj",
+      "time": "2025-10-16T04:46:26.657Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "al9i9jy",
+      "time": "2025-10-16T04:46:25.368Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "ah4j4lm",
+      "time": "2025-10-16T04:46:23.262Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j2",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "a44r50g",
+      "time": "2025-10-16T04:46:19.195Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "alnrqg3",
+      "time": "2025-10-16T04:43:08.553Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a9vxl6q",
+      "time": "2025-10-16T04:00:46.136Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "abw6t7z",
+      "time": "2025-10-15T16:42:26.233Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "agmq3v6",
+      "time": "2025-10-15T16:40:10.620Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "aic729e",
+      "time": "2025-10-15T16:39:23.938Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "aib522e",
+      "time": "2025-10-15T16:39:05.296Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a63p2ne",
+      "time": "2025-10-15T16:39:03.877Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "a90eszn",
+      "time": "2025-10-15T16:39:03.379Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "az9fn0q",
+      "time": "2025-10-15T16:39:02.799Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "aa7fxjk",
+      "time": "2025-10-15T16:39:02.206Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "axvto38",
+      "time": "2025-10-15T16:39:01.636Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "ak31yeb",
+      "time": "2025-10-15T16:39:01.129Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "ab2sgmg",
+      "time": "2025-10-15T16:39:00.627Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "aoyurgo",
+      "time": "2025-10-15T16:39:00.047Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "ahxz9fs",
+      "time": "2025-10-15T16:38:59.456Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "a5hsme6",
+      "time": "2025-10-15T16:38:58.845Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "aod48dc",
+      "time": "2025-10-15T16:38:58.333Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "atiwdms",
+      "time": "2025-10-15T16:37:47.049Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a68wcpz",
+      "time": "2025-10-15T16:37:35.958Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "a6dbmh1",
+      "time": "2025-10-15T16:37:35.387Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_error",
+      "details": {
+        "reason": "jwt_error"
+      }
+    },
+    {
+      "id": "awdogh9",
+      "time": "2025-10-15T16:37:18.613Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "amd4pe3",
+      "time": "2025-10-15T16:37:16.302Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "anaj3td",
+      "time": "2025-10-15T16:36:52.239Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "aoxztuz",
+      "time": "2025-10-15T15:56:52.561Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "alosszm",
+      "time": "2025-10-15T15:56:49.486Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "a0w3ymr",
+      "time": "2025-10-15T15:56:48.476Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "ar1wpty",
+      "time": "2025-10-15T15:45:20.949Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "aqmjh8k",
+      "time": "2025-10-15T15:45:19.730Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": true
+      }
+    },
+    {
+      "id": "aa7m0xn",
+      "time": "2025-10-15T15:45:18.068Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reset_event",
+      "details": {
+        "jobId": "j1",
+        "keepAttendance": false
+      }
+    },
+    {
+      "id": "aq2vilj",
+      "time": "2025-10-15T15:33:01.501Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "an8xl3k",
+      "time": "2025-10-15T15:33:00.167Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reject",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a1gk6ah",
+      "time": "2025-10-15T15:16:07.115Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a16u4sz",
+      "time": "2025-10-15T15:16:06.662Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "aaul00m",
+      "time": "2025-10-15T15:16:06.129Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "apg3cee",
+      "time": "2025-10-15T15:16:05.554Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "ajxixyz",
+      "time": "2025-10-15T15:16:05.001Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "amzt6xr",
+      "time": "2025-10-15T15:16:04.400Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "all6fzq",
+      "time": "2025-10-15T15:16:03.879Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "scan_in",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "aqs7b8b",
+      "time": "2025-10-15T15:15:50.570Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "afx649a",
+      "time": "2025-10-13T08:20:21.689Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a1bydgq",
+      "time": "2025-10-13T08:20:09.579Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "au563d8",
+      "time": "2025-10-13T07:56:04.926Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "akqqjfy",
+      "time": "2025-10-13T07:53:30.008Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "azknnch",
+      "time": "2025-10-13T07:53:22.741Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "az74h2w",
+      "time": "2025-10-13T07:53:18.715Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "ai6u3c5",
+      "time": "2025-10-13T07:43:49.835Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a4imztc",
+      "time": "2025-10-13T07:31:39.873Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a3g7r2f",
+      "time": "2025-10-13T07:30:25.264Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ao3mjm3",
+      "time": "2025-10-13T07:21:55.847Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "aq81fcq",
+      "time": "2025-10-13T07:16:10.515Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "al9i637",
+      "time": "2025-10-13T07:15:54.984Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a79nq6e",
+      "time": "2025-10-13T07:15:11.044Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a09qul5",
+      "time": "2025-10-13T07:12:25.263Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "apmkcwz",
+      "time": "2025-10-13T07:11:50.705Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "asp1sio",
+      "time": "2025-10-13T06:59:31.960Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ag9nz5y",
+      "time": "2025-10-13T06:48:03.153Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "akq6kdb",
+      "time": "2025-10-13T06:28:02.569Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aqih2c2",
+      "time": "2025-10-13T06:25:58.654Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "aezn95p",
+      "time": "2025-10-13T06:24:13.240Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a2jb6iv",
+      "time": "2025-10-13T06:24:01.587Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "al9yp48",
+      "time": "2025-10-13T06:17:35.616Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "aubapv3",
+      "time": "2025-10-13T06:17:23.998Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a6kn9x8",
+      "time": "2025-10-13T06:16:36.378Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ajsqdj8",
+      "time": "2025-10-13T06:05:54.561Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "ap7cl30",
+      "time": "2025-10-13T05:49:32.229Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aorc11s",
+      "time": "2025-10-13T05:49:18.117Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "axqca99",
+      "time": "2025-10-13T05:16:38.729Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "akhjccl",
+      "time": "2025-10-13T05:16:12.868Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "aekk4xe",
+      "time": "2025-10-13T05:15:37.884Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "ao78tbg",
+      "time": "2025-10-13T03:51:54.837Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a3m5vgw",
+      "time": "2025-10-13T03:49:17.895Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "aarftch",
+      "time": "2025-10-13T03:49:09.310Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "ablxtwy",
+      "time": "2025-10-13T03:49:03.496Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a1fcxdc",
+      "time": "2025-10-13T03:44:35.236Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "ack074l",
+      "time": "2025-10-13T03:41:02.213Z",
+      "actor": "admin@example.com",
+      "role": "admin",
+      "action": "login",
+      "details": {
+        "email": "admin@example.com"
+      }
+    },
+    {
+      "id": "a6q7oom",
+      "time": "2025-10-13T03:39:47.772Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "afjguoi",
+      "time": "2025-10-13T03:39:33.929Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "af6fwrj",
+      "time": "2025-10-13T03:38:07.644Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "afxrswe",
+      "time": "2025-10-13T03:33:08.154Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "gen_qr",
+      "details": {
+        "jobId": "j1",
+        "dir": "in",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a1bi3bw",
+      "time": "2025-10-13T03:30:47.382Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "ah2o9sn",
+      "time": "2025-10-13T03:30:23.702Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a1cl5kr",
+      "time": "2025-10-13T03:30:16.943Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "azd7c2c",
+      "time": "2025-10-13T03:29:50.733Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a7qg0z9",
+      "time": "2025-10-13T03:29:40.380Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "reject",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a4xfmix",
+      "time": "2025-10-13T03:29:35.514Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "ariljs4",
+      "time": "2025-10-13T03:29:03.887Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    },
+    {
+      "id": "a77vt5p",
+      "time": "2025-10-13T03:28:52.381Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "approve",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1"
+      }
+    },
+    {
+      "id": "a1ix04y",
+      "time": "2025-10-13T03:28:48.776Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "start_event",
+      "details": {
+        "jobId": "j1"
+      }
+    },
+    {
+      "id": "ad2eyta",
+      "time": "2025-10-13T03:28:41.931Z",
+      "actor": "pm@example.com",
+      "role": "pm",
+      "action": "login",
+      "details": {
+        "email": "pm@example.com"
+      }
+    },
+    {
+      "id": "a0mewwv",
+      "time": "2025-10-13T03:28:29.247Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "apply",
+      "details": {
+        "jobId": "j1",
+        "userId": "u1",
+        "transport": "ATAG Bus"
+      }
+    },
+    {
+      "id": "aoofud4",
+      "time": "2025-10-13T03:28:19.758Z",
+      "actor": "alice@example.com",
+      "role": "part-timer",
+      "action": "login",
+      "details": {
+        "email": "alice@example.com"
+      }
+    }
+  ]
+}
