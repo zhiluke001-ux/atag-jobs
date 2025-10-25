@@ -10,13 +10,15 @@ export default function AdminUsers({ user }) {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [savingId, setSavingId] = useState(null);
+  const [edits, setEdits] = useState({}); // { [userId]: { role?, grade? } }
+
   const isAdmin = !!user && user.role === "admin";
 
   useEffect(() => {
     if (!isAdmin) return;
     setLoading(true);
     apiGet("/admin/users")
-      .then(setList)
+      .then((rows) => setList(Array.isArray(rows) ? rows : []))
       .finally(() => setLoading(false));
   }, [isAdmin]);
 
@@ -31,17 +33,47 @@ export default function AdminUsers({ user }) {
     );
   }, [q, list]);
 
-  async function save(u, next) {
+  function getDraft(u) {
+    const d = edits[u.id] || {};
+    return {
+      role:  d.role  ?? u.role,
+      grade: d.grade ?? (u.grade || "junior"),
+    };
+  }
+
+  function setDraft(u, patch) {
+    setEdits((old) => ({
+      ...old,
+      [u.id]: { ...(old[u.id] || {}), ...patch },
+    }));
+  }
+
+  function isDirty(u) {
+    const d = getDraft(u);
+    return d.role !== u.role || (d.grade || "junior") !== (u.grade || "junior");
+    }
+  
+  async function save(u) {
+    const draft = getDraft(u);
+    const body = {};
+    if (draft.role !== u.role) body.role = draft.role;
+    if ((draft.grade || "junior") !== (u.grade || "junior")) body.grade = draft.grade;
+
+    if (!Object.keys(body).length) {
+      alert("No changes to save.");
+      return;
+    }
+
     try {
       setSavingId(u.id);
-      const body = {};
-      if (next.role  && next.role  !== u.role)  body.role  = next.role;
-      if (next.grade && next.grade !== u.grade) body.grade = next.grade;
-      if (!Object.keys(body).length) return;
-
       const res = await apiPatch(`/admin/users/${u.id}`, body);
-      const updated = res?.user || { ...u, ...next };
+      const updated = res?.user || { ...u, ...body };
       setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
+      setEdits((old) => {
+        const nxt = { ...old };
+        delete nxt[u.id];
+        return nxt;
+      });
       alert("Saved.");
     } catch (err) {
       const msg = err?.message || "Save failed";
@@ -53,6 +85,14 @@ export default function AdminUsers({ user }) {
     } finally {
       setSavingId(null);
     }
+  }
+
+  function resetRow(u) {
+    setEdits((old) => {
+      const nxt = { ...old };
+      delete nxt[u.id];
+      return nxt;
+    });
   }
 
   if (!isAdmin) {
@@ -89,35 +129,46 @@ export default function AdminUsers({ user }) {
             </thead>
             <tbody>
               {filtered.map((u) => {
-                const [role, setRole] = [u.role, (v) => (u.role = v)];
-                const [grade, setGrade] = [u.grade || "junior", (v) => (u.grade = v)];
+                const draft = getDraft(u);
+                const dirty = isDirty(u);
                 return (
                   <tr key={u.id} style={{ borderTop: "1px solid #eee" }}>
                     <td style={{ padding: 8 }}>{u.name}</td>
                     <td style={{ padding: 8 }}>{u.email}</td>
                     <td style={{ padding: 8 }}>{u.username}</td>
                     <td style={{ padding: 8 }}>
-                      <select defaultValue={role} onChange={(e) => setRole(e.target.value)}>
+                      <select
+                        value={draft.role}
+                        onChange={(e) => setDraft(u, { role: e.target.value })}
+                      >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>{r}</option>
                         ))}
                       </select>
                     </td>
                     <td style={{ padding: 8 }}>
-                      <select defaultValue={grade} onChange={(e) => setGrade(e.target.value)}>
+                      <select
+                        value={draft.grade}
+                        onChange={(e) => setDraft(u, { grade: e.target.value })}
+                      >
                         {GRADES.map((g) => (
                           <option key={g} value={g}>{g}</option>
                         ))}
                       </select>
                     </td>
-                    <td style={{ padding: 8 }}>
+                    <td style={{ padding: 8, display: "flex", gap: 8 }}>
                       <button
                         className="btn primary"
-                        disabled={savingId === u.id}
-                        onClick={() => save(u, { role: u.role, grade: u.grade || "junior" })}
+                        disabled={savingId === u.id || !dirty}
+                        onClick={() => save(u)}
                       >
                         {savingId === u.id ? "Saving..." : "Save"}
                       </button>
+                      {dirty && (
+                        <button className="btn" onClick={() => resetRow(u)}>
+                          Reset
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
