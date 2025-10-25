@@ -4,8 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ATAG Jobs</title>
+
+    <!-- Runtime API base (works regardless of build-time env) -->
+    <script>
+      window.ATAG_API_BASE = 'https://atag-jobs.onrender.com';
+    </script>
+
     <!-- html5-qrcode for scanner -->
     <script src="https://unpkg.com/html5-qrcode"></script>
+
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Noto Sans, "Apple Color Emoji", "Segoe UI Emoji"; margin:0; background:#fafafa; }
       .container { max-width: 980px; margin: 0 auto; padding: 16px; }
