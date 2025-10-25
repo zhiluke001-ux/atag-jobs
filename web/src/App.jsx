@@ -15,7 +15,6 @@ import PMJobDetails from "./pages/PMJobDetails";
 import Admin from "./pages/Admin"; // Wages
 import Scanner from "./components/Scanner";
 
-
 /* ---------- Auth ---------- */
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -69,11 +68,11 @@ export default function App() {
     if (path === "my-jobs") return <MyJobs navigate={navigate} user={user} />;
     if (path === "payments") return <Payments navigate={navigate} user={user} />;
 
-    /* -------- Admin suite -------- */
-    // Support multiple aliases for links that might exist in your Header
-    if (path === "admin-users" || path === "users" || path === "users-audit")
-      return <AdminUsers user={user} />;
-    if (path === "wages") return <Admin navigate={navigate} user={user} />;
+    /* -------- Admin / Wages -------- */
+    // AdminUsers was removed. Keep legacy routes but redirect them to Wages.
+    if (path === "wages" || path === "admin-users" || path === "users" || path === "users-audit") {
+      return <Admin navigate={navigate} user={user} />;
+    }
 
     /* -------- Auth -------- */
     if (path === "login") return <Login navigate={navigate} setUser={setUser} />;
