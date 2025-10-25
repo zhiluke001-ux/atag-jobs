@@ -167,7 +167,9 @@ function findUserByIdentifier(id) {
 // Helpers
 const ROLES = ["part-timer", "pm", "admin"];
 const STAFF_ROLES = ["junior", "senior", "lead"];
-const clampRole = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
+const clampRole  = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
+// NEW: grade clamp
+const clampGrade = (g) => (STAFF_ROLES.includes(String(g)) ? String(g) : "junior");
 
 function paySummaryFromRate(rate = {}) {
   const pm = rate.payMode;
@@ -393,6 +395,11 @@ for (const u of db.users) {
     u.passwordHash = hashPassword("password");
     mutated = true;
   }
+  // Ensure staff grade exists
+  if (!u.grade || !STAFF_ROLES.includes(u.grade)) {
+    u.grade = "junior";
+    mutated = true;
+  }
   if (u.resetToken && (!u.resetToken.token || !u.resetToken.expiresAt)) {
     delete u.resetToken;
     mutated = true;
@@ -439,6 +446,7 @@ app.post("/login", async (req, res) => {
     email: user.email,
     role: user.role,
     name: user.name,
+    grade: user.grade || "junior",
   });
   addAudit("login", { identifier: id }, { user });
   res.json({
@@ -448,6 +456,7 @@ app.post("/login", async (req, res) => {
       email: user.email,
       role: user.role,
       name: user.name,
+      grade: user.grade || "junior",
     },
   });
 });
@@ -489,7 +498,8 @@ app.post("/register", async (req, res) => {
     email,
     username: finalUsername,
     name: name || finalUsername,
-    role: pickedRole,
+    role: pickedRole,   // part-timer by default
+    grade: "junior",    // NEW default staff grade
     passwordHash,
   };
   db.users.push(newUser);
@@ -501,10 +511,11 @@ app.post("/register", async (req, res) => {
     email,
     role: newUser.role,
     name: newUser.name,
+    grade: newUser.grade,
   });
   res.json({
     token,
-    user: { id, email, role: newUser.role, name: newUser.name },
+    user: { id, email, role: newUser.role, name: newUser.name, grade: newUser.grade },
   });
 });
 
@@ -561,6 +572,55 @@ app.get("/me", authMiddleware, (req, res) => {
       email: user.email,
       role: user.role,
       name: user.name,
+      grade: user.grade || "junior",
+    },
+  });
+});
+
+/* -------- Admin: users (list & update role/grade) -------- */
+app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
+  const list = (db.users || []).map(u => ({
+    id: u.id,
+    email: u.email,
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    grade: u.grade || "junior",
+  }));
+  res.json(list);
+});
+
+app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
+  const target = db.users.find(u => u.id === req.params.id);
+  if (!target) return res.status(404).json({ error: "user_not_found" });
+
+  const { role, grade } = req.body || {};
+  const before = { role: target.role, grade: target.grade || "junior" };
+
+  // Prevent removing the last admin
+  if (role && clampRole(role) !== "admin" && target.role === "admin") {
+    const adminCount = (db.users || []).filter(u => u.role === "admin").length;
+    if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
+  }
+
+  if (role !== undefined)  target.role  = clampRole(role);
+  if (grade !== undefined) target.grade = clampGrade(grade);
+
+  await saveDB(db);
+  addAudit("admin_update_user_role_grade",
+    { userId: target.id, before, after: { role: target.role, grade: target.grade } },
+    req
+  );
+
+  res.json({
+    ok: true,
+    user: {
+      id: target.id,
+      email: target.email,
+      username: target.username,
+      name: target.name,
+      role: target.role,
+      grade: target.grade || "junior",
     },
   });
 });
