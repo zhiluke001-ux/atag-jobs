@@ -31,7 +31,7 @@ export default function Header({ user, setUser }) {
           {isPMAdmin && (
             <>
               <a href="#/wages">Wages</a>
-              <a href="#/admin-user">User Management</a>
+              <a href="#/admin-users">User Management</a>
             </>
           )}
         </nav>
