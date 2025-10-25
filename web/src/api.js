@@ -14,6 +14,16 @@ function detectDevFallbackBase() {
   return "";
 }
 
+/* ---------- Read runtime global (from index.html) ---------- */
+function readGlobalBase() {
+  try {
+    const v = typeof window !== "undefined" && window.ATAG_API_BASE;
+    return v ? String(v).trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 /* ---------- Helpers ---------- */
 function readLocalBase() {
   try {
@@ -45,20 +55,23 @@ function sanitizeBase(url) {
 }
 
 /* ---------- Resolve API base (priority) ----------
-   1) localStorage (atag.apiBase -> apiBase)
-   2) Env: VITE_API_BASE (preferred) or VITE_API_URL (legacy)
-   3) Dev fallback http://localhost:4000 (when on :5173)
-   4) "" => relative (dev proxy only)
+   1) window.ATAG_API_BASE (runtime, from index.html)
+   2) localStorage (atag.apiBase -> apiBase)
+   3) Env: VITE_API_BASE (preferred) or VITE_API_URL (legacy)
+   4) Dev fallback http://localhost:4000 (when on :5173)
+   5) "" => relative (dev proxy only)
 -------------------------------------------------- */
 function resolveBase() {
-  const fromLS = readLocalBase();
-  const envBase =
+  const fromGlobal = sanitizeBase(readGlobalBase());
+  const fromLS = sanitizeBase(readLocalBase());
+  const fromEnv = sanitizeBase(
     (import.meta?.env?.VITE_API_BASE ||
       import.meta?.env?.VITE_API_URL ||
-      "").trim();
-  const fallback = detectDevFallbackBase();
+      "").trim()
+  );
+  const dev = detectDevFallbackBase();
 
-  const chosen = sanitizeBase(fromLS) || sanitizeBase(envBase) || fallback || "";
+  const chosen = fromGlobal || fromLS || fromEnv || dev || "";
   return chosen.replace(/\/+$/, "");
 }
 
@@ -82,13 +95,21 @@ export function debugApiBase() {
 
 /* ---------- Auth token helpers ---------- */
 export function setToken(token) {
-  try { localStorage.setItem(TOKEN_KEY, token); } catch {}
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {}
 }
 export function getToken() {
-  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+  try {
+    return localStorage.getItem(TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
 }
 export function clearToken() {
-  try { localStorage.removeItem(TOKEN_KEY); } catch {}
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {}
 }
 
 function authHeaders() {
@@ -119,7 +140,8 @@ async function doFetch(path, { method = "GET", body, headers } = {}) {
   if (!res.ok) {
     try {
       const json = raw ? JSON.parse(raw) : {};
-      const msg = json?.error || json?.message || `${res.status} ${res.statusText}`;
+      const msg =
+        json?.error || json?.message || `${res.status} ${res.statusText}`;
       const err = new Error(msg);
       err.status = res.status;
       err.payload = json;
@@ -136,9 +158,9 @@ async function doFetch(path, { method = "GET", body, headers } = {}) {
   if (!ct.includes("application/json")) {
     throw new Error(
       `Expected JSON from API but got "${ct}" at ${url}. ` +
-      `Your API base is likely misconfigured. ` +
-      `Set localStorage 'atag.apiBase' or 'apiBase' to your Render URL, ` +
-      `or set VITE_API_BASE during build.`
+        `Your API base is likely misconfigured. ` +
+        `Set localStorage 'atag.apiBase' or 'apiBase' to your Render URL, ` +
+        `or set VITE_API_BASE during build.`
     );
   }
 
@@ -153,10 +175,10 @@ async function doFetch(path, { method = "GET", body, headers } = {}) {
 /* ----------------------------
    Public API helpers
 ---------------------------- */
-export const apiGet    = (path)       => doFetch(path, { method: "GET" });
-export const apiPost   = (path, body) => doFetch(path, { method: "POST", body });
-export const apiPatch  = (path, body) => doFetch(path, { method: "PATCH", body });
-export const apiDelete = (path)       => doFetch(path, { method: "DELETE" });
+export const apiGet = (path) => doFetch(path, { method: "GET" });
+export const apiPost = (path, body) => doFetch(path, { method: "POST", body });
+export const apiPatch = (path, body) => doFetch(path, { method: "PATCH", body });
+export const apiDelete = (path) => doFetch(path, { method: "DELETE" });
 
 export async function apiGetBlob(path) {
   const res = await fetch(fullUrl(path), { headers: { ...authHeaders() } });
