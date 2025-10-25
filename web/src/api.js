@@ -1,7 +1,7 @@
 // web/src/api.js
 
 const TOKEN_KEY = "token";
-// Support both keys (new first for compatibility), will read the first that exists.
+// Prefer new key but read legacy too
 const LS_BASE_KEYS = ["atag.apiBase", "apiBase"];
 
 /* ---------- Dev fallback (:5173 -> :4000) ---------- */
@@ -27,9 +27,9 @@ function readLocalBase() {
 
 function writeLocalBase(url) {
   try {
-    // Write to the primary key; remove legacy one to avoid confusion.
     if (url) localStorage.setItem(LS_BASE_KEYS[0], String(url));
     else localStorage.removeItem(LS_BASE_KEYS[0]);
+    // Clear legacy keys
     for (let i = 1; i < LS_BASE_KEYS.length; i++) {
       localStorage.removeItem(LS_BASE_KEYS[i]);
     }
@@ -39,16 +39,16 @@ function writeLocalBase(url) {
 function sanitizeBase(url) {
   if (!url) return "";
   const trimmed = String(url).trim().replace(/\/+$/, "");
-  // Accept absolute http(s) only; anything else (e.g., "./api") is unsafe on CF Pages.
+  // Only accept absolute http(s) URLs in production
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return "";
 }
 
-/* ---------- Decide API base (priority) ----------
+/* ---------- Resolve API base (priority) ----------
    1) localStorage (atag.apiBase -> apiBase)
    2) Env: VITE_API_BASE (preferred) or VITE_API_URL (legacy)
-   3) Dev fallback (http://localhost:4000 when Vite dev)
-   4) "" => relative (only works if a dev proxy is configured)
+   3) Dev fallback http://localhost:4000 (when on :5173)
+   4) "" => relative (dev proxy only)
 -------------------------------------------------- */
 function resolveBase() {
   const fromLS = readLocalBase();
@@ -63,36 +63,32 @@ function resolveBase() {
 }
 
 let API_BASE = resolveBase();
-export { API_BASE }; // some files import this
+export { API_BASE };
 
 export function getApiBase() {
   return API_BASE;
 }
 
 export function setApiBase(url) {
-  // Allow clearing by passing falsy
-  if (url) writeLocalBase(url);
-  else writeLocalBase("");
+  writeLocalBase(url || "");
   API_BASE = resolveBase();
+}
+
+export function debugApiBase() {
+  // Handy in the console to confirm where we're pointing
+  // e.g. window.debugApiBase && debugApiBase()
+  console.log("API_BASE =", API_BASE || "(relative)");
 }
 
 /* ---------- Auth token helpers ---------- */
 export function setToken(token) {
-  try {
-    localStorage.setItem(TOKEN_KEY, token);
-  } catch {}
+  try { localStorage.setItem(TOKEN_KEY, token); } catch {}
 }
 export function getToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
 }
 export function clearToken() {
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-  } catch {}
+  try { localStorage.removeItem(TOKEN_KEY); } catch {}
 }
 
 function authHeaders() {
@@ -102,11 +98,12 @@ function authHeaders() {
 
 function fullUrl(path) {
   if (!path.startsWith("/")) path = "/" + path;
-  return API_BASE ? API_BASE + path : path; // relative only in dev with proxy
+  return API_BASE ? API_BASE + path : path; // relative only in dev/proxy
 }
 
 async function doFetch(path, { method = "GET", body, headers } = {}) {
-  const res = await fetch(fullUrl(path), {
+  const url = fullUrl(path);
+  const res = await fetch(url, {
     method,
     headers: {
       ...(body != null ? { "Content-Type": "application/json" } : {}),
@@ -116,33 +113,41 @@ async function doFetch(path, { method = "GET", body, headers } = {}) {
     body: body != null ? JSON.stringify(body) : undefined,
   });
 
-  const text = await res.text().catch(() => "");
+  const raw = await res.text().catch(() => "");
 
+  // Error path: try to parse JSON payload for message first
   if (!res.ok) {
-    // Try to parse JSON error first
     try {
-      const json = text ? JSON.parse(text) : {};
+      const json = raw ? JSON.parse(raw) : {};
       const msg = json?.error || json?.message || `${res.status} ${res.statusText}`;
       const err = new Error(msg);
       err.status = res.status;
       err.payload = json;
       throw err;
     } catch {
-      const err = new Error(text || `${res.status} ${res.statusText}`);
+      const err = new Error(raw || `${res.status} ${res.statusText}`);
       err.status = res.status;
       throw err;
     }
   }
 
+  // Expect JSON for all app APIs; fail fast if we got HTML/text by mistake
   const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    try {
-      return text ? JSON.parse(text) : {};
-    } catch {
-      return {};
-    }
+  if (!ct.includes("application/json")) {
+    throw new Error(
+      `Expected JSON from API but got "${ct}" at ${url}. ` +
+      `Your API base is likely misconfigured. ` +
+      `Set localStorage 'atag.apiBase' or 'apiBase' to your Render URL, ` +
+      `or set VITE_API_BASE during build.`
+    );
   }
-  return text;
+
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    // Shouldn't happen with valid API; keep it defensive
+    return {};
+  }
 }
 
 /* ----------------------------
