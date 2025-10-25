@@ -269,7 +269,7 @@ function normalizeAdjustments(obj, actor) {
           : actor
           ? { id: actor.id ?? null, email: actor.email ?? null }
           : null,
-    })));
+    }));
   }
   return out;
 }
