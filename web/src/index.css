@@ -16,6 +16,10 @@
   --red: #dc2626;
   --amber: #f59e0b;
   --blue: #2563eb;
+
+  /* form control sizes */
+  --control-sm: 16px;         /* checkbox/radio */
+  --field-min-h: 40px;        /* text/date/time/select */
 }
 
 * { box-sizing: border-box; }
@@ -50,6 +54,8 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: space-between;
   gap: 16px; padding: 10px 16px;
   max-width: var(--container-max); margin: 0 auto;
+  flex-wrap: wrap;           /* allow wrapping on smaller screens */
+  min-width: 0;              /* prevent overflow clipping */
 }
 
 /* Brand */
@@ -68,7 +74,7 @@ a:hover { text-decoration: underline; }
 .nav-links a:hover { color: var(--accent); text-decoration: none; }
 
 /* Right: socials + auth */
-.right-side { display:flex; align-items:center; gap:14px; }
+.right-side { display:flex; align-items:center; gap:14px; flex-wrap: wrap; }
 .hi { color: var(--fg-2); }
 .role { background:#f3f4f6; padding:2px 6px; border-radius:999px; font-size:12px; }
 
@@ -133,14 +139,36 @@ a:hover { text-decoration: underline; }
   background:#f3f4f6; color:#374151; font-size:12px; font-weight:600;
 }
 
+/* --- NEW utility classes used by components --- */
+.row { display:flex; gap:8px; align-items:center; }
+.row-between { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.actions { display:flex; gap:8px; flex-wrap:wrap; }
+.cols-2 { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+.cols-2-16 { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
+.nowrap { white-space: nowrap; }
+
 /* ------------------------------
-   Buttons
+   Buttons (small & uniform)
 ------------------------------ */
 .btn {
-  appearance: none; border: 1px solid var(--border);
-  background:#fff; color: var(--fg);
-  padding: 6px 12px; border-radius: 8px;
-  font-weight: 600; cursor: pointer;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  height: 32px;               /* small, consistent */
+  padding: 0 12px;
+  font-size: 12px;
+  line-height: 1;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:#fff;
+  color: var(--fg);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
 }
 .btn:hover { background:#f9fafb; }
 .btn:disabled { opacity:.6; cursor:not-allowed; }
@@ -181,10 +209,32 @@ input, select, textarea {
   color: var(--fg);
   outline: none;
 }
+/* Keep field height for text/date/time/select, but NOT for checkbox/radio */
+input:not([type="checkbox"]):not([type="radio"]),
+select, textarea {
+  min-height: var(--field-min-h);
+}
 input:focus, select:focus, textarea:focus {
   border-color: #c7d2fe; box-shadow: 0 0 0 3px rgba(99,102,241,.15);
 }
 label { display:block; margin-bottom: 6px; color: var(--fg-2); font-weight: 600; }
+
+/* Compact checkboxes & radios */
+input[type="checkbox"],
+input[type="radio"]{
+  width: var(--control-sm);
+  height: var(--control-sm);
+  min-width: var(--control-sm);
+  min-height: var(--control-sm);
+  padding: 0;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+  background: #fff;
+  accent-color: var(--accent);
+}
+input[type="radio"]{ border-radius: 999px; }
+input[type="checkbox"]{ border-radius: 4px; }
 
 /* ------------------------------
    Job-specific small helpers
@@ -218,11 +268,33 @@ label { display:block; margin-bottom: 6px; color: var(--fg-2); font-weight: 600;
 }
 
 @media (max-width: 640px) {
-  .header-inner { padding: 8px 12px; }
+  .header-inner { padding: 8px 12px; flex-wrap: wrap; }
+  .brand { flex: 1 1 auto; }
   .nav-links { display:none; }       /* keep header uncluttered on small screens */
+
+  /* right side (socials + user) wraps to next line if needed */
+  .right-side { width:100%; justify-content:flex-start; gap:8px; flex-wrap:wrap; }
+
   .socials { gap:6px; }
   .icon { width:20px; height:20px; }
   .icon svg { width:14px; height:14px; }
+
+  /* cards & text spacing */
+  .container { padding: 0 12px; }
+  .card { padding: 12px; border-radius: 12px; }
+  .status { font-size: 12px; padding: 2px 8px; }
+
+  /* utilities: collapse 2-col helpers to 1-col on phones */
+  .cols-2, .cols-2-16 { grid-template-columns: 1fr; }
+
+  /* actions: buttons wrap and expand for tap targets */
+  .actions .btn { flex: 1 1 48%; }
+  .actions .btn.primary,
+  .actions .btn.red { flex: 1 1 100%; }
+}
+
+@media (max-width: 480px) {
+  .actions .btn { flex: 1 1 100%; }
 }
 
 /* --- CTA button like the screenshot --- */
@@ -310,7 +382,6 @@ body.modal-open { overflow: hidden; }
 /* Subtle pop-in */
 @keyframes modalIn{ to{ transform:none; opacity:1; } }
 
-
 /* Transport options layout */
 .transport-options {
   display: flex;
@@ -325,9 +396,8 @@ body.modal-open { overflow: hidden; }
   white-space: nowrap;           /* avoid "ATAG" line-break "Bus" */
 }
 
-/* Make small time/date inputs feel less cramped inside grid */
-input[type="time"], input[type="date"] { min-height: 40px; }
-input, select, textarea { min-height: 40px; }
+/* Comfortable height for date/time fields */
+input[type="time"], input[type="date"] { min-height: var(--field-min-h); }
 
 /* Ensure modal content scrolls independently and backdrop stays dark */
 .modal { align-items: flex-start; padding-top: 6vh; }

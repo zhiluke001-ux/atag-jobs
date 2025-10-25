@@ -3,6 +3,19 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import dayjs from "dayjs";
 import { apiGet, apiPost } from "../api";
 
+/* ---------------- helpers ---------------- */
+const toRad = (d) => (d * Math.PI) / 180;
+function haversineMeters(a, b) {
+  if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
+  const R = 6371000;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const aa =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(aa)));
+}
+
 function fmtRange(start, end) {
   try {
     const s = dayjs(start), e = dayjs(end);
@@ -14,6 +27,82 @@ function fmtRange(start, end) {
   } catch { return ""; }
 }
 const fmtTime = (t) => (t ? dayjs(t).format("HH:mm:ss") : "");
+const fmtDateTime = (t) => (t ? dayjs(t).format("YYYY/MM/DD HH:mm:ss") : "");
+
+/* ----- Token decode (optional distance precheck) ----- */
+function b64urlDecode(str) {
+  try {
+    const pad = (s) => s + "===".slice((s.length + 3) % 4);
+    return decodeURIComponent(
+      atob(pad(str).replace(/-/g, "+").replace(/_/g, "/"))
+        .split("")
+        .map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+        .join("")
+    );
+  } catch { return ""; }
+}
+function extractLatLngFromToken(token) {
+  if (!token || typeof token !== "string") return null;
+
+  // A) JWT-ish token: header.payload.sig (payload contains {lat,lng})
+  if (token.includes(".")) {
+    const parts = token.split(".");
+    if (parts[1]) {
+      try {
+        const payload = JSON.parse(b64urlDecode(parts[1]));
+        if (typeof payload.lat === "number" && typeof payload.lng === "number") {
+          return { lat: payload.lat, lng: payload.lng };
+        }
+      } catch {}
+    }
+  }
+  // B) URL or querystring style: "...?lat=...&lng=..."
+  try {
+    const qs = token.includes("?") ? token.split("?")[1] : token;
+    const sp = new URLSearchParams(qs);
+    const lat = Number(sp.get("lat"));
+    const lng = Number(sp.get("lng"));
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  } catch {}
+  // C) Last-two-floats pattern
+  const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
+  if (m) {
+    const lat = Number(m[1]), lng = Number(m[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
+  }
+  return null;
+}
+
+/* Grid styles */
+const gridRow = {
+  display: "grid",
+  gridTemplateColumns: "minmax(220px,1.3fr) 1fr 0.8fr 0.9fr 1.1fr",
+  alignItems: "center",
+  gap: 8,
+  padding: "10px 12px",
+};
+const headerRow = { ...gridRow, fontWeight: 700, borderBottom: "1px solid var(--border, #e5e7eb)", color: "#111827" };
+const bodyRow   = { ...gridRow, borderBottom: "1px solid var(--border, #f1f5f9)" };
+
+/* Robust virtual detector */
+function isVirtualJob(j) {
+  if (!j) return false;
+  if (j.isVirtual === true) return true;
+  if (j.scanRequired === false) return true;
+
+  const isVirtualStr = (v) => v && String(v).toLowerCase() === "virtual";
+  if (isVirtualStr(j.mode)) return true;
+  if (isVirtualStr(j.sessionMode)) return true;
+  if (isVirtualStr(j.type)) return true;
+  if (isVirtualStr(j.attendanceMode)) return true;
+  if (isVirtualStr(j.sessionKind)) return true;
+  if (isVirtualStr(j.session?.mode)) return true;
+  if (isVirtualStr(j.rate?.sessionKind)) return true;
+  if (isVirtualStr(j.physicalSubtype)) return true;
+  if (isVirtualStr(j.physicalType)) return true;
+  if (isVirtualStr(j.session?.physicalType)) return true;
+  return false;
+}
 
 export default function PMJobDetails({ jobId }) {
   const [job, setJob] = useState(null);
@@ -21,55 +110,117 @@ export default function PMJobDetails({ jobId }) {
   const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
   const [loading, setLoading] = useState(true);
 
-  // Scanner state (inline)
+  // Status override: null | 'upcoming' | 'ongoing' | 'ended'
+  const [statusForce, setStatusForce] = useState(null);
+  const effectiveStatus = (s) => (statusForce ?? s ?? "upcoming");
+
+  // Scanner state
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanDir, setScanDir] = useState("in");
   const [token, setToken] = useState("");
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
+  const [startBusy, setStartBusy] = useState(false);
   const scannerCardRef = useRef(null);
 
+  // Camera / QR
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const canvasCtxRef = useRef(null);
   const detRef = useRef(null);
   const rafRef = useRef(null);
   const streamRef = useRef(null);
   const [camActive, setCamActive] = useState(false);
   const [camSupported, setCamSupported] = useState(false);
   const [qrSupported, setQrSupported] = useState(false);
+  const usingJsQRRef = useRef(false);
 
+  // Geo (PM scanner location)
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
 
+  // Persist PM-clicked end time across reloads even if backend hasn't saved it yet
+  const endedAtRef = useRef(null);
+  const LOCAL_KEY = (id) => `atag.jobs.${id}.actualEndAt`;
+
   async function load() {
     setLoading(true);
+    const bust = `?_=${Date.now()}`;
     try {
-      const j = await apiGet(`/jobs/${jobId}`);
-      setJob(j);
-      const a = await apiGet(`/jobs/${jobId}/applicants`).catch(()=>[]);
-      setApplicants(a);
-      const l = await apiGet(`/jobs/${jobId}/loading`).catch(()=>({quota:0,applicants:[],participants:[]}));
-      setLU(l);
-    } finally { setLoading(false); }
-  }
-  useEffect(()=>{ load(); }, [jobId]);
+      const j = await apiGet(`/jobs/${jobId}${bust}`);
+      let merged = statusForce ? { ...j, status: statusForce } : j;
 
+      // Normalize server alt keys
+      const serverAltEnd =
+        merged.actualEndAt ||
+        merged.endedAt ||
+        merged.finishedAt ||
+        merged.closedAt ||
+        null;
+
+      // Read any locally cached end time
+      const cachedEnd = LOCAL_KEY(jobId) ? localStorage.getItem(LOCAL_KEY(jobId)) : null;
+
+      // If server doesn't send an end time yet but we've already ended locally, keep cached/ref
+      if ((statusForce === "ended" || merged.status === "ended")) {
+        if (!serverAltEnd) {
+          const actual = endedAtRef.current || cachedEnd;
+          if (actual) merged = { ...merged, actualEndAt: actual };
+        } else if (!merged.actualEndAt) {
+          merged = { ...merged, actualEndAt: serverAltEnd };
+        }
+      }
+
+      setJob(merged);
+
+      const a = await apiGet(`/jobs/${jobId}/applicants${bust}`).catch(() => []);
+      setApplicants(a);
+
+      const l = await apiGet(`/jobs/${jobId}/loading${bust}`).catch(() => ({ quota: 0, applicants: [], participants: [] }));
+      setLU(l);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [jobId]);
+
+  const isVirtual = useMemo(() => isVirtualJob(job), [job]);
+
+  /* feature detect & jsQR fallback */
   useEffect(() => {
     setCamSupported(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
     (async () => {
-      if (!("BarcodeDetector" in window)) { setQrSupported(false); return; }
+      if ("BarcodeDetector" in window) {
+        try {
+          const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
+          if (fmts.includes("qr_code")) { setQrSupported(true); return; }
+        } catch {}
+      }
       try {
-        const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
-        setQrSupported(fmts.includes("qr_code"));
-      } catch { setQrSupported(true); }
+        await loadJsQR();
+        usingJsQRRef.current = true;
+        setQrSupported(true);
+      } catch { setQrSupported(false); }
     })();
   }, []);
+  function loadJsQR() {
+    return new Promise((resolve, reject) => {
+      if (window.jsQR) return resolve();
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+      s.async = true;
+      s.onload = () => (window.jsQR ? resolve() : reject(new Error("jsQR not available")));
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
 
-  const statusPill = useMemo(() => {
-    const s = job?.status || "upcoming";
+  const pill = useMemo(() => {
+    const s = effectiveStatus(job?.status);
     const bg = s === "ongoing" ? "#d1fae5" : s === "ended" ? "#fee2e2" : "#e5e7eb";
     const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#374151";
-    return <span className="status" style={{ background:bg, color:fg }}>{s}</span>;
+    return <span className="status" style={{ background: bg, color: fg }}>{s}</span>;
   }, [job]);
 
   async function setApproval(userId, approve) {
@@ -77,35 +228,115 @@ export default function PMJobDetails({ jobId }) {
     await load();
   }
 
+  /* ----------------- Start / End / Reset ----------------- */
   async function startAndOpen() {
-    try { await apiPost(`/jobs/${jobId}/start`, {}); } catch {}
-    await load();
-    openScanner();
-  }
-  async function endEvent() { await apiPost(`/jobs/${jobId}/end`, {}); await load(); }
-  async function resetEvent(keepAttendance) { await apiPost(`/jobs/${jobId}/reset`, { keepAttendance }); await load(); }
+    if (!job) return;
+    if (effectiveStatus(job.status) !== "upcoming") return;
+    setStartBusy(true);
+    try {
+      // optimistic UI
+      setStatusForce("ongoing");
+      setJob((prev) => (prev ? { ...prev, status: "ongoing" } : prev));
+      await apiPost(`/jobs/${jobId}/start`, {});
 
+      // Only open scanner for physical jobs
+      if (!isVirtual) {
+        openScanner();
+      } else {
+        setScannerOpen(false);
+        stopCamera();
+        stopHeartbeat();
+      }
+      setTimeout(load, 200);
+    } catch {
+      await load();
+    } finally {
+      setStartBusy(false);
+    }
+  }
+
+  async function endEvent() {
+    try {
+      const actualEndAt = new Date().toISOString();
+
+      // Optimistic update FIRST: set ref and local state so OT shows immediately
+      endedAtRef.current = actualEndAt;
+      try { localStorage.setItem(LOCAL_KEY(jobId), actualEndAt); } catch {}
+      setStatusForce("ended");
+      setJob((prev) => (prev ? { ...prev, status: "ended", actualEndAt } : prev));
+
+      await apiPost(`/jobs/${jobId}/end`, { actualEndAt });
+
+      // Virtual: best effort finalize outAt for those marked present
+      if (isVirtual && job) {
+        const attendance = job.attendance || {};
+        const presentIds = Object.keys(attendance).filter((uid) => !!attendance[uid]?.in);
+        await Promise.all(
+          presentIds.map((uid) =>
+            apiPost(`/jobs/${jobId}/attendance/mark`, { userId: uid, outAt: actualEndAt }).catch(() => {})
+          )
+        );
+      }
+
+      setScannerOpen(false);
+      stopCamera();
+      stopHeartbeat();
+
+      setTimeout(load, 200);
+    } catch {
+      // Even if network fails, keep local end displayed via endedAtRef
+      await load();
+    }
+  }
+
+  async function resetEvent(keepAttendance) {
+    try {
+      await apiPost(`/jobs/${jobId}/reset`, { keepAttendance });
+      endedAtRef.current = null;
+      try { localStorage.removeItem(LOCAL_KEY(jobId)); } catch {}
+      setStatusForce("upcoming");
+      setJob((prev) => (prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev));
+      setScannerOpen(false);
+      stopCamera();
+      stopHeartbeat();
+      setTimeout(load, 300);
+    } catch (e) {
+      await load();
+      alert("Reset failed: " + e);
+    }
+  }
+
+  /* ----------------- Scanner open/close ----------------- */
   function openScanner() {
     setScanMsg(""); setToken(""); setScanDir("in"); setScannerOpen(true);
-    setTimeout(()=>{ scannerCardRef.current?.scrollIntoView({ behavior:"smooth", block:"start" }); }, 60);
+    setTimeout(() => { scannerCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, 60);
   }
   function closeScanner() {
     setScannerOpen(false);
     stopCamera(); stopHeartbeat();
   }
 
+  /* Auto-close scanner if job becomes virtual or ends */
+  useEffect(() => {
+    if ((isVirtual || effectiveStatus(job?.status) === "ended") && scannerOpen) {
+      closeScanner();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isVirtual, job?.status, scannerOpen]);
+
+  /* ------- heartbeat geolocation while scanner is open ------- */
   useEffect(() => {
     if (!scannerOpen) return;
     if ("geolocation" in navigator) {
       watchIdRef.current = navigator.geolocation.watchPosition(
-        (pos)=>setLoc({ lat:pos.coords.latitude, lng:pos.coords.longitude }),
-        ()=>{},
-        { enableHighAccuracy:true, maximumAge:2000, timeout:10000 }
+        (pos) => setLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
       );
     }
     hbTimerRef.current = setInterval(() => {
-      if (loc) apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(()=>{});
-    }, 15000);
+      if (loc) apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(() => {});
+    }, 10000);
     return () => { stopHeartbeat(); };
     // eslint-disable-next-line
   }, [scannerOpen, jobId, loc?.lat, loc?.lng]);
@@ -118,39 +349,94 @@ export default function PMJobDetails({ jobId }) {
     if (hbTimerRef.current) { clearInterval(hbTimerRef.current); hbTimerRef.current = null; }
   }
 
+  /* ------- Camera + QR decoding ------- */
   async function startCamera() {
+    if (isVirtual) { setScanMsg("Virtual job — scanner disabled."); return; }
     if (!camSupported) { setScanMsg("Camera not available on this device."); return; }
     try {
-      if (qrSupported && "BarcodeDetector" in window) detRef.current = new window.BarcodeDetector({ formats:["qr_code"] });
-      const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:"environment" }, audio:false });
+      if (!("BarcodeDetector" in window)) {
+        await loadJsQR();
+        usingJsQRRef.current = true;
+      } else {
+        try {
+          detRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
+          usingJsQRRef.current = false;
+        } catch {
+          await loadJsQR();
+          usingJsQRRef.current = true;
+        }
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false
+      });
       streamRef.current = stream;
-      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      if (usingJsQRRef.current && videoRef.current) {
+        const cv = canvasRef.current;
+        const vw = videoRef.current.videoWidth || 640;
+        const vh = videoRef.current.videoHeight || 480;
+        cv.width = vw; cv.height = vh;
+        canvasCtxRef.current = cv.getContext("2d", { willReadFrequently: true });
+      }
+
       setCamActive(true);
-      if (detRef.current) loopDetect(); else setScanMsg("Camera opened (preview only). Paste the token below.");
-    } catch { setScanMsg("Could not open camera. Paste the token instead."); }
+      setScanMsg("Camera ready — scanning…");
+      loopDetect();
+    } catch {
+      setScanMsg("Could not open camera. Please allow permission or paste the token.");
+    }
   }
+
   function stopCamera() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
     if (videoRef.current?.srcObject) {
-      try { videoRef.current.srcObject.getTracks().forEach((t)=>t.stop()); } catch {}
+      try { videoRef.current.srcObject.getTracks().forEach((t) => t.stop()); } catch {}
       videoRef.current.srcObject = null;
     }
     if (streamRef.current) {
-      try { streamRef.current.getTracks().forEach((t)=>t.stop()); } catch {}
+      try { streamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
       streamRef.current = null;
     }
+    detRef.current = null;
     setCamActive(false);
   }
+
+  useEffect(() => () => stopCamera(), []);
+
   async function loopDetect() {
-    if (!detRef.current || !videoRef.current) return;
+    if (!videoRef.current) return;
     try {
-      const codes = await detRef.current.detect(videoRef.current);
-      if (codes && codes[0]?.rawValue) setToken(codes[0].rawValue);
+      if (!camActive) return;
+
+      if (!usingJsQRRef.current && detRef.current) {
+        const codes = await detRef.current.detect(videoRef.current);
+        if (codes && codes[0]?.rawValue) {
+          setToken(codes[0].rawValue);
+          setScanMsg("QR detected — ready to Scan.");
+        }
+      } else if (usingJsQRRef.current && window.jsQR && canvasCtxRef.current) {
+        const v = videoRef.current;
+        const w = v.videoWidth, h = v.videoHeight;
+        if (w && h) {
+          canvasCtxRef.current.drawImage(v, 0, 0, w, h);
+          const img = canvasCtxRef.current.getImageData(0, 0, w, h);
+          const result = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+          if (result && result.data) {
+            setToken(result.data);
+            setScanMsg("QR detected — ready to Scan.");
+          }
+        }
+      }
     } catch {}
     rafRef.current = requestAnimationFrame(loopDetect);
   }
-  useEffect(()=>()=>stopCamera(), []);
 
   async function pasteFromClipboard() {
     try { const t = await navigator.clipboard.readText(); if (t) setToken(t.trim()); } catch {}
@@ -159,10 +445,37 @@ export default function PMJobDetails({ jobId }) {
   async function doScan() {
     if (!token) { setScanMsg("No token. Paste the QR token or use the camera."); return; }
     if (!loc) { setScanMsg("Getting your location… allow location and try again."); return; }
-    setScanBusy(true); setScanMsg("");
+
+    // Client-side distance precheck (optional)
+    const applicantLL = extractLatLngFromToken(token);
+    let precheckMsg = "";
+    let tooFarClient = false;
+    const maxM = Number(job?.scanMaxMeters) || 120; // UI default (server enforces its own limit)
+    if (applicantLL) {
+      const d = haversineMeters(loc, applicantLL);
+      if (d != null) {
+        precheckMsg = `Distance to applicant ≈ ${d} m. `;
+        if (d > maxM) {
+          tooFarClient = true;
+          precheckMsg += `(> ${maxM} m)`;
+        }
+      }
+    }
+
+    if (tooFarClient) {
+      setScanMsg("❌ Too far based on local check. " + precheckMsg);
+      return;
+    }
+
+    setScanBusy(true); setScanMsg(precheckMsg || "");
     try {
-      const r = await apiPost("/scan", { token, scannerLat: loc.lat, scannerLng: loc.lng });
-      setScanMsg(`✅ ${scanDir.toUpperCase()} recorded at ${dayjs(r.time).format("HH:mm:ss")}`);
+      const r = await apiPost("/scan", {
+        token,
+        direction: scanDir,               // server ignores this; token carries dir
+        scannerLat: loc.lat,
+        scannerLng: loc.lng,
+      });
+      setScanMsg(`${precheckMsg}✅ ${scanDir.toUpperCase()} recorded at ${dayjs(r.time).format("HH:mm:ss")}`);
       setToken(""); await load();
     } catch (e) {
       let msg = "Scan failed.";
@@ -173,44 +486,128 @@ export default function PMJobDetails({ jobId }) {
         else if (j.error === "event_not_started") msg = "Event not started.";
         else if (j.error) msg = j.error;
       } catch {}
-      setScanMsg("❌ " + msg);
+      setScanMsg((precheckMsg ? precheckMsg + " " : "") + "❌ " + msg);
     } finally { setScanBusy(false); }
   }
 
   async function toggleLU(userId, present) {
     await apiPost(`/jobs/${jobId}/loading/mark`, { userId, present });
-    const l = await apiGet(`/jobs/${jobId}/loading`);
+    const l = await apiGet(`/jobs/${jobId}/loading?_=${Date.now()}`);
     setLU(l);
   }
+
+  /* ---------------- Virtual Attendance (no scan) ----------------
+     NOTE: requires backend endpoint:
+       POST /jobs/:id/attendance/mark
+       { userId, inAt?: ISO, outAt?: ISO, clear?: boolean }
+  ---------------------------------------------------------------- */
+  async function markVirtualPresent(userId, present) {
+    if (!job) return;
+    try {
+      if (present) {
+        await apiPost(`/jobs/${jobId}/attendance/mark`, {
+          userId,
+          inAt: job.startTime,
+          outAt: job.endTime,
+        });
+      } else {
+        await apiPost(`/jobs/${jobId}/attendance/mark`, { userId, clear: true });
+      }
+      await load();
+    } catch (err) {
+      alert("Mark virtual attendance failed. Make sure the server has /jobs/:id/attendance/mark implemented.");
+    }
+  }
+
+  /* ------- End click time + OT whole hours (30-min rounding rule) ------- */
+  const scheduledEndDJ = useMemo(
+    () => (job?.endTime ? dayjs(job.endTime) : null),
+    [job?.endTime]
+  );
+
+  // compute without relying solely on memo deps; read ref directly
+  const actualEndIso =
+    job?.actualEndAt ||
+    job?.endedAt ||
+    job?.finishedAt ||
+    job?.closedAt ||
+    endedAtRef.current ||
+    null;
+  const actualEndDJ = actualEndIso ? dayjs(actualEndIso) : null;
+
+  // New OT rule: whole hours only, >30 min round up, ≤30 min round down
+  const otRoundedHours = useMemo(() => {
+    if (!scheduledEndDJ || !actualEndDJ) return 0;
+    const minutes = actualEndDJ.diff(scheduledEndDJ, "minute"); // signed minutes
+    if (minutes <= 0) return 0;
+    const baseHours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return baseHours + (remainder > 30 ? 1 : 0);
+  }, [scheduledEndDJ, actualEndDJ]);
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
   const approvedRows = (job.approved || []).map((uid) => {
     const app = (job.applications || []).find((a) => a.userId === uid);
     const rec = (job.attendance || {})[uid] || {};
-    return { email: app?.email || uid, in: rec.in, out: rec.out, late: rec.lateMinutes ?? "" };
+    return { userId: uid, email: app?.email || uid, in: rec.in, out: rec.out, late: rec.lateMinutes ?? "" };
   });
+
+  const statusEff = effectiveStatus(job.status);
+  const canStart = statusEff === "upcoming";
+  const isOngoing = statusEff === "ongoing";
+  const isEnded = statusEff === "ended";
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div className="card">
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div>
-            <div style={{ fontSize:22, fontWeight:800 }}>{job.title}</div>
-            <div style={{ color:"#374151", marginTop:6 }}>{job.description || ""}</div>
-            <div style={{ marginTop:10, display:"flex", gap:16, flexWrap:"wrap", color:"#374151" }}>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{job.title}</div>
+            <div style={{ color: "#374151", marginTop: 6 }}>{job.description || ""}</div>
+
+            <div style={{ marginTop: 10, display: "flex", gap: 16, flexWrap: "wrap", color: "#374151" }}>
               <div><strong>{job.venue}</strong></div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
               <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
+              {isVirtual && <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>}
+            </div>
+
+            {/* End-time + OT display (new rule) */}
+            <div className="card" style={{ marginTop: 10, padding: 10, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <div><b>Set End Time:</b><br />{fmtDateTime(job.endTime) || "-"}</div>
+                <div><b>PM Ended At:</b><br />{actualEndDJ ? fmtDateTime(actualEndDJ.toISOString()) : "— (not ended)"}</div>
+                <div>
+                  <b>OT (rounded hours):</b><br />
+                  {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+                OT rule: whole hours only — ≤30 min rounds down, &gt;30 min rounds up.
+              </div>
             </div>
           </div>
-          <div>{statusPill}</div>
+          <div>{pill}</div>
         </div>
 
-        <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginTop:14 }}>
-          <button className="btn red" onClick={startAndOpen}>Start event & open scanner</button>
-          {!scannerOpen ? null : <button className="btn gray" onClick={closeScanner}>Hide scanner</button>}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+          {canStart ? (
+            <button className="btn red" onClick={startAndOpen} disabled={startBusy}>
+              {startBusy ? "Starting…" : (isVirtual ? "Start event" : "Start event & open scanner")}
+            </button>
+          ) : isOngoing ? (
+            <button className="btn gray" disabled>Started</button>
+          ) : (
+            <button className="btn gray" disabled>Ended</button>
+          )}
+
+          {isOngoing && !isVirtual && !scannerOpen && (
+            <button className="btn" onClick={openScanner}>Open scanner</button>
+          )}
+          {!isVirtual && scannerOpen && <button className="btn gray" onClick={closeScanner}>Hide scanner</button>}
+
           <button className="btn" onClick={() => resetEvent(true)}>Reset (keep attendance)</button>
           <button className="btn danger" onClick={() => resetEvent(false)}>Reset (delete attendance)</button>
           <button className="btn" onClick={endEvent}>End event</button>
@@ -219,83 +616,143 @@ export default function PMJobDetails({ jobId }) {
 
       {/* Applicants */}
       <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight:800, marginBottom:8 }}>Applicants</div>
-        <div className="table">
-          <div className="thead">
-            <div>Email</div><div>Transport</div><div>Status</div><div>L&U</div><div>Actions</div>
-          </div>
-          {applicants.length === 0 ? (
-            <div className="trow"><div style={{ gridColumn:"1 / -1", color:"#6b7280" }}>No applicants yet.</div></div>
-          ) : applicants.map(a=>(
-            <div className="trow" key={a.userId}>
-              <div>{a.email}</div>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Applicants</div>
+
+        <div style={headerRow}>
+          <div>Email</div>
+          <div>Transport</div>
+          <div>Status</div>
+          <div>L&amp;U</div>
+          <div>Actions</div>
+        </div>
+
+        {applicants.length === 0 ? (
+          <div style={{ padding: 12, color: "#6b7280" }}>No applicants yet.</div>
+        ) : (
+          applicants.map((a) => (
+            <div key={a.userId} style={bodyRow}>
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
               <div>{a.transport || "-"}</div>
-              <div>{a.status}</div>
+              <div style={{ textTransform: "capitalize" }}>{a.status}</div>
               <div>
                 {a.luApplied ? (
-                  <label style={{ display:"inline-flex", gap:6, alignItems:"center" }}>
+                  <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                     <input
                       type="checkbox"
                       checked={a.luConfirmed}
-                      onChange={(e)=>toggleLU(a.userId, e.target.checked)}
-                    /> Confirmed
+                      onChange={(e) => toggleLU(a.userId, e.target.checked)}
+                    />
+                    <span>Confirmed</span>
                   </label>
                 ) : "—"}
               </div>
-              <div style={{ display:"flex", gap:6 }}>
-                <button className="btn green" onClick={()=>setApproval(a.userId,true)}>Approve</button>
-                <button className="btn danger" onClick={()=>setApproval(a.userId,false)}>Reject</button>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button className="btn green" onClick={() => setApproval(a.userId, true)}>Approve</button>
+                <button className="btn danger" onClick={() => setApproval(a.userId, false)}>Reject</button>
               </div>
             </div>
-          ))}
-        </div>
+          ))
+        )}
       </div>
 
       {/* Attendance */}
-      <div className="card" style={{ marginTop:14 }}>
-        <div style={{ fontWeight:800, marginBottom:8 }}>Approved List & Attendance</div>
-        <table className="table">
-          <thead><tr><th>Email</th><th style={{ width:120 }}>In</th><th style={{ width:120 }}>Out</th><th style={{ width:120 }}>Late (min)</th></tr></thead>
-        </table>
-        <div style={{ maxHeight:340, overflow:"auto", border:"1px solid var(--border)", borderTop:0, borderRadius:"0 0 8px 8px" }}>
-          <table className="table" style={{ border:"none", margin:0 }}>
-            <tbody>
-              {approvedRows.length === 0 ? (
-                <tr><td colSpan={4} style={{ color:"#6b7280" }}>No approved users yet.</td></tr>
-              ) : approvedRows.map((r)=>(
-                <tr key={r.email}>
-                  <td>{r.email}</td>
-                  <td>{fmtTime(r.in)}</td>
-                  <td>{fmtTime(r.out)}</td>
-                  <td>{r.late === "" ? "" : r.late}</td>
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
+
+        {/* Virtual mode controls (no In/Out/OT; OT comes from End event time) */}
+        {isVirtual && (
+          <div className="card" style={{ padding: 12, marginBottom: 8, border: "1px dashed #e5e7eb" }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Virtual attendance</div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 6 }}>
+              Tick <b>Present</b> to include a person for base hours. Overtime is computed automatically
+              when you click <b>End event</b> using: <i>actual end time − scheduled end time</i> (rounded by 30-min rule).
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table width="100%" cellPadding="8" style={{ borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid #ddd" }}>
+                    <th align="left">Email</th>
+                    <th align="center">Present</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(job.approved || []).length === 0 ? (
+                    <tr><td colSpan={2} style={{ color: "#6b7280" }}>No approved users yet.</td></tr>
+                  ) : (job.approved || []).map((uid) => {
+                      const app = (job.applications || []).find((a) => a.userId === uid);
+                      const rec = (job.attendance || {})[uid] || {};
+                      const present = !!rec.in && !!rec.out;
+                      return (
+                        <tr key={uid} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                          <td>{app?.email || uid}</td>
+                          <td align="center">
+                            <input
+                              type="checkbox"
+                              checked={present}
+                              onChange={(e) => markVirtualPresent(uid, e.target.checked)}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Physical compact shared view */}
+        {!isVirtual && (
+          <>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th style={{ width: 120 }}>In</th>
+                  <th style={{ width: 120 }}>Out</th>
+                  <th style={{ width: 120 }}>Late (min)</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+            </table>
+            <div style={{ maxHeight: 340, overflow: "auto", border: "1px solid var(--border)", borderTop: 0, borderRadius: "0 0 8px 8px" }}>
+              <table className="table" style={{ border: "none", margin: 0 }}>
+                <tbody>
+                  {approvedRows.length === 0 ? (
+                    <tr><td colSpan={4} style={{ color: "#6b7280" }}>No approved users yet.</td></tr>
+                  ) : approvedRows.map((r) => (
+                    <tr key={r.email}>
+                      <td>{r.email}</td>
+                      <td>{fmtTime(r.in)}</td>
+                      <td>{fmtTime(r.out)}</td>
+                      <td>{r.late === "" ? "" : r.late}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Inline scanner */}
-      {scannerOpen && (
-        <div ref={scannerCardRef} className="card" style={{ marginTop:14 }}>
-          <div style={{ fontWeight:800, marginBottom:10 }}>Scanner — {job.title}</div>
-          <div className="card" style={{ marginBottom:12 }}>
-            <div style={{ display:"flex", gap:12, alignItems:"center" }}>
-              <label style={{ fontWeight:700 }}>Direction</label>
-              <label><input type="radio" name="dir" checked={scanDir==="in"} onChange={()=>setScanDir("in")} /> In</label>
-              <label><input type="radio" name="dir" checked={scanDir==="out"} onChange={()=>setScanDir("out")} /> Out</label>
+      {/* Inline scanner (physical only) */}
+      {!isVirtual && scannerOpen && (
+        <div ref={scannerCardRef} className="card" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 800, marginBottom: 10 }}>Scanner — {job.title}</div>
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <label style={{ fontWeight: 700 }}>Direction</label>
+              <label><input type="radio" name="dir" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> In</label>
+              <label><input type="radio" name="dir" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> Out</label>
             </div>
           </div>
 
           <div className="grid">
-            <div className="card" style={{ gridColumn:"span 8" }}>
-              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6 }}>
-                <label style={{ fontWeight:700 }}>
-                  Camera {qrSupported ? "(auto-scan)" : "(preview only)"}
-                </label>
+            <div className="card" style={{ gridColumn: "span 8" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <label style={{ fontWeight: 700 }}>Camera (auto-scan)</label>
                 {!camActive ? (
-                  <button className="btn" onClick={startCamera} disabled={!camSupported}>
-                    {camSupported ? (qrSupported ? "Use camera (auto-scan)" : "Open camera (preview)") : "Camera not available"}
+                  <button className="btn" onClick={startCamera} disabled={!camSupported || !qrSupported}>
+                    {camSupported ? (qrSupported ? "Use camera (auto-scan)" : "QR not supported") : "Camera not available"}
                   </button>
                 ) : (
                   <button className="btn gray" onClick={stopCamera}>Stop camera</button>
@@ -305,31 +762,54 @@ export default function PMJobDetails({ jobId }) {
                 ref={videoRef}
                 muted
                 playsInline
-                style={{ width:"100%", maxHeight:360, background:"#000", borderRadius:8, display:camActive ? "block" : "none" }}
+                autoPlay
+                style={{ width: "100%", maxHeight: 360, background: "#000", borderRadius: 8, display: camActive ? "block" : "none" }}
               />
+              <canvas ref={canvasRef} style={{ display: "none" }} />
               {!camActive && (
-                <div style={{ padding:8, color:"#6b7280" }}>
-                  Tip: if your browser can’t decode QR, open the camera for preview and <b>paste</b> the token below.
+                <div style={{ padding: 8, color: "#6b7280" }}>
+                  Tip: you can also <b>paste</b> the token below if camera access is blocked.
                 </div>
               )}
             </div>
 
-            <div className="card" style={{ gridColumn:"span 4" }}>
-              <label style={{ fontWeight:700 }}>Token (from QR)</label>
-              <div style={{ display:"flex", gap:8 }}>
-                <input value={token} onChange={(e)=>setToken(e.target.value)} placeholder="Paste decoded QR token here…" />
+            <div className="card" style={{ gridColumn: "span 4" }}>
+              <label style={{ fontWeight: 700 }}>Token (from QR)</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste decoded QR token here…" />
                 <button className="btn" type="button" onClick={pasteFromClipboard}>Paste</button>
               </div>
-              <div style={{ color:"#6b7280", fontSize:13, marginTop:10 }}>
+              <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10 }}>
                 {loc ? <>Scanner location: {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)} (heartbeat active)</>
                      : <>Waiting for location… allow permission.</>}
               </div>
-              {scanMsg && <div style={{ marginTop:10, padding:8, background:"#f8fafc", border:"1px solid var(--border)", borderRadius:8 }}>{scanMsg}</div>}
-              <div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:12 }}>
+
+              {token && loc && (() => {
+                const ll = extractLatLngFromToken(token);
+                if (!ll) return null;
+                const d = haversineMeters(loc, ll);
+                if (d == null) return null;
+                const maxM = Number(job?.scanMaxMeters) || 120;
+                return (
+                  <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: d > maxM ? "#fff1f2" : "#f0fdf4", border: "1px solid var(--border)" }}>
+                    Distance to applicant (precheck): <b>{d} m</b> {d > maxM ? ` (> ${maxM} m)` : "(OK)"}
+                  </div>
+                );
+              })()}
+
+              {scanMsg && <div style={{ marginTop: 10, padding: 8, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 8 }}>{scanMsg}</div>}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
                 <button className="btn" onClick={closeScanner}>Hide</button>
-                <button className="btn primary" disabled={scanBusy} onClick={doScan}>
+                <button className="btn primary" disabled={scanBusy || !token} onClick={doScan}>
                   {scanBusy ? "Scanning…" : "Scan"}
                 </button>
+              </div>
+
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+                <ul style={{ margin: 0, paddingLeft: 16 }}>
+                  <li>IN marks attendance start. OUT marks end; OT uses whole hours with a 30-min rounding rule.</li>
+                  <li>Distance guard is enforced on device and server. Default limit {Number(job?.scanMaxMeters) || 120} m.</li>
+                </ul>
               </div>
             </div>
           </div>

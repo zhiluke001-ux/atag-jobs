@@ -7,29 +7,28 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
-    allowedHosts: true, // allow all (useful with changing ngrok subdomains)
+    allowedHosts: true, // ok for ngrok
     proxy: {
-      // 1) Support existing calls that start with /api
+      // If any call starts with /api, strip it and forward to Node
       "/api": {
         target: "http://localhost:4000",
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
       },
 
-      // 2) ALSO proxy the real endpoints you call without /api
-      "/login":  { target: "http://localhost:4000", changeOrigin: true },
-      "/me":     { target: "http://localhost:4000", changeOrigin: true },
-      "/jobs":   { target: "http://localhost:4000", changeOrigin: true },
-      "/scan":   { target: "http://localhost:4000", changeOrigin: true },
-      "/admin":  { target: "http://localhost:4000", changeOrigin: true },
-      "/__reset":{ target: "http://localhost:4000", changeOrigin: true },
+      // Direct endpoints (prefix match)
+      "/login":          { target: "http://localhost:4000", changeOrigin: true },
+      "/register":       { target: "http://localhost:4000", changeOrigin: true },
+      "/forgot-password":{ target: "http://localhost:4000", changeOrigin: true },
+      "/reset-password": { target: "http://localhost:4000", changeOrigin: true },
+      "/me":             { target: "http://localhost:4000", changeOrigin: true },
+      "/jobs":           { target: "http://localhost:4000", changeOrigin: true },
+      "/scan":           { target: "http://localhost:4000", changeOrigin: true },
+      "/admin":          { target: "http://localhost:4000", changeOrigin: true },
+      "/config":         { target: "http://localhost:4000", changeOrigin: true }, // /config/rates
+      "/__reset":        { target: "http://localhost:4000", changeOrigin: true },
+      "/__routes":       { target: "http://localhost:4000", changeOrigin: true },
+      "/health":         { target: "http://localhost:4000", changeOrigin: true },
     },
-
-    // If you ever need HMR through ngrok, uncomment and set your host:
-    // hmr: {
-    //   host: 'YOUR-NGROK-SUBDOMAIN.ngrok-free.dev',
-    //   protocol: 'wss',
-    //   clientPort: 443,
-    // },
   },
 });

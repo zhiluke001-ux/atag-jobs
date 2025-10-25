@@ -20,7 +20,11 @@ function ApplyModal({ open, job, onClose, onSubmit }) {
 
   // Loading & Unloading opt-in (shown only if quota > 0)
   const luQuota = Number(job.loadingUnload?.quota || 0);
-  const luApplicants = Number(job.loadingUnload?.applicants || 0);
+  const luApplicants = Number(
+    Array.isArray(job.loadingUnload?.applicants)
+      ? job.loadingUnload.applicants.length
+      : job.loadingUnload?.applicants || 0
+  );
   const luRemaining = luQuota > 0 ? Math.max(0, luQuota - luApplicants) : 0;
   const [wantsLU, setWantsLU] = useState(false);
 
@@ -33,7 +37,7 @@ function ApplyModal({ open, job, onClose, onSubmit }) {
     setWantsLU(false);
   }, [job?.id]);
 
-  const ui = (
+  return createPortal(
     <>
       <div className="modal-backdrop" onClick={onClose} />
       <div className="modal" role="dialog" aria-modal="true">
@@ -78,7 +82,11 @@ function ApplyModal({ open, job, onClose, onSubmit }) {
               <div className="card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
-                    <input type="checkbox" checked={wantsLU} onChange={(e) => setWantsLU(e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={wantsLU}
+                      onChange={(e) => setWantsLU(e.target.checked)}
+                    />
                     I can help with <strong>Loading &amp; Unloading</strong>
                   </label>
                   <div style={{ fontSize: 12, color: "#667085" }}>
@@ -104,10 +112,9 @@ function ApplyModal({ open, job, onClose, onSubmit }) {
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body
   );
-
-  return createPortal(ui, document.body);
 }
 
 /* ------------------------------
@@ -138,7 +145,24 @@ export default function Home({ navigate, user }) {
     setLoading(true);
     try {
       const list = await apiGet("/jobs");
-      setJobs(list);
+      // HYDRATE each list item with full details so pay display is consistent with JobDetails
+      const full = await Promise.all(
+        (list || []).map(async (j) => {
+          try {
+            const fj = await apiGet(`/jobs/${j.id}`);
+            // keep headcount/counters from list if present
+            return {
+              ...j,
+              ...fj,
+              appliedCount: j.appliedCount ?? fj.appliedCount,
+              approvedCount: j.approvedCount ?? fj.approvedCount,
+            };
+          } catch {
+            return j;
+          }
+        })
+      );
+      setJobs(full || []);
     } finally {
       setLoading(false);
     }
@@ -151,7 +175,7 @@ export default function Home({ navigate, user }) {
       apiGet("/me/jobs")
         .then((list) => {
           const map = {};
-          for (const j of list) map[j.id] = j.myStatus;
+          for (const j of list || []) map[j.id] = j.myStatus;
           setMyStatuses(map);
         })
         .catch(() => setMyStatuses({}));
@@ -160,7 +184,9 @@ export default function Home({ navigate, user }) {
     }
   }, [user]);
 
-  function onView(j) { navigate(`#/jobs/${j.id}`); }
+  function onView(j) {
+    navigate(`#/jobs/${j.id}`);
+  }
 
   // ---- Apply flow
   function onApply(job) {
@@ -169,17 +195,18 @@ export default function Home({ navigate, user }) {
     setApplyJob(job);
     setApplyOpen(true);
   }
+
   async function handleSubmitApply(transport, wantsLU) {
     try {
       await apiPost(`/jobs/${applyJob.id}/apply`, { transport, wantsLU });
       const list = await apiGet("/me/jobs");
       const map = {};
-      for (const it of list) map[it.id] = it.myStatus;
+      for (const it of list || []) map[it.id] = it.myStatus;
       setMyStatuses(map);
       setApplyOpen(false);
       setApplyJob(null);
       window.alert("Applied!");
-      load(); // refresh counters
+      load(); // refresh counters (L&U remaining etc.)
     } catch (e) {
       try {
         const j = JSON.parse(String(e));
@@ -190,10 +217,10 @@ export default function Home({ navigate, user }) {
     }
   }
 
-  // ---- Edit/Delete (Edit opens SAME modal, prefilled, with Save)
+  // ---- Edit/Delete
   async function handleEdit(job) {
     try {
-      const full = await apiGet(`/jobs/${job.id}`); // ensure full fields
+      const full = await apiGet(`/jobs/${job.id}`); // ensure full fields (rolePlan, tierRates, etc.)
       setEditJob(full);
     } catch (e) {
       alert("Failed to load job: " + e);
@@ -235,6 +262,8 @@ export default function Home({ navigate, user }) {
         onApplyAgain={onApply}
         onEdit={handleEdit}
         onDelete={handleDelete}
+        showFullDetails
+        viewerUser={user}   // role-based display
       />
 
       {/* Create Job Modal */}
@@ -249,7 +278,7 @@ export default function Home({ navigate, user }) {
         />
       )}
 
-      {/* Edit Job Modal (same component, prefilled, action = Save) */}
+      {/* Edit Job Modal */}
       {canManage && editJob && (
         <JobModal
           open={!!editJob}
@@ -267,7 +296,10 @@ export default function Home({ navigate, user }) {
         <ApplyModal
           open={applyOpen}
           job={applyJob}
-          onClose={() => { setApplyOpen(false); setApplyJob(null); }}
+          onClose={() => {
+            setApplyOpen(false);
+            setApplyJob(null);
+          }}
           onSubmit={handleSubmitApply}
         />
       )}

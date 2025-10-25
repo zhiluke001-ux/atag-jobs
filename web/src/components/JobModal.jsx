@@ -1,164 +1,647 @@
 // web/src/components/JobModal.jsx
-import React, { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { useRef, useState, memo } from "react";
+import dayjs from "dayjs";
 import { apiPost, apiPatch } from "../api";
 
+/* ---------- helpers ---------- */
+const N = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const GLOBAL_KEY = "atag.globalWageDefaults.v2";
+
+function loadGlobalDefaults() {
+  try {
+    const raw = localStorage.getItem(GLOBAL_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function combineLocal(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return null;
+  const isoLocal = `${dateStr}T${timeStr}`;
+  const d = dayjs(isoLocal);
+  return d.isValid() ? d.toISOString() : null;
+}
+
+const DEFAULT_END_BY_TYPE = {
+  virtual: (startDate) => startDate,
+  half_day: (startDate) => startDate,
+  full_day: (startDate) => startDate,
+  "2d1n": (startDate) => dayjs(startDate).add(1, "day").format("YYYY-MM-DD"),
+  "3d2n": (startDate) => dayjs(startDate).add(2, "day").format("YYYY-MM-DD"),
+  hourly_by_role: (startDate) => startDate,
+  hourly_flat: (startDate) => startDate,
+};
+
+/* =========================================================
+   Hoisted, stable subcomponents (prevents remount/focus loss)
+   ========================================================= */
+
+const DatesBlock = memo(function DatesBlock({
+  sessionMode,
+  physicalType,
+  dateStart,
+  dateEnd,
+  timeStart,
+  timeEnd,
+  dateStartRef,
+  dateEndRef,
+  timeStartRef,
+  timeEndRef,
+}) {
+  const kind = sessionMode === "virtual" ? "virtual" : physicalType;
+  const singleDate = ["virtual", "half_day", "full_day", "hourly_by_role", "hourly_flat"].includes(kind);
+
+  return (
+    <div className="card" style={{ padding: 12 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Date & Time</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: singleDate ? "1fr" : "1fr 1fr", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+            {singleDate ? "Date" : "Start Date"}
+          </div>
+          <input ref={dateStartRef} type="date" defaultValue={dateStart} />
+        </div>
+
+        {!singleDate && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>End Date</div>
+            <input ref={dateEndRef} type="date" defaultValue={dateEnd} />
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Start Time</div>
+          <input ref={timeStartRef} type="time" defaultValue={timeStart} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>End Time</div>
+          <input ref={timeEndRef} type="time" defaultValue={timeEnd} />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+        OT is counted for every full hour after the scheduled <b>End Time</b>.
+      </div>
+    </div>
+  );
+});
+
+const HourlySimpleGrid = memo(function HourlySimpleGrid({
+  title,
+  hrJr,
+  setHrJr,
+  hrJrOT,
+  setHrJrOT,
+  hrSr,
+  setHrSr,
+  hrSrOT,
+  setHrSrOT,
+  hrLead,
+  setHrLead,
+  hrLeadOT,
+  setHrLeadOT,
+}) {
+  return (
+    <div className="card" style={{ padding: 12 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: 8,
+          fontSize: 12,
+          color: "#6b7280",
+          marginBottom: 4,
+        }}
+      >
+        <div>Role</div>
+        <div>Rate (RM/hr)</div>
+        <div>OT Rate (RM/hr)</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Junior</div>
+        <input value={hrJr} onChange={(e) => setHrJr(e.target.value)} inputMode="decimal" />
+        <input value={hrJrOT} onChange={(e) => setHrJrOT(e.target.value)} inputMode="decimal" />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Senior</div>
+        <input value={hrSr} onChange={(e) => setHrSr(e.target.value)} inputMode="decimal" />
+        <input value={hrSrOT} onChange={(e) => setHrSrOT(e.target.value)} inputMode="decimal" />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Lead Host</div>
+        <input value={hrLead} onChange={(e) => setHrLead(e.target.value)} inputMode="decimal" />
+        <input value={hrLeadOT} onChange={(e) => setHrLeadOT(e.target.value)} inputMode="decimal" />
+      </div>
+    </div>
+  );
+});
+
+const FlatHourlyBlock = memo(function FlatHourlyBlock({ flatRate, setFlatRate, flatOT, setFlatOT }) {
+  return (
+    <div className="card" style={{ padding: 12 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Backend (flat hourly for everyone)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
+        <div>Rate (RM/hr)</div>
+        <div>OT Rate (RM/hr)</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <input value={flatRate} onChange={(e) => setFlatRate(e.target.value)} inputMode="decimal" />
+        <input value={flatOT} onChange={(e) => setFlatOT(e.target.value)} inputMode="decimal" />
+      </div>
+      <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+        Everyone is paid the same hourly and OT rate regardless of role.
+      </div>
+    </div>
+  );
+});
+
+const PaymentBlock = memo(function PaymentBlock({
+  sessionMode,
+  physicalType,
+  // hourly by role
+  hrJr,
+  setHrJr,
+  hrJrOT,
+  setHrJrOT,
+  hrSr,
+  setHrSr,
+  hrSrOT,
+  setHrSrOT,
+  hrLead,
+  setHrLead,
+  hrLeadOT,
+  setHrLeadOT,
+  // flat hourly
+  flatRate,
+  setFlatRate,
+  flatOT,
+  setFlatOT,
+  // session prices
+  pHalfJr,
+  setPHalfJr,
+  pHalfSr,
+  setPHalfSr,
+  pHalfLead,
+  setPHalfLead,
+  pFullJr,
+  setPFullJr,
+  pFullSr,
+  setPFullSr,
+  pFullLead,
+  setPFullLead,
+  p2d1nJr,
+  setP2d1nJr,
+  p2d1nSr,
+  setP2d1nSr,
+  p2d1nLead,
+  setP2d1nLead,
+  p3d2nJr,
+  setP3d2nJr,
+  p3d2nSr,
+  setP3d2nSr,
+  p3d2nLead,
+  setP3d2nLead,
+  // hourly add-on
+  hourlyAddon,
+  setHourlyAddon,
+}) {
+  if (sessionMode === "virtual") {
+    return (
+      <HourlySimpleGrid
+        title="Hourly (Virtual)"
+        hrJr={hrJr}
+        setHrJr={setHrJr}
+        hrJrOT={hrJrOT}
+        setHrJrOT={setHrJrOT}
+        hrSr={hrSr}
+        setHrSr={setHrSr}
+        hrSrOT={hrSrOT}
+        setHrSrOT={setHrSrOT}
+        hrLead={hrLead}
+        setHrLead={setHrLead}
+        hrLeadOT={hrLeadOT}
+        setHrLeadOT={setHrLeadOT}
+      />
+    );
+  }
+
+  if (physicalType === "hourly_by_role") {
+    return (
+      <HourlySimpleGrid
+        title="Hourly (by role)"
+        hrJr={hrJr}
+        setHrJr={setHrJr}
+        hrJrOT={hrJrOT}
+        setHrJrOT={setHrJrOT}
+        hrSr={hrSr}
+        setHrSr={setHrSr}
+        hrSrOT={hrSrOT}
+        setHrSrOT={setHrSrOT}
+        hrLead={hrLead}
+        setHrLead={setHrLead}
+        hrLeadOT={hrLeadOT}
+        setHrLeadOT={setHrLeadOT}
+      />
+    );
+  }
+
+  if (physicalType === "hourly_flat") {
+    return <FlatHourlyBlock flatRate={flatRate} setFlatRate={setFlatRate} flatOT={flatOT} setFlatOT={setFlatOT} />;
+  }
+
+  // session-based
+  const showHalf = physicalType === "half_day";
+  const showFull = physicalType === "full_day";
+  const show2d1n = physicalType === "2d1n";
+  const show3d2n = physicalType === "3d2n";
+
+  return (
+    <div className="card" style={{ padding: 12 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>Session payment (Physical)</div>
+
+      {showHalf && (
+        <div>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>Half Day (per person)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+              <input value={pHalfJr} onChange={(e) => setPHalfJr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+              <input value={pHalfSr} onChange={(e) => setPHalfSr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
+              <input value={pHalfLead} onChange={(e) => setPHalfLead(e.target.value)} inputMode="decimal" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFull && (
+        <div>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>Full Day (per person)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+              <input value={pFullJr} onChange={(e) => setPFullJr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+              <input value={pFullSr} onChange={(e) => setPFullSr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
+              <input value={pFullLead} onChange={(e) => setPFullLead(e.target.value)} inputMode="decimal" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {show2d1n && (
+        <div>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>2D1N (per person)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+              <input value={p2d1nJr} onChange={(e) => setP2d1nJr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+              <input value={p2d1nSr} onChange={(e) => setP2d1nSr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
+              <input value={p2d1nLead} onChange={(e) => setP2d1nLead(e.target.value)} inputMode="decimal" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {show3d2n && (
+        <div>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>3D2N (per person)</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+              <input value={p3d2nJr} onChange={(e) => setP3d2nJr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+              <input value={p3d2nSr} onChange={(e) => setP3d2nSr(e.target.value)} inputMode="decimal" />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
+              <input value={p3d2nLead} onChange={(e) => setP3d2nLead(e.target.value)} inputMode="decimal" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Optional hourly add-on for session variants */}
+      <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", gap: 10, alignItems: "center" }}>
+        <input id="hourlyToggle" type="checkbox" checked={hourlyAddon} onChange={(e) => setHourlyAddon(e.target.checked)} />
+        <label htmlFor="hourlyToggle" style={{ userSelect: "none" }}>
+          Enable hourly add-on (in addition to session price)
+        </label>
+      </div>
+
+      {hourlyAddon && (
+        <div className="card" style={{ marginTop: 12, padding: 12, background: "#f8fafc" }}>
+          <HourlySimpleGrid
+            title="Hourly add-on (Physical)"
+            hrJr={hrJr}
+            setHrJr={setHrJr}
+            hrJrOT={hrJrOT}
+            setHrJrOT={setHrJrOT}
+            hrSr={hrSr}
+            setHrSr={setHrSr}
+            hrSrOT={hrSrOT}
+            setHrSrOT={setHrSrOT}
+            hrLead={hrLead}
+            setHrLead={setHrLead}
+            hrLeadOT={hrLeadOT}
+            setHrLeadOT={setHrLeadOT}
+          />
+        </div>
+      )}
+    </div>
+  );
+});
+
+/* =========================
+   Main Component: JobModal
+   ========================= */
 export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
-  const isEdit = !!job;
+  if (!open) return null;
+  const editing = !!job?.id;
 
-  const pad = (n) => String(n).padStart(2, "0");
-  const toDateValue = (iso) => {
-    const d = new Date(iso);
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  /* -------- inference (back-compat) -------- */
+  const sessionKindFromRate = job?.rate?.sessionKind;
+  const inferMode = () => {
+    if (sessionKindFromRate === "virtual") return "virtual";
+    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(sessionKindFromRate)) return "physical";
+    return job?.session?.mode || job?.sessionMode || job?.mode || "virtual";
   };
-  const toTimeValue = (iso) => {
-    const d = new Date(iso);
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  };
-
-  const [form, setForm] = useState({
-    title: "",
-    venue: "",
-    description: "",
-    date: "",
-    startTime: "",
-    endTime: "",
-    headcount: 5,
-    transportOptions: { bus: true, own: true },
-    // Payment & extras
-    rate: {
-      payMode: "hourly",          // hourly | specific | specific_plus_hourly
-      paymentPrice: 0,            // RM / session
-      base: 20,                   // RM / hour
-      lduPrice: 30,
-      earlyCallAmount: 20,
-      earlyCallThresholdHours: 3,
-    },
-    earlyCall: {
-      enabled: false,
-      amount: 20,
-      thresholdHours: 3,
-    },
-    ldu: {
-      enabled: false,             // <-- NEW toggle
-      quota: 0,
-      price: 30,
-    },
-  });
-
-  // hydrate (create vs edit)
-  useEffect(() => {
-    if (!isEdit) return;
-    const st = new Date(job.startTime);
-    const en = new Date(job.endTime);
-
-    const lduSrc = job.loadingUnload || job.ldu || {};
-    const lduEnabledDerived =
-      typeof lduSrc.enabled === "boolean"
-        ? lduSrc.enabled
-        : ((Number(lduSrc.price) || 0) > 0 || (Number(lduSrc.quota) || 0) > 0);
-
-    setForm((f) => ({
-      ...f,
-      title: job.title || "",
-      venue: job.venue || "",
-      description: job.description || "",
-      date: toDateValue(st),
-      startTime: toTimeValue(st),
-      endTime: toTimeValue(en),
-      headcount: job.headcount ?? 5,
-      transportOptions: {
-        bus: !!job.transportOptions?.bus,
-        own: !!job.transportOptions?.own,
-      },
-      rate: {
-        payMode: job.rate?.payMode || f.rate.payMode,
-        paymentPrice: Number.isFinite(job.rate?.paymentPrice)
-          ? job.rate.paymentPrice
-          : (Number.isFinite(job.rate?.specificPayment) ? job.rate.specificPayment : f.rate.paymentPrice),
-        base: Number.isFinite(job.rate?.base) ? job.rate.base : f.rate.base,
-        lduPrice: Number.isFinite(job.rate?.lduPrice) ? job.rate.lduPrice : (Number.isFinite(lduSrc.price) ? lduSrc.price : f.rate.lduPrice),
-        earlyCallAmount: Number.isFinite(job.rate?.earlyCallAmount) ? job.rate.earlyCallAmount : f.rate.earlyCallAmount,
-        earlyCallThresholdHours: Number.isFinite(job.rate?.earlyCallThresholdHours)
-          ? job.rate.earlyCallThresholdHours
-          : f.rate.earlyCallThresholdHours,
-      },
-      earlyCall: {
-        enabled: !!job.earlyCall?.enabled,
-        amount: Number.isFinite(job.earlyCall?.amount) ? job.earlyCall.amount : (job.rate?.earlyCallAmount ?? f.earlyCall.amount),
-        thresholdHours: Number.isFinite(job.earlyCall?.thresholdHours)
-          ? job.earlyCall.thresholdHours
-          : (job.rate?.earlyCallThresholdHours ?? f.earlyCall.thresholdHours),
-      },
-      ldu: {
-        enabled: !!lduEnabledDerived,                         // <-- hydrate enabled
-        quota: Number.isFinite(lduSrc.quota) ? lduSrc.quota : f.ldu.quota,
-        price: Number.isFinite(lduSrc.price)
-          ? lduSrc.price
-          : (Number.isFinite(job.rate?.lduPrice) ? job.rate.lduPrice : f.ldu.price),
-      },
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEdit, job?.id]);
-
-  // lock scroll when open
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => (document.body.style.overflow = prev);
-  }, [open]);
-
-  const update = (path, value) => {
-    setForm((f) => {
-      const copy = structuredClone(f);
-      const keys = Array.isArray(path) ? path : [path];
-      let cur = copy;
-      for (let i = 0; i < keys.length - 1; i++) cur = cur[keys[i]];
-      cur[keys.at(-1)] = value;
-      return copy;
-    });
+  const inferPhysType = () => {
+    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(sessionKindFromRate)) return sessionKindFromRate;
+    const legacy = job?.session?.physicalType || job?.physicalType || job?.physicalSubtype;
+    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy) ? legacy : "half_day";
   };
 
-  async function submit() {
-    const startISO = new Date(`${form.date}T${form.startTime || "00:00"}:00`).toISOString();
-    const endISO = new Date(`${form.date}T${form.endTime || "00:00"}:00`).toISOString();
+  /* ---------- base fields ---------- */
+  const [title, setTitle] = useState(job?.title || "");
+  const [venue, setVenue] = useState(job?.venue || "");
+  const [description, setDescription] = useState(job?.description || "");
 
-    const lduBlock = {
-      enabled: !!form.ldu.enabled,
-      quota: Number(form.ldu.quota || 0),
-      price: Number(form.ldu.price || form.rate.lduPrice || 0),
+  const [sessionMode, setSessionMode] = useState(inferMode());
+  const [physicalType, setPhysicalType] = useState(inferPhysType());
+
+  /* ---------- transport ---------- */
+  const gl = loadGlobalDefaults();
+  const [optBus, setOptBus] = useState(job?.transportOptions?.bus !== false);
+  const [optOwn, setOptOwn] = useState(job?.transportOptions?.own !== false);
+  const [parkingAmount, setParkingAmount] = useState(
+    String(
+      editing
+        ? job?.allowances?.parking?.amount ?? job?.rate?.transportAllowance ?? job?.rate?.transportBus ?? 0
+        : gl?.parkingAllowance ?? 0
+    )
+  );
+
+  /* ---------- Headcount (informational only) ---------- */
+  const [headcount, setHeadcount] = useState(String(job?.headcount ?? job?.rolePlan?.junior ?? 0));
+
+  /* ---------- time & date ---------- */
+  const startInit = job?.startTime ? dayjs(job.startTime) : dayjs();
+  const endInit = job?.endTime ? dayjs(job.endTime) : startInit;
+
+  const [dateStart] = useState(startInit.format("YYYY-MM-DD"));
+  const [timeStart] = useState(startInit.format("HH:mm"));
+  const [dateEnd] = useState(endInit.format("YYYY-MM-DD"));
+  const [timeEnd] = useState(endInit.format("HH:mm"));
+
+  // Uncontrolled refs (keep native pickers open)
+  const dateStartRef = useRef(null);
+  const timeStartRef = useRef(null);
+  const dateEndRef = useRef(null);
+  const timeEndRef = useRef(null);
+
+  /* ---------- pay state ---------- */
+  // hardcoded fallbacks if no global defaults stored
+  const defaultsHourly = { jr: "15", sr: "20", lead: "25" };
+  const defaultsHalf = { jr: "60", sr: "80", lead: "100" };
+  const defaultsFull = { jr: "120", sr: "160", lead: "200" };
+  const defaults2d1n = { jr: "300", sr: "400", lead: "500" };
+  const defaults3d2n = { jr: "450", sr: "600", lead: "750" };
+
+  const tr = job?.rate?.tierRates || {};
+  const gHr = gl?.hourly_by_role || {};
+  const gFlat = gl?.hourly_flat || {};
+  const gSess = gl?.session || {};
+
+  // Hourly (role-based): Rate + OT Rate
+  const [hrJr, setHrJr] = useState(String(editing ? tr.junior?.base ?? defaultsHourly.jr : gHr.junior?.base ?? defaultsHourly.jr));
+  const [hrSr, setHrSr] = useState(String(editing ? tr.senior?.base ?? defaultsHourly.sr : gHr.senior?.base ?? defaultsHourly.sr));
+  const [hrLead, setHrLead] = useState(String(editing ? tr.lead?.base ?? defaultsHourly.lead : gHr.lead?.base ?? defaultsHourly.lead));
+
+  const [hrJrOT, setHrJrOT] = useState(String(editing ? tr.junior?.otRatePerHour ?? "0" : gHr.junior?.otRatePerHour ?? "0"));
+  const [hrSrOT, setHrSrOT] = useState(String(editing ? tr.senior?.otRatePerHour ?? "0" : gHr.senior?.otRatePerHour ?? "0"));
+  const [hrLeadOT, setHrLeadOT] = useState(String(editing ? tr.lead?.otRatePerHour ?? "0" : gHr.lead?.otRatePerHour ?? "0"));
+
+  // Hourly (flat for all / “Backend”)
+  const [flatRate, setFlatRate] = useState(
+    String(editing ? job?.rate?.flatHourly?.base ?? tr.junior?.base ?? defaultsHourly.jr : gFlat.base ?? gHr.junior?.base ?? defaultsHourly.jr)
+  );
+  const [flatOT, setFlatOT] = useState(
+    String(editing ? job?.rate?.flatHourly?.otRatePerHour ?? tr.junior?.otRatePerHour ?? "0" : gFlat.otRatePerHour ?? gHr.junior?.otRatePerHour ?? "0")
+  );
+
+  // Session prices (Half/Full/2D1N/3D2N)
+  const [pHalfJr, setPHalfJr] = useState(
+    String(editing ? tr.junior?.halfDay ?? tr.junior?.specificPayment ?? defaultsHalf.jr : gSess?.half_day?.jr ?? defaultsHalf.jr)
+  );
+  const [pHalfSr, setPHalfSr] = useState(
+    String(editing ? tr.senior?.halfDay ?? tr.senior?.specificPayment ?? defaultsHalf.sr : gSess?.half_day?.sr ?? defaultsHalf.sr)
+  );
+  const [pHalfLead, setPHalfLead] = useState(
+    String(editing ? tr.lead?.halfDay ?? tr.lead?.specificPayment ?? defaultsHalf.lead : gSess?.half_day?.lead ?? defaultsHalf.lead)
+  );
+
+  const [pFullJr, setPFullJr] = useState(
+    String(editing ? tr.junior?.fullDay ?? tr.junior?.specificPayment ?? defaultsFull.jr : gSess?.full_day?.jr ?? defaultsFull.jr)
+  );
+  const [pFullSr, setPFullSr] = useState(
+    String(editing ? tr.senior?.fullDay ?? tr.senior?.specificPayment ?? defaultsFull.sr : gSess?.full_day?.sr ?? defaultsFull.sr)
+  );
+  const [pFullLead, setPFullLead] = useState(
+    String(editing ? tr.lead?.fullDay ?? tr.lead?.specificPayment ?? defaultsFull.lead : gSess?.full_day?.lead ?? defaultsFull.lead)
+  );
+
+  const [p2d1nJr, setP2d1nJr] = useState(
+    String(editing ? tr.junior?.twoD1N ?? tr.junior?.specificPayment ?? defaults2d1n.jr : gSess?.twoD1N?.jr ?? defaults2d1n.jr)
+  );
+  const [p2d1nSr, setP2d1nSr] = useState(
+    String(editing ? tr.senior?.twoD1N ?? tr.senior?.specificPayment ?? defaults2d1n.sr : gSess?.twoD1N?.sr ?? defaults2d1n.sr)
+  );
+  const [p2d1nLead, setP2d1nLead] = useState(
+    String(editing ? tr.lead?.twoD1N ?? tr.lead?.specificPayment ?? defaults2d1n.lead : gSess?.twoD1N?.lead ?? defaults2d1n.lead)
+  );
+
+  const [p3d2nJr, setP3d2nJr] = useState(
+    String(editing ? tr.junior?.threeD2N ?? tr.junior?.specificPayment ?? defaults3d2n.jr : gSess?.threeD2N?.jr ?? defaults3d2n.jr)
+  );
+  const [p3d2nSr, setP3d2nSr] = useState(
+    String(editing ? tr.senior?.threeD2N ?? tr.senior?.specificPayment ?? defaults3d2n.sr : gSess?.threeD2N?.sr ?? defaults3d2n.sr)
+  );
+  const [p3d2nLead, setP3d2nLead] = useState(
+    String(editing ? tr.lead?.threeD2N ?? tr.lead?.specificPayment ?? defaults3d2n.lead : gSess?.threeD2N?.lead ?? defaults3d2n.lead)
+  );
+
+  // Optional hourly add-on for session variants (no global toggle, keep as-is)
+  const [hourlyAddon, setHourlyAddon] = useState(!!(job?.session?.hourlyEnabled || job?.physicalHourlyEnabled));
+
+  function buildTierRates() {
+    const kind = sessionMode === "virtual" ? "virtual" : physicalType;
+
+    if (kind === "virtual") {
+      return {
+        junior: { payMode: "hourly", base: N(hrJr, 15), otRatePerHour: N(hrJrOT, 0) },
+        senior: { payMode: "hourly", base: N(hrSr, 20), otRatePerHour: N(hrSrOT, 0) },
+        lead: { payMode: "hourly", base: N(hrLead, 25), otRatePerHour: N(hrLeadOT, 0) },
+      };
+    }
+    if (kind === "hourly_by_role") {
+      return {
+        junior: { payMode: "hourly", base: N(hrJr, 15), otRatePerHour: N(hrJrOT, 0) },
+        senior: { payMode: "hourly", base: N(hrSr, 20), otRatePerHour: N(hrSrOT, 0) },
+        lead: { payMode: "hourly", base: N(hrLead, 25), otRatePerHour: N(hrLeadOT, 0) },
+      };
+    }
+    if (kind === "hourly_flat") {
+      const base = N(flatRate, 15);
+      const ot = N(flatOT, 0);
+      return {
+        junior: { payMode: "hourly", base, otRatePerHour: ot },
+        senior: { payMode: "hourly", base, otRatePerHour: ot },
+        lead: { payMode: "hourly", base, otRatePerHour: ot },
+      };
+    }
+
+    // Session-based (half/full/2d1n/3d2n)
+    const priceFor = (tier) => {
+      if (kind === "half_day") return tier === "jr" ? N(pHalfJr) : tier === "sr" ? N(pHalfSr) : N(pHalfLead);
+      if (kind === "full_day") return tier === "jr" ? N(pFullJr) : tier === "sr" ? N(pFullSr) : N(pFullLead);
+      if (kind === "2d1n") return tier === "jr" ? N(p2d1nJr) : tier === "sr" ? N(p2d1nSr) : N(p2d1nLead);
+      return /* 3d2n */ tier === "jr" ? N(p3d2nJr) : tier === "sr" ? N(p3d2nSr) : N(p3d2nLead);
     };
 
-    const payload = {
-      title: form.title.trim(),
-      venue: form.venue.trim(),
-      description: form.description.trim(),
-      startTime: startISO,
-      endTime: endISO,
-      headcount: Number(form.headcount),
-      transportOptions: { bus: !!form.transportOptions.bus, own: !!form.transportOptions.own },
-      rate: {
-        payMode: String(form.rate.payMode || "hourly"),
-        specificPayment: Number(form.rate.paymentPrice || 0),
-        paymentPrice: Number(form.rate.paymentPrice || 0), // alias
-        base: Number(form.rate.base || 0),
-        lduPrice: Number(form.rate.lduPrice || lduBlock.price || 0),
-        earlyCallAmount: Number(form.rate.earlyCallAmount || 0),
-        earlyCallThresholdHours: Number(form.rate.earlyCallThresholdHours || 0),
-      },
-      earlyCall: {
-        enabled: !!form.earlyCall.enabled,
-        amount: Number(form.earlyCall.amount || form.rate.earlyCallAmount || 0),
-        thresholdHours: Number(form.earlyCall.thresholdHours || form.rate.earlyCallThresholdHours || 0),
-      },
-      // Provide both keys to be compatible with different backends
-      ldu: lduBlock,
-      loadingUnload: lduBlock,
-    };
+    const mode = hourlyAddon ? "specific_plus_hourly" : "specific";
+    const ifHourly = (base, ot) => (hourlyAddon ? { base, otRatePerHour: ot } : {});
 
+    return {
+      junior: {
+        payMode: mode,
+        specificPayment: priceFor("jr"),
+        ...ifHourly(N(hrJr, 15), N(hrJrOT, 0)),
+        halfDay: N(pHalfJr),
+        fullDay: N(pFullJr),
+        twoD1N: N(p2d1nJr),
+        threeD2N: N(p3d2nJr),
+      },
+      senior: {
+        payMode: mode,
+        specificPayment: priceFor("sr"),
+        ...ifHourly(N(hrSr, 20), N(hrSrOT, 0)),
+        halfDay: N(pHalfSr),
+        fullDay: N(pFullSr),
+        twoD1N: N(p2d1nSr),
+        threeD2N: N(p3d2nSr),
+      },
+      lead: {
+        payMode: mode,
+        specificPayment: priceFor("lead"),
+        ...ifHourly(N(hrLead, 25), N(hrLeadOT, 0)),
+        halfDay: N(pHalfLead),
+        fullDay: N(pFullLead),
+        twoD1N: N(p2d1nLead),
+        threeD2N: N(p3d2nLead),
+      },
+    };
+  }
+
+  const [busy, setBusy] = useState(false);
+
+  async function onSave() {
+    if (!title.trim()) return alert("Title is required.");
+    if (!venue.trim()) return alert("Venue is required.");
+    if (!optBus && !optOwn) return alert("Select at least one transport option.");
+
+    const kind = sessionMode === "virtual" ? "virtual" : physicalType;
+    const singleDate = ["virtual", "half_day", "full_day", "hourly_by_role", "hourly_flat"].includes(kind);
+
+    const ds = dateStartRef.current?.value || dateStart;
+    const ts = timeStartRef.current?.value || timeStart;
+    const te = timeEndRef.current?.value || timeEnd;
+    const deCandidate = dateEndRef.current?.value || dateEnd;
+    const de = singleDate ? ds : deCandidate || DEFAULT_END_BY_TYPE[kind]?.(ds) || ds;
+
+    if (!ds || !ts || !te) return alert("Please fill date/time fields.");
+
+    const startISO = combineLocal(ds, ts);
+    const endISO = combineLocal(de, te);
+    if (!startISO || !endISO) return alert("Invalid start/end date or time.");
+
+    setBusy(true);
     try {
-      if (isEdit) {
+      const payload = {
+        title: title.trim(),
+        venue: venue.trim(),
+        description,
+        startTime: startISO,
+        endTime: endISO,
+        headcount: N(headcount, 0),
+
+        session: {
+          mode: sessionMode,
+          physicalType: sessionMode === "physical" ? physicalType : null,
+          hourlyEnabled: ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? !!hourlyAddon : false,
+        },
+
+        // mirrors
+        mode: sessionMode,
+        sessionMode,
+        sessionKind: kind,
+        physicalType: sessionMode === "physical" ? physicalType : null,
+        physicalSubtype: sessionMode === "physical" ? physicalType : null,
+        physicalHourlyEnabled: ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? !!hourlyAddon : false,
+
+        transportOptions: { bus: !!optBus, own: !!optOwn, atagTransport: !!optBus, ownTransport: !!optOwn },
+
+        // keep rolePlan for back-compat (not used as caps)
+        rolePlan: { junior: 0, senior: 0, lead: 0 },
+
+        rate: {
+          transportBus: N(parkingAmount, 0),
+          transportAllowance: N(parkingAmount, 0),
+          parkingAllowance: N(parkingAmount, 0),
+          sessionKind: kind,
+          tierRates: buildTierRates(),
+          ...(physicalType === "hourly_flat"
+            ? { flatHourly: { base: N(flatRate, 15), otRatePerHour: N(flatOT, 0) } }
+            : {}),
+        },
+
+        allowances: { ...job?.allowances, parking: { enabled: !!optBus, amount: N(parkingAmount, 0) } },
+      };
+
+      if (editing) {
         await apiPatch(`/jobs/${job.id}`, payload);
         onUpdated && onUpdated();
       } else {
@@ -166,227 +649,172 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
         onCreated && onCreated();
       }
     } catch (e) {
-      alert("Save failed: " + e);
+      alert("Save failed: " + (e?.message || e));
+    } finally {
+      setBusy(false);
     }
   }
 
-  if (!open) return null;
-
-  return createPortal(
+  return (
     <>
-      <div className="modal-backdrop" onClick={onClose} />
+      <div className="modal-backdrop" onClick={busy ? undefined : onClose} />
       <div className="modal" role="dialog" aria-modal="true">
-        <div className="modal-card" style={{ maxWidth: 760 }}>
-          <div className="modal-header">{isEdit ? "Edit Job" : "Create New Job"}</div>
+        <div className="modal-card modal-lg">
+          <div className="modal-header">{editing ? "Edit Job" : "Create Job"}</div>
 
-          <div className="modal-body">
-            {/* Title */}
-            <div className="card">
-              <label>Job Title</label>
-              <input value={form.title} onChange={(e) => update("title", e.target.value)} placeholder="Type here..." />
-            </div>
-
-            {/* Venue */}
-            <div className="card">
-              <label>Venue</label>
-              <input value={form.venue} onChange={(e) => update("venue", e.target.value)} placeholder="Venue..." />
-            </div>
-
-            {/* Date */}
-            <div className="card">
-              <label>Date</label>
-              <input
-                type="date"
-                value={form.date}
-                onChange={(e) => update("date", e.target.value)}
-                style={{ width: "100%", maxWidth: 360, minWidth: 260 }}
-              />
-            </div>
-
-            {/* Start / End / Headcount */}
-            <div className="card" style={{ paddingBottom: 0 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-                <div className="card">
-                  <label>Start</label>
-                  <input type="time" value={form.startTime} onChange={(e) => update("startTime", e.target.value)} />
+          <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+            {/* Basics */}
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Title</div>
+                  <input value={title} onChange={(e) => setTitle(e.target.value)} />
                 </div>
-                <div className="card">
-                  <label>End</label>
-                  <input type="time" value={form.endTime} onChange={(e) => update("endTime", e.target.value)} />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Venue</div>
+                  <input value={venue} onChange={(e) => setVenue(e.target.value)} />
                 </div>
-                <div className="card">
-                  <label>Headcount</label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    value={form.headcount}
-                    onChange={(e) => update("headcount", e.target.value)}
-                  />
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Description</div>
+                <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+              </div>
+
+              {/* Transport */}
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Transport options</div>
+                <div className="transport-options" style={{ marginTop: 6 }}>
+                  <label className="check">
+                    <input type="checkbox" checked={optBus} onChange={(e) => setOptBus(e.target.checked)} /> ATAG Transport
+                  </label>
+                  <label className="check">
+                    <input type="checkbox" checked={optOwn} onChange={(e) => setOptOwn(e.target.checked)} /> Own Transport
+                  </label>
                 </div>
+
+                {optBus && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>Parking Allowance (RM)</div>
+                      <input inputMode="decimal" value={parkingAmount} onChange={(e) => setParkingAmount(e.target.value)} />
+                    </div>
+                    <div style={{ alignSelf: "end", fontSize: 12, color: "#6b7280" }}>
+                      Applied to every person who selects <b>ATAG Transport</b>.
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Description */}
-            <div className="card">
-              <label>Description</label>
-              <textarea rows={3} value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="Optional..." />
-            </div>
-
-            {/* Payment */}
-            <div className="card">
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Payment</div>
-              <div className="grid" style={{ gap: 12 }}>
-                <div className="card" style={{ gridColumn: "span 6" }}>
-                  <label>Pay Mode</label>
-                  <select value={form.rate.payMode} onChange={(e) => update(["rate", "payMode"], e.target.value)}>
-                    <option value="hourly">Hourly only</option>
-                    <option value="specific">Session payment only</option>
-                    <option value="specific_plus_hourly">Session + Hourly</option>
+            {/* Session */}
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: sessionMode === "physical" ? "1fr 1fr" : "1fr", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Session Type</div>
+                  <select value={sessionMode} onChange={(e) => setSessionMode(e.target.value)}>
+                    <option value="virtual">Virtual</option>
+                    <option value="physical">Physical</option>
                   </select>
                 </div>
-
-                {(form.rate.payMode === "specific" || form.rate.payMode === "specific_plus_hourly") && (
-                  <div className="card" style={{ gridColumn: "span 6" }}>
-                    <label>Payment Price (RM / session)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={String(form.rate.paymentPrice)}
-                      onChange={(e) => update(["rate", "paymentPrice"], e.target.value)}
-                    />
-                  </div>
-                )}
-
-                {(form.rate.payMode === "hourly" || form.rate.payMode === "specific_plus_hourly") && (
-                  <div className="card" style={{ gridColumn: "span 6" }}>
-                    <label>Hourly Base (RM / hour)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={String(form.rate.base)}
-                      onChange={(e) => update(["rate", "base"], e.target.value)}
-                    />
+                {sessionMode === "physical" && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>Physical Subtype</div>
+                    <select value={physicalType} onChange={(e) => setPhysicalType(e.target.value)}>
+                      <option value="half_day">Half Day</option>
+                      <option value="full_day">Full Day</option>
+                      <option value="2d1n">2D1N</option>
+                      <option value="3d2n">3D2N</option>
+                      <option value="hourly_by_role">Hourly (by role)</option>
+                      <option value="hourly_flat">Backend (flat hourly for all)</option>
+                    </select>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Transport Options */}
-            <div className="card">
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>Transport Options</div>
-              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={!!form.transportOptions.bus}
-                    onChange={(e) => update(["transportOptions", "bus"], e.target.checked)}
-                  />
-                  <span>ATAG Bus</span>
-                </label>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={!!form.transportOptions.own}
-                    onChange={(e) => update(["transportOptions", "own"], e.target.checked)}
-                  />
-                  <span>Own Transport</span>
-                </label>
+            {/* Dates & Times */}
+            <DatesBlock
+              sessionMode={sessionMode}
+              physicalType={physicalType}
+              dateStart={dateStart}
+              dateEnd={dateEnd}
+              timeStart={timeStart}
+              timeEnd={timeEnd}
+              dateStartRef={dateStartRef}
+              dateEndRef={dateEndRef}
+              timeStartRef={timeStartRef}
+              timeEndRef={timeEndRef}
+            />
+
+            {/* Headcount */}
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Headcount</div>
+              <input value={headcount} onChange={(e) => setHeadcount(e.target.value)} inputMode="numeric" style={{ maxWidth: 240 }} />
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                Target number of people to hire. Everyone can apply — PM/Admin approval is still required for each person.
               </div>
             </div>
 
-            {/* Early Call */}
-            <div className="card">
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <div style={{ fontWeight: 700 }}>Early Call Allowance</div>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={!!form.earlyCall.enabled}
-                    onChange={(e) => update(["earlyCall", "enabled"], e.target.checked)}
-                  />
-                  <span>Enable</span>
-                </label>
-              </div>
-              <div style={{ marginTop: 10, opacity: form.earlyCall.enabled ? 1 : 0.5 }}>
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, maxWidth: 320 }}>
-                    <label style={{ minWidth: 120 }}>Amount (RM)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={String(form.earlyCall.amount)}
-                      onChange={(e) => update(["earlyCall", "amount"], e.target.value)}
-                      disabled={!form.earlyCall.enabled}
-                    />
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, maxWidth: 320 }}>
-                    <label style={{ minWidth: 120 }}>Threshold (hours)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={String(form.earlyCall.thresholdHours)}
-                      onChange={(e) => update(["earlyCall", "thresholdHours"], e.target.value)}
-                      disabled={!form.earlyCall.enabled}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Loading & Unloading with Enable toggle (NEW) */}
-            <div className="card">
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                <div style={{ fontWeight: 700 }}>Loading & Unloading</div>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                  <input
-                    type="checkbox"
-                    checked={!!form.ldu.enabled}
-                    onChange={(e) => update(["ldu", "enabled"], e.target.checked)}
-                  />
-                  <span>Enable</span>
-                </label>
-              </div>
-
-              <div style={{ marginTop: 10, opacity: form.ldu.enabled ? 1 : 0.5 }}>
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <label style={{ minWidth: 170 }}>Quota (helpers)</label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={String(form.ldu.quota)}
-                      onChange={(e) => update(["ldu", "quota"], e.target.value)}
-                      disabled={!form.ldu.enabled}
-                    />
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <label style={{ minWidth: 170 }}>Price (RM / helper)</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={String(form.ldu.price)}
-                      onChange={(e) => update(["ldu", "price"], e.target.value)}
-                      disabled={!form.ldu.enabled}
-                    />
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-                  Part-timers can opt-in when applying. PM will tick who actually helped.
-                </div>
-              </div>
-            </div>
+            {/* Payments */}
+            <PaymentBlock
+              sessionMode={sessionMode}
+              physicalType={physicalType}
+              hrJr={hrJr}
+              setHrJr={setHrJr}
+              hrJrOT={hrJrOT}
+              setHrJrOT={setHrJrOT}
+              hrSr={hrSr}
+              setHrSr={setHrSr}
+              hrSrOT={hrSrOT}
+              setHrSrOT={setHrSrOT}
+              hrLead={hrLead}
+              setHrLead={setHrLead}
+              hrLeadOT={hrLeadOT}
+              setHrLeadOT={setHrLeadOT}
+              flatRate={flatRate}
+              setFlatRate={setFlatRate}
+              flatOT={flatOT}
+              setFlatOT={setFlatOT}
+              pHalfJr={pHalfJr}
+              setPHalfJr={setPHalfJr}
+              pHalfSr={pHalfSr}
+              setPHalfSr={setPHalfSr}
+              pHalfLead={pHalfLead}
+              setPHalfLead={setPHalfLead}
+              pFullJr={pFullJr}
+              setPFullJr={setPFullJr}
+              pFullSr={pFullSr}
+              setPFullSr={setPFullSr}
+              pFullLead={pFullLead}
+              setPFullLead={setPFullLead}
+              p2d1nJr={p2d1nJr}
+              setP2d1nJr={setP2d1nJr}
+              p2d1nSr={p2d1nSr}
+              setP2d1nSr={setP2d1nSr}
+              p2d1nLead={p2d1nLead}
+              setP2d1nLead={setP2d1nLead}
+              p3d2nJr={p3d2nJr}
+              setP3d2nJr={setP3d2nJr}
+              p3d2nSr={p3d2nSr}
+              setP3d2nSr={setP3d2nSr}
+              p3d2nLead={p3d2nLead}
+              setP3d2nLead={setP3d2nLead}
+              hourlyAddon={hourlyAddon}
+              setHourlyAddon={setHourlyAddon}
+            />
           </div>
 
           <div className="modal-footer">
-            <button className="btn" onClick={onClose}>Cancel</button>
-            <button className="btn primary" onClick={submit}>
-              {isEdit ? "Save" : "Create Job"}
+            <button className="btn" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button className="btn primary" onClick={onSave} disabled={busy}>
+              {busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create job"}
             </button>
           </div>
         </div>
       </div>
-    </>,
-    document.body
+    </>
   );
 }
