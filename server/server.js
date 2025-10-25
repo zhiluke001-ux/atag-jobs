@@ -168,7 +168,6 @@ function findUserByIdentifier(id) {
 const ROLES = ["part-timer", "pm", "admin"];
 const STAFF_ROLES = ["junior", "senior", "lead"];
 const clampRole  = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
-// NEW: grade clamp
 const clampGrade = (g) => (STAFF_ROLES.includes(String(g)) ? String(g) : "junior");
 
 function paySummaryFromRate(rate = {}) {
@@ -270,7 +269,7 @@ function normalizeAdjustments(obj, actor) {
           : actor
           ? { id: actor.id ?? null, email: actor.email ?? null }
           : null,
-    }));
+    })));
   }
   return out;
 }
@@ -499,7 +498,7 @@ app.post("/register", async (req, res) => {
     username: finalUsername,
     name: name || finalUsername,
     role: pickedRole,   // part-timer by default
-    grade: "junior",    // NEW default staff grade
+    grade: "junior",    // default staff grade
     passwordHash,
   };
   db.users.push(newUser);
@@ -842,7 +841,7 @@ app.patch(
       for (const r of STAFF_ROLES) {
         job.roleRates[r] = {
           payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+          base: Number(roleRates?.[r]?.base     ?? job.roleRates?.[r]?.base     ?? 0),
           specificPayment: roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
           otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
         };
@@ -919,7 +918,7 @@ app.post(
       for (const r of STAFF_ROLES) {
         job.roleRates[r] = {
           payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+          base: Number(roleRates?.[r]?.base     ?? job.roleRates?.[r]?.base     ?? 0),
           specificPayment: roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
           otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
         };
