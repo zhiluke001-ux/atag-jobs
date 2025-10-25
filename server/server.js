@@ -1,4 +1,4 @@
-// server.js
+// server/server.js
 import express from "express";
 import cors from "cors";
 import fs from "fs-extra";
@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 import { createWriteStream } from "fs";
 import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
+import { loadDB, saveDB } from "./storage.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,12 +22,8 @@ app.use(express.json());
 app.use(morgan("dev"));
 
 /* ---------------- DB + defaults ---------------- */
-const DB_FILE = path.join(__dirname, "db.json");
-let db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-
-function saveDB() {
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-}
+// Load DB (Postgres if DATABASE_URL, else file)
+let db = await loadDB();
 
 // Seed config & defaults if missing
 db.config = db.config || {};
@@ -48,13 +45,13 @@ const DEFAULT_RATES = {
 };
 db.config.rates = db.config.rates || DEFAULT_RATES;
 
-// NEW: Admin default role pay tables (never blank)
+// Admin default role pay tables (never blank)
 db.config.roleRatesDefaults = db.config.roleRatesDefaults || {
   junior: { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.junior ?? 20), specificPayment: null, otMultiplier: 0 },
   senior: { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.senior ?? 30), specificPayment: null, otMultiplier: 0 },
   lead:   { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.lead   ?? 30), specificPayment: null, otMultiplier: 0 },
 };
-saveDB();
+await saveDB(db);
 
 /* ------------ auth / helpers ------------- */
 const JWT_SECRET = db.config.jwtSecret;
@@ -119,7 +116,7 @@ function addAudit(action, details, req) {
     details,
   });
   if (db.audit.length > 1000) db.audit.length = 1000;
-  saveDB();
+  // No await saveDB here; handlers that mutate data already persist.
 }
 
 function computeStatus(job) {
@@ -254,7 +251,7 @@ function jobPublicView(job) {
   };
 }
 
-/* ---- NEW: adjustments normalizer ---- */
+/* ---- adjustments normalizer ---- */
 function normalizeAdjustments(obj, actor) {
   const out = {};
   if (!obj || typeof obj !== "object") return out;
@@ -401,7 +398,7 @@ for (const u of db.users) {
     mutated = true;
   }
 }
-if (mutated) saveDB();
+if (mutated) await saveDB(db);
 
 /* ---------- Ensure adjustments exists on all jobs (boot migration) ---------- */
 db.jobs = db.jobs || [];
@@ -420,11 +417,11 @@ for (const j of db.jobs) {
     }
   }
 }
-if (adjMutated) saveDB();
+if (adjMutated) await saveDB(db);
 
 /* -------------- auth --------------- */
 
-app.post("/login", (req, res) => {
+app.post("/login", async (req, res) => {
   const { identifier, email, username, password } = req.body || {};
   const id = identifier || email || username;
   if (!id || !password)
@@ -455,7 +452,7 @@ app.post("/login", (req, res) => {
   });
 });
 
-app.post("/register", (req, res) => {
+app.post("/register", async (req, res) => {
   const { email, username, name, password, role } = req.body || {};
   if (!email || !password)
     return res
@@ -496,7 +493,7 @@ app.post("/register", (req, res) => {
     passwordHash,
   };
   db.users.push(newUser);
-  saveDB();
+  await saveDB(db);
   addAudit("register", { email, role: pickedRole }, { user: newUser });
 
   const token = signToken({
@@ -511,7 +508,7 @@ app.post("/register", (req, res) => {
   });
 });
 
-app.post("/forgot-password", (req, res) => {
+app.post("/forgot-password", async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: "email_required" });
   const emailLower = String(email).toLowerCase();
@@ -523,7 +520,7 @@ app.post("/forgot-password", (req, res) => {
   const token = crypto.randomBytes(24).toString("hex");
   const expiresAt = Date.now() + 60 * 60 * 1000;
   user.resetToken = { token, expiresAt };
-  saveDB();
+  await saveDB(db);
 
   const origin = req.headers?.origin || "";
   const resetLink = `${origin}#\/reset?token=${token}`;
@@ -531,7 +528,7 @@ app.post("/forgot-password", (req, res) => {
   res.json({ ok: true, token, resetLink });
 });
 
-app.post("/reset-password", (req, res) => {
+app.post("/reset-password", async (req, res) => {
   const { token, password } = req.body || {};
   if (!token || !password)
     return res
@@ -545,13 +542,13 @@ app.post("/reset-password", (req, res) => {
 
   if (Date.now() > Number(user.resetToken.expiresAt)) {
     delete user.resetToken;
-    saveDB();
+    await saveDB(db);
     return res.status(400).json({ error: "token_expired" });
   }
 
   user.passwordHash = hashPassword(password);
   delete user.resetToken;
-  saveDB();
+  await saveDB(db);
   addAudit("reset_password", { userId: user.id }, { user });
   res.json({ ok: true });
 });
@@ -584,7 +581,7 @@ app.post(
   "/config/rates",
   authMiddleware,
   requireRole("admin"),
-  (req, res) => {
+  async (req, res) => {
     const body = req.body || {};
     db.config.rates = Object.keys(body).length
       ? { ...db.config.rates, ...body }
@@ -595,7 +592,7 @@ app.post(
         ...body.roleRatesDefaults,
       };
     }
-    saveDB();
+    await saveDB(db);
     addAudit("update_rates_default", { rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults }, req);
     res.json({ ok: true, rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults });
   }
@@ -615,7 +612,7 @@ app.get("/jobs/:id", (req, res) => {
   res.json({ ...job, status: computeStatus(job) });
 });
 
-app.post("/jobs", authMiddleware, requireRole("pm", "admin"), (req, res) => {
+app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const {
     title,
     venue,
@@ -689,7 +686,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), (req, res) => {
   };
 
   db.jobs.push(job);
-  saveDB();
+  await saveDB(db);
   addAudit("create_job", { jobId: id, title }, req);
   res.json(job);
 });
@@ -698,7 +695,7 @@ app.patch(
   "/jobs/:id",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
@@ -796,7 +793,7 @@ app.patch(
       job.adjustments = normalizeAdjustments(req.body.adjustments, req.user);
     }
 
-    saveDB();
+    await saveDB(db);
     addAudit("edit_job", { jobId: job.id }, req);
     res.json(job);
   }
@@ -806,7 +803,7 @@ app.post(
   "/jobs/:id/rate",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
@@ -869,7 +866,7 @@ app.post(
       }
     }
 
-    saveDB();
+    await saveDB(db);
     addAudit("update_job_rate", { jobId: job.id }, req);
     res.json({
       ok: true,
@@ -881,19 +878,19 @@ app.post(
   }
 );
 
-/* ---- NEW: persist adjustments via dedicated endpoint ---- */
+/* ---- persist adjustments via dedicated endpoint ---- */
 app.post(
   "/jobs/:id/adjustments",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
     const incoming = req.body?.adjustments || {};
     job.adjustments = normalizeAdjustments(incoming, req.user);
 
-    saveDB();
+    await saveDB(db);
     addAudit(
       "update_adjustments",
       {
@@ -915,11 +912,11 @@ app.delete(
   "/jobs/:id",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const idx = db.jobs.findIndex((j) => j.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: "job_not_found" });
     const removed = db.jobs.splice(idx, 1)[0];
-    saveDB();
+    await saveDB(db);
     addAudit("delete_job", { jobId: removed.id }, req);
     res.json({ ok: true });
   }
@@ -930,7 +927,7 @@ app.post(
   "/jobs/:id/apply",
   authMiddleware,
   requireRole("part-timer"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
@@ -979,7 +976,7 @@ app.post(
             (u) => u !== req.user.id
           );
         }
-        saveDB();
+        await saveDB(db);
         exportJobCSV(job);
         addAudit(
           "reapply",
@@ -1002,7 +999,7 @@ app.post(
             return res.status(400).json({ error: "lu_quota_full" });
           if (!a.includes(req.user.id)) a.push(req.user.id);
         }
-        saveDB();
+        await saveDB(db);
         exportJobCSV(job);
         return res.json({ ok: true, updated: true });
       }
@@ -1010,7 +1007,7 @@ app.post(
         job.loadingUnload.applicants = job.loadingUnload.applicants.filter(
           (u) => u !== req.user.id
         );
-        saveDB();
+        await saveDB(db);
         exportJobCSV(job);
         return res.json({ ok: true, updated: true });
       }
@@ -1035,7 +1032,7 @@ app.post(
       }
     }
 
-    saveDB();
+    await saveDB(db);
     exportJobCSV(job);
     addAudit(
       "apply",
@@ -1119,7 +1116,7 @@ app.post(
   "/jobs/:id/approve",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
     const { userId, approve } = req.body || {};
@@ -1136,7 +1133,7 @@ app.post(
     job.rejected = job.rejected.filter((u) => u !== userId);
     if (approve) job.approved.push(userId);
     else job.rejected.push(userId);
-    saveDB();
+    await saveDB(db);
     exportJobCSV(job);
     addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
     res.json({ ok: true });
@@ -1180,7 +1177,7 @@ app.post(
   "/jobs/:id/loading/mark",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
     const { userId, present } = req.body || {};
@@ -1205,7 +1202,7 @@ app.post(
       p.delete(userId);
     }
     job.loadingUnload.participants = [...p];
-    saveDB();
+    await saveDB(db);
     exportJobCSV(job);
     addAudit("lu_mark", { jobId: job.id, userId, present }, req);
     res.json({ ok: true, participants: job.loadingUnload.participants });
@@ -1217,7 +1214,7 @@ app.post(
   "/jobs/:id/attendance/mark",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
@@ -1229,7 +1226,7 @@ app.post(
 
     if (clear === true) {
       delete job.attendance[userId];
-      saveDB();
+      await saveDB(db);
       exportJobCSV(job);
       addAudit("attendance_clear", { jobId: job.id, userId }, req);
       return res.json({ ok: true, record: null });
@@ -1251,7 +1248,7 @@ app.post(
     }
 
     job.attendance[userId] = rec;
-    saveDB();
+    await saveDB(db);
     exportJobCSV(job);
     addAudit("attendance_mark", { jobId: job.id, userId, inAt, outAt }, req);
 
@@ -1269,7 +1266,7 @@ app.post(
   "/jobs/:id/start",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
     job.events = job.events || {};
@@ -1279,7 +1276,7 @@ app.post(
         startedAt: job.events.startedAt,
       });
     job.events.startedAt = dayjs().toISOString();
-    saveDB();
+    await saveDB(db);
     addAudit("start_event", { jobId: job.id }, req);
     res.json({ ok: true, startedAt: job.events.startedAt });
   }
@@ -1289,26 +1286,26 @@ app.post(
   "/jobs/:id/end",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
     job.events = job.events || {};
     job.events.endedAt = dayjs().toISOString();
-    saveDB();
+    await saveDB(db);
     exportJobCSV(job);
     addAudit("end_event", { jobId: job.id }, req);
     res.json({ ok: true, endedAt: job.events.endedAt });
   }
 );
 
-function handleReset(req, res) {
+async function handleReset(req, res) {
   const job = db.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   const keepAttendance = !!req.body?.keepAttendance;
   job.events = { startedAt: null, endedAt: null, scanner: null };
   if (!keepAttendance) job.attendance = {};
   else job.attendance = job.attendance || {};
-  saveDB();
+  await saveDB(db);
   exportJobCSV(job);
   addAudit("reset_event", { jobId: job.id, keepAttendance }, req);
   const status = computeStatus(job);
@@ -1372,7 +1369,7 @@ app.post(
   }
 );
 
-app.post("/scan", authMiddleware, requireRole("pm", "admin"), (req, res) => {
+app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const { token, scannerLat, scannerLng } = req.body || {};
   if (!token) return res.status(400).json({ error: "missing_token" });
 
@@ -1428,7 +1425,7 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), (req, res) => {
   } else {
     job.attendance[payload.u].out = now.toISOString();
   }
-  saveDB();
+  await saveDB(db);
   exportJobCSV(job);
   addAudit(
     "scan_" + payload.dir,
@@ -1487,8 +1484,9 @@ app.get(
   }
 );
 
-app.post("/__reset", (req, res) => {
-  db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
+app.post("/__reset", async (req, res) => {
+  // Reload from storage (PG/file) — does not clear PG content
+  db = await loadDB();
   res.json({ ok: true });
 });
 app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -1502,7 +1500,7 @@ app.post(
   "/jobs/:id/scanner/heartbeat",
   authMiddleware,
   requireRole("pm", "admin"),
-  (req, res) => {
+  async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
     if (!job.events?.startedAt)
@@ -1513,7 +1511,7 @@ app.post(
     if (!isValidCoord(latN, lngN))
       return res.status(400).json({ error: "scanner_location_required" });
     setScannerLocation(job, latN, lngN);
-    saveDB();
+    await saveDB(db);
     addAudit(
       "scanner_heartbeat",
       { jobId: job.id, lat: latN, lng: lngN },
