@@ -12,8 +12,8 @@ export default function Header({ user, setUser }) {
   }
 
   const role = user?.role || "";
-  const isPMAdmin = role === "pm" || role === "admin";
-  // Back-compat: show "My Jobs" to classic "part-timer" AND new tiers
+  const isPMAdmin = role === "admin";
+  // Back-compat: show "My Jobs" to classic "part-timer" AND new tiers role === "pm" || 
   const isPartTimer = role === "junior" || role === "senior" || role === "part-timer";
 
   return (
