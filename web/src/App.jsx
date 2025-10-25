@@ -69,6 +69,9 @@ export default function App() {
     if (path === "payments") return <Payments navigate={navigate} user={user} />;
 
     /* -------- Admin / Wages -------- */
+    if (path === "admin-users" || path === "users") {
+  return <AdminUsers user={user} />;
+}
     // AdminUsers was removed. Keep legacy routes but redirect them to Wages.
     if (path === "wages" || path === "admin-users" || path === "users" || path === "users-audit") {
       return <Admin navigate={navigate} user={user} />;
