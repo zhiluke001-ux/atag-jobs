@@ -32,6 +32,7 @@ export default function Header({ user, setUser }) {
             <>
               <a href="#/wages">Wages</a>
               <a href="#/admin-users">User Management</a>
+              <a href="#/admin-audit">Audit Log</a>
             </>
           )}
         </nav>
@@ -99,6 +100,8 @@ export default function Header({ user, setUser }) {
                   {isPMAdmin && (
                     <>
                       <a className="btn" href="#/wages" onClick={() => setMenuOpen(false)}>Wages</a>
+                      <a className="btn" href="#/admin-users" onClick={() => setMenuOpen(false)}>Users Management</a>
+                      <a className="btn" href="#/admin-audit" onClick={() => setMenuOpen(false)}>Audit Log</a>
                     </>
                   )}
                 </div>
