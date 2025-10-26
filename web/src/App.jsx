@@ -15,6 +15,7 @@ import PMJobDetails from "./pages/PMJobDetails";
 import Admin from "./pages/Admin"; // Wages
 import Scanner from "./components/Scanner";
 import AdminUsers from "./pages/AdminUsers"; // NE
+import AdminAudit from "./pages/AdminAudit";
 
 /* ---------- Auth ---------- */
 import Login from "./pages/Login";
