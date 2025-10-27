@@ -11,7 +11,7 @@ import { fileURLToPath } from "url";
 import { createWriteStream } from "fs";
 import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
-import webpush from "web-push";              // <-- NEW
+import webpush from "web-push";              // Web Push
 import { loadDB, saveDB } from "./storage.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -83,7 +83,7 @@ function isValidCoord(lat, lng) {
 function haversineMeters(lat1, lng1, lat2, lng2) {
   const R = 6371000;
   const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
+  const dLng = toRad(lat2 - lng1);
   const a =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRad(lat1)) *
@@ -200,13 +200,13 @@ function paySummaryFromRate(rate = {}) {
   return "See details";
 }
 
-// ===== Scheduled hours helpers (to drive hourly pay from job window) =====
+// ===== Scheduled hours helpers =====
 function hoursBetweenISO(startISO, endISO) {
   if (!startISO || !endISO) return 0;
   const s = dayjs(startISO);
   const e = dayjs(endISO);
   const ms = Math.max(0, e.diff(s, "millisecond"));
-  return ms / 3600000; // hours float
+  return ms / 3600000;
 }
 function scheduledHours(job) {
   return Number(hoursBetweenISO(job?.startTime, job?.endTime).toFixed(2));
@@ -440,18 +440,16 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY || ""
 );
 
-function pushKey(sub) { return sub && sub.endpoint; }
-
 async function sendPushToSub(sub, payload) {
   try {
     await webpush.sendNotification(sub, JSON.stringify(payload));
     return true;
   } catch (err) {
-    if (err.statusCode === 404 || err.statusCode === 410) return false; // prune gone subs
+    // Prune gone subscriptions
+    if (err.statusCode === 404 || err.statusCode === 410) return false;
     return true;
   }
 }
-
 async function sendPushToUser(userId, payload) {
   const list = db.pushSubs[userId] || [];
   if (!list.length) return;
@@ -463,7 +461,6 @@ async function sendPushToUser(userId, payload) {
   db.pushSubs[userId] = keep;
   await saveDB(db);
 }
-
 function addNotificationFor(userId, item) {
   db.notifications[userId] = db.notifications[userId] || [];
   db.notifications[userId].unshift(item);
@@ -471,12 +468,10 @@ function addNotificationFor(userId, item) {
     db.notifications[userId].length = NOTIF_CAP;
   }
 }
-
 async function notifyUsers(userIds, { title, body, link, type = "info" }) {
   const now = new Date().toISOString();
   const id = "n" + Math.random().toString(36).slice(2, 10);
   const item = { id, time: now, title, body, link, read: false, type };
-
   for (const uid of userIds) {
     addNotificationFor(uid, item);
     // Fire-and-forget push
@@ -557,8 +552,8 @@ app.post("/register", async (req, res) => {
     email,
     username: finalUsername,
     name: name || finalUsername,
-    role: pickedRole,   // part-timer by default
-    grade: "junior",    // default staff grade
+    role: pickedRole,
+    grade: "junior",
     passwordHash,
   };
   db.users.push(newUser);
@@ -671,6 +666,16 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
     req
   );
 
+  // Notify the user about their account update
+  try {
+    await notifyUsers([target.id], {
+      title: "Your account was updated",
+      body: `Role: ${target.role} • Grade: ${target.grade || "junior"}`,
+      link: "/#/",
+      type: "account_update",
+    });
+  } catch {}
+
   res.json({
     ok: true,
     user: {
@@ -689,7 +694,7 @@ app.get(
   "/config/rates",
   authMiddleware,
   requireRole("admin"),
-  (req, res) => {
+  (_req, res) => {
     res.json({
       ...db.config.rates,
       roleRatesDefaults: db.config.roleRatesDefaults,
@@ -718,11 +723,11 @@ app.post(
 );
 
 /* -------------- jobs --------------- */
-app.get("/jobs", (req, res) => {
+app.get("/jobs", (_req, res) => {
   const jobs = db.jobs
     .map((j) => jobPublicView(j))
     .sort((a, b) => dayjs(a.startTime) - dayjs(b.startTime));
-  res.json(req.query.limit ? jobs.slice(0, Number(req.query.limit)) : jobs);
+  res.json(_req.query.limit ? jobs.slice(0, Number(_req.query.limit)) : jobs);
 });
 
 app.get("/jobs/:id", (req, res) => {
@@ -1366,7 +1371,6 @@ app.post(
     const { userId, inAt, outAt, clear } = req.body || {};
     if (!userId) return res.status(400).json({ error: "userId_required" });
 
-    // Ensure container exists
     job.attendance = job.attendance || {};
 
     if (clear === true) {
@@ -1629,7 +1633,7 @@ app.get(
   }
 );
 
-/* ---- Push API endpoints ---- */
+/* ---- Push + Notifications API ---- */
 app.get("/push/public-key", (_req, res) => {
   res.json({ key: process.env.VAPID_PUBLIC_KEY || "" });
 });
@@ -1657,11 +1661,29 @@ app.post("/push/unsubscribe", authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+/* In-app notifications (for the new bell UI) */
+app.get("/notifications", authMiddleware, (req, res) => {
+  const limit = Number(req.query.limit || 100);
+  const onlyUnread = String(req.query.unread || "") === "1";
+  let items = (db.notifications[req.user.id] || []).slice(0, limit);
+  if (onlyUnread) items = items.filter(n => !n.read);
+  res.json(items);
+});
+app.post("/notifications/:id/read", authMiddleware, async (req, res) => {
+  const uid = req.user.id;
+  const list = db.notifications[uid] || [];
+  const n = list.find(x => x.id === req.params.id);
+  if (!n) return res.status(404).json({ error: "not_found" });
+  n.read = true;
+  await saveDB(db);
+  res.json({ ok: true });
+});
+
+/* Legacy endpoints (kept to avoid breaking older clients) */
 app.get("/me/notifications", authMiddleware, (req, res) => {
   const items = (db.notifications[req.user.id] || []).slice(0, Number(req.query.limit || 50));
   res.json({ items });
 });
-
 app.post("/me/notifications/read-all", authMiddleware, async (req, res) => {
   const uid = req.user.id;
   const list = db.notifications[uid] || [];
@@ -1682,7 +1704,6 @@ app.post("/push/test", authMiddleware, requireRole("admin"), async (req, res) =>
 
 /* ---- reset + health ---- */
 app.post("/__reset", async (_req, res) => {
-  // Reload from storage (PG/file) — does not clear PG content
   db = await loadDB();
   res.json({ ok: true });
 });
