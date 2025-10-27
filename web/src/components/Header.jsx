@@ -41,7 +41,6 @@ export default function Header({ user, setUser }) {
 
         {/* Right side: socials + auth + mobile menu toggle */}
         <div className="right-side">
-          <NotificationsBell user={user} />
           {/* Socials */}
           <div className="socials">
             <a href="https://www.facebook.com/atagteambuilding" target="_blank" rel="noreferrer" aria-label="Facebook" className="icon">
@@ -84,6 +83,8 @@ export default function Header({ user, setUser }) {
           >
             Menu
           </button>
+
+         <NotificationsBell user={user} />
         </div>
       </div>
 
