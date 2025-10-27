@@ -1,73 +1,163 @@
-// web/src/components/NotifyBell.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import dayjs from "dayjs";
+import relativeTime from "dayjs/plugin/relativeTime";
 import { apiGet, apiPost } from "../api";
-import { ensurePushEnabled } from "../push";
 
-export default function NotifyBell() {
-  const [items, setItems] = useState([]);
+dayjs.extend(relativeTime);
+
+export default function NotificationsBell({ user }) {
   const [open, setOpen] = useState(false);
-  const unread = items.filter((i) => !i.read).length;
+  const [tab, setTab] = useState("all"); // "all" | "unread"
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const intervalRef = useRef(null);
 
-  async function refresh() {
-    try {
-      const r = await apiGet("/me/notifications?limit=50");
-      setItems(r.items || []);
-    } catch {}
-  }
+  const unreadCount = useMemo(() => items.filter(i => !i.read).length, [items]);
+  const shown = useMemo(() =>
+    tab === "unread" ? items.filter(i => !i.read) : items
+  , [tab, items]);
 
-  async function markAllRead() {
+  // Ask for notification permission once per browser (no SW required for now)
+  useEffect(() => {
+    if (!user) return;
     try {
-      await apiPost("/me/notifications/read-all");
-      await refresh();
+      const KEY = "atag.notif.askOnce";
+      if (typeof window !== "undefined" &&
+          "Notification" in window &&
+          localStorage.getItem(KEY) !== "1" &&
+          Notification.permission === "default") {
+        Notification.requestPermission().finally(() => {
+          localStorage.setItem(KEY, "1");
+        });
+      }
     } catch {}
+  }, [user]);
+
+  async function load(unreadOnly = false) {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const list = await apiGet(`/notifications?limit=100${unreadOnly ? "&unread=1" : ""}`);
+      setItems(list);
+    } catch {}
+    finally { setLoading(false); }
   }
 
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 15000); // simple polling
-    return () => clearInterval(id);
-  }, []);
+    if (!user) return;
+    load(false);
+    // Light polling
+    intervalRef.current = setInterval(() => load(true), 15000);
+    return () => clearInterval(intervalRef.current);
+  }, [user]);
 
-  async function enablePush() {
+  async function markRead(id) {
     try {
-      await ensurePushEnabled();
-      alert("Push enabled on this device ✔");
-    } catch (e) {
-      alert(e.message || "Failed to enable push");
+      await apiPost(`/notifications/${id}/read`, {});
+      setItems(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    } catch {}
+  }
+
+  function go(n) {
+    // mark read and navigate
+    markRead(n.id);
+    if (n.link) {
+      if (n.link.startsWith("/#")) window.location.hash = n.link.slice(2);
+      else window.location.href = n.link;
     }
   }
 
+  if (!user) return null;
+
   return (
     <div style={{ position: "relative" }}>
-      <button className="btn" onClick={() => setOpen((v) => !v)}>
-        🔔 {unread ? <span className="status">{unread}</span> : null}
+      <button
+        className="btn"
+        aria-label="Notifications"
+        onClick={() => setOpen(v => !v)}
+        style={{ position: "relative" }}
+      >
+        🔔
+        {unreadCount > 0 && (
+          <span style={{
+            position: "absolute", top: -4, right: -4,
+            minWidth: 18, height: 18, padding: "0 4px",
+            borderRadius: 999, background: "#ef4444", color: "#fff",
+            fontSize: 12, lineHeight: "18px", textAlign: "center"
+          }}>
+            {unreadCount}
+          </span>
+        )}
       </button>
+
       {open && (
-        <div className="card" style={{ position: "absolute", right: 0, top: 38, width: 360, maxHeight: 420, overflowY: "auto", zIndex: 10 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-            <strong>Notifications</strong>
-            <div>
-              <button className="btn" onClick={refresh}>Refresh</button>{" "}
-              <button className="btn" onClick={markAllRead}>Mark all read</button>{" "}
-              <button className="btn" onClick={enablePush}>Enable push</button>
-            </div>
+        <div
+          className="card"
+          style={{
+            position: "absolute", right: 0, marginTop: 8, width: 420, zIndex: 30,
+            maxHeight: 420, overflow: "auto"
+          }}
+        >
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 8, paddingBottom: 6, borderBottom: "1px solid #eee" }}>
+            <button
+              className="btn"
+              onClick={() => setTab("all")}
+              style={{ background: tab === "all" ? "#111" : "#f5f5f5", color: tab === "all" ? "#fff" : "#111" }}
+            >All</button>
+            <button
+              className="btn"
+              onClick={() => setTab("unread")}
+              style={{ background: tab === "unread" ? "#111" : "#f5f5f5", color: tab === "unread" ? "#fff" : "#111" }}
+            >Unread{unreadCount ? ` (${unreadCount})` : ""}</button>
           </div>
-          {!items.length ? (
-            <div style={{ color: "#666", padding: 8 }}>No notifications yet.</div>
-          ) : (
-            items.map((n) => (
-              <div key={n.id} style={{ borderTop: "1px solid #eee", padding: "8px 4px" }}>
-                <div style={{ fontWeight: 600 }}>{n.title}</div>
-                <div style={{ fontSize: 13, color: "#555" }}>{n.body}</div>
-                {n.link && (
-                  <a href={n.link} style={{ fontSize: 12 }}>Open</a>
-                )}
-                <div style={{ fontSize: 11, color: "#888" }}>{new Date(n.time).toLocaleString()}</div>
+
+          {/* List */}
+          <div style={{ paddingTop: 6 }}>
+            {loading && <div style={{ padding: 10, color: "#666" }}>Loading…</div>}
+            {!loading && shown.length === 0 && (
+              <div style={{ padding: 12, color: "#666" }}>You’re all caught up.</div>
+            )}
+            {shown.map(n => (
+              <div
+                key={n.id}
+                onClick={() => go(n)}
+                style={{
+                  padding: "10px 8px",
+                  borderBottom: "1px solid #f0f0f0",
+                  display: "flex", gap: 10, cursor: "pointer",
+                  background: n.read ? "#fff" : "#f8fafc"
+                }}
+              >
+                <div style={{
+                  width: 36, height: 36, borderRadius: 999,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  border: "1px solid #eee"
+                }}>
+                  {iconFor(n.type)}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600 }}>{n.title}</div>
+                  {n.body ? <div style={{ color: "#444", marginTop: 2 }}>{n.body}</div> : null}
+                  <div style={{ color: "#777", fontSize: 12, marginTop: 4 }}>
+                    {dayjs(n.time).fromNow()}
+                  </div>
+                </div>
               </div>
-            ))
-          )}
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
+}
+
+function iconFor(type) {
+  switch (type) {
+    case "job_created": return "🧰";
+    case "approved":    return "✅";
+    case "rejected":    return "❌";
+    case "account_update": return "👤";
+    default: return "🔔";
+  }
 }
