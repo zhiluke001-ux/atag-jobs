@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 import { createWriteStream } from "fs";
 import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
+import webpush from "web-push";              // <-- NEW
 import { loadDB, saveDB } from "./storage.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,6 +52,11 @@ db.config.roleRatesDefaults = db.config.roleRatesDefaults || {
   senior: { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.senior ?? 30), specificPayment: null, otMultiplier: 0 },
   lead:   { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.lead   ?? 30), specificPayment: null, otMultiplier: 0 },
 };
+
+// Notifications storage (per-user push subs + in-app feed)
+db.pushSubs = db.pushSubs || {};            // { [userId]: [PushSubscription] }
+db.notifications = db.notifications || {};  // { [userId]: [{id,time,title,body,link,read,type}] }
+
 await saveDB(db);
 
 /* ------------ auth / helpers ------------- */
@@ -425,6 +431,60 @@ for (const j of db.jobs) {
 }
 if (adjMutated) await saveDB(db);
 
+/* ---------------- Notifications (feed + web push) ---------------- */
+const NOTIF_CAP = 200;
+
+webpush.setVapidDetails(
+  process.env.VAPID_SUBJECT || "mailto:admin@example.com",
+  process.env.VAPID_PUBLIC_KEY || "",
+  process.env.VAPID_PRIVATE_KEY || ""
+);
+
+function pushKey(sub) { return sub && sub.endpoint; }
+
+async function sendPushToSub(sub, payload) {
+  try {
+    await webpush.sendNotification(sub, JSON.stringify(payload));
+    return true;
+  } catch (err) {
+    if (err.statusCode === 404 || err.statusCode === 410) return false; // prune gone subs
+    return true;
+  }
+}
+
+async function sendPushToUser(userId, payload) {
+  const list = db.pushSubs[userId] || [];
+  if (!list.length) return;
+  const keep = [];
+  for (const sub of list) {
+    const ok = await sendPushToSub(sub, payload);
+    if (ok) keep.push(sub);
+  }
+  db.pushSubs[userId] = keep;
+  await saveDB(db);
+}
+
+function addNotificationFor(userId, item) {
+  db.notifications[userId] = db.notifications[userId] || [];
+  db.notifications[userId].unshift(item);
+  if (db.notifications[userId].length > NOTIF_CAP) {
+    db.notifications[userId].length = NOTIF_CAP;
+  }
+}
+
+async function notifyUsers(userIds, { title, body, link, type = "info" }) {
+  const now = new Date().toISOString();
+  const id = "n" + Math.random().toString(36).slice(2, 10);
+  const item = { id, time: now, title, body, link, read: false, type };
+
+  for (const uid of userIds) {
+    addNotificationFor(uid, item);
+    // Fire-and-forget push
+    sendPushToUser(uid, { title, body, url: link }).catch(() => {});
+  }
+  await saveDB(db);
+}
+
 /* -------------- auth --------------- */
 
 app.post("/login", async (req, res) => {
@@ -747,6 +807,20 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   db.jobs.push(job);
   await saveDB(db);
   addAudit("create_job", { jobId: id, title }, req);
+
+  // Notify part-timers about a new job (doesn't block the response)
+  try {
+    const recipients = (db.users || [])
+      .filter(u => u.role === "part-timer")
+      .map(u => u.id);
+    notifyUsers(recipients, {
+      title: `New job: ${title}`,
+      body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
+      link: `/#/jobs/${id}`,
+      type: "job_new",
+    }).catch(() => {});
+  } catch {}
+
   res.json(job);
 });
 
@@ -1195,6 +1269,18 @@ app.post(
     await saveDB(db);
     exportJobCSV(job);
     addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
+
+    // Notify the affected user about decision
+    try {
+      const msg = approve ? "approved ✅" : "rejected ❌";
+      notifyUsers([userId], {
+        title: `Your application ${msg}`,
+        body: job.title,
+        link: `/#/jobs/${job.id}`,
+        type: approve ? "app_approved" : "app_rejected",
+      }).catch(() => {});
+    } catch {}
+
     res.json({ ok: true });
   }
 );
@@ -1543,7 +1629,59 @@ app.get(
   }
 );
 
-app.post("/__reset", async (req, res) => {
+/* ---- Push API endpoints ---- */
+app.get("/push/public-key", (_req, res) => {
+  res.json({ key: process.env.VAPID_PUBLIC_KEY || "" });
+});
+
+app.post("/push/subscribe", authMiddleware, async (req, res) => {
+  const sub = req.body?.subscription;
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: "bad_subscription" });
+  const uid = req.user.id;
+  const list = db.pushSubs[uid] || [];
+  const exists = new Set(list.map(s => s && s.endpoint));
+  if (!exists.has(sub.endpoint)) list.push(sub);
+  db.pushSubs[uid] = list;
+  await saveDB(db);
+  addAudit("push_subscribe", { userId: uid }, req);
+  res.json({ ok: true });
+});
+
+app.post("/push/unsubscribe", authMiddleware, async (req, res) => {
+  const ep = req.body?.endpoint;
+  const uid = req.user.id;
+  if (!ep) return res.status(400).json({ error: "endpoint_required" });
+  db.pushSubs[uid] = (db.pushSubs[uid] || []).filter(s => (s && s.endpoint) !== ep);
+  await saveDB(db);
+  addAudit("push_unsubscribe", { userId: uid }, req);
+  res.json({ ok: true });
+});
+
+app.get("/me/notifications", authMiddleware, (req, res) => {
+  const items = (db.notifications[req.user.id] || []).slice(0, Number(req.query.limit || 50));
+  res.json({ items });
+});
+
+app.post("/me/notifications/read-all", authMiddleware, async (req, res) => {
+  const uid = req.user.id;
+  const list = db.notifications[uid] || [];
+  for (const it of list) it.read = true;
+  await saveDB(db);
+  res.json({ ok: true });
+});
+
+app.post("/push/test", authMiddleware, requireRole("admin"), async (req, res) => {
+  await notifyUsers([req.user.id], {
+    title: "Test notification",
+    body: "Push is working ✅",
+    link: "/#/",
+    type: "test",
+  });
+  res.json({ ok: true });
+});
+
+/* ---- reset + health ---- */
+app.post("/__reset", async (_req, res) => {
   // Reload from storage (PG/file) — does not clear PG content
   db = await loadDB();
   res.json({ ok: true });
