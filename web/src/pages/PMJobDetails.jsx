@@ -577,7 +577,7 @@ export default function PMJobDetails({ jobId }) {
             {/* End-time + OT display (new rule) */}
             <div className="card" style={{ marginTop: 10, padding: 10, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 8 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                <div><b>Set End Time:</b><br />{fmtDateTime(job.endTime) || "-"}</div>
+                <div><b>Initial End Time:</b><br />{fmtDateTime(job.endTime) || "-"}</div>
                 <div><b>PM Ended At:</b><br />{actualEndDJ ? fmtDateTime(actualEndDJ.toISOString()) : "— (not ended)"}</div>
                 <div>
                   <b>OT (rounded hours):</b><br />
