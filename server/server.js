@@ -816,7 +816,6 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   // Notify part-timers about a new job (doesn't block the response)
   try {
     const recipients = (db.users || [])
-      .filter(u => u.role === "part-timer")
       .map(u => u.id);
     notifyUsers(recipients, {
       title: `New job: ${title}`,
