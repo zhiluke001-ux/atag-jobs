@@ -525,7 +525,7 @@ export default function PMJobDetails({ jobId }) {
 
     // Client-side distance precheck (displayed separately below)
     const applicantLL = extractLatLngFromToken(token);
-    const maxM = Number(job?.scanMaxMeters) || 120; // UI default; server enforces its own
+    const maxM = Number(job?.scanMaxMeters) || 500; // UI default; server enforces its own
     if (applicantLL) {
       const d = haversineMeters(loc, applicantLL);
       if (d != null && d > maxM) {
@@ -636,7 +636,7 @@ export default function PMJobDetails({ jobId }) {
     if (!ll) return null;
     const d = haversineMeters(loc, ll);
     if (d == null) return null;
-    const maxM = Number(job?.scanMaxMeters) || 120;
+    const maxM = Number(job?.scanMaxMeters) || 500;
     return { d, ok: d <= maxM, maxM };
   })();
   const tokenDir = extractDirFromToken(token);
@@ -962,7 +962,7 @@ export default function PMJobDetails({ jobId }) {
               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
                 <ul style={{ margin: 0, paddingLeft: 16 }}>
                   <li>IN marks attendance start. OUT marks end; OT uses whole hours with a 30-min rounding rule.</li>
-                  <li>Distance guard is enforced on device and server. Default limit {Number(job?.scanMaxMeters) || 120} m.</li>
+                  <li>Distance guard is enforced on device and server. Default limit {Number(job?.scanMaxMeters) || 500} m.</li>
                 </ul>
               </div>
             </div>
