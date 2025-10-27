@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { logout } from "../auth";
-import NotifyBell from "./NotifyBell"; 
+import NotificationsBell  from "./NotifyBell"; 
+
 
 export default function Header({ user, setUser }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -40,7 +41,7 @@ export default function Header({ user, setUser }) {
 
         {/* Right side: socials + auth + mobile menu toggle */}
         <div className="right-side">
-          <NotifyBell />
+          <NotificationsBell user={user} />
           {/* Socials */}
           <div className="socials">
             <a href="https://www.facebook.com/atagteambuilding" target="_blank" rel="noreferrer" aria-label="Facebook" className="icon">
