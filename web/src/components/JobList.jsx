@@ -28,7 +28,6 @@ const money = (v) => {
 // ---- Discord/constants ----
 const DISCORD_URL = "https://discord.gg/AwGaCG3W";
 const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
-// Compact button helper to keep actions on a single line without overflowing
 const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
 
 // === EXACTLY MATCH JobDetails helpers ===
@@ -48,7 +47,8 @@ function deriveKind(job) {
     job?.session?.physicalType ||
     (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
+  const mode =
+    job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
   const isVirtual = mode === "virtual" || kind === "virtual";
 
   const resolvedKind = isVirtual
@@ -69,7 +69,6 @@ function deriveKind(job) {
   return { isVirtual, kind: resolvedKind, label };
 }
 function otSuffix(hourlyRM, otRM) {
-  // New OT policy: billed per full hour after event end; show explicit rate if provided.
   if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
   if (hourlyRM) return ` (OT billed hourly after end)`;
   return "";
@@ -130,7 +129,17 @@ function TransportBadges({ job }) {
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {items.map((it, i) => (
-        <span key={i} style={{ background: it.bg, color: it.color, padding: "2px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+        <span
+          key={i}
+          style={{
+            background: it.bg,
+            color: it.color,
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
           {it.text}
         </span>
       ))}
@@ -165,7 +174,8 @@ export default function JobList({
         const applied = Number(j.appliedCount || 0);
         const total = Number(j.headcount || 0);
 
-        const { label, kind, isVirtual } = { ...deriveKind(j), isVirtual: deriveKind(j).kind === "virtual" ? true : false };
+        const kindInfo = deriveKind(j);
+        const { label, kind, isVirtual } = kindInfo;
         const isPhysical = !isVirtual;
 
         // Allowances (for physical transport)
@@ -194,36 +204,48 @@ export default function JobList({
           <div key={j.id} className="card">
             {/* Title + status */}
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
-              <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div className="status">{j.status}</div>
+              </div>
+            </div>
+
+            {/* === Session FIRST (Physical / Virtual) === */}
+            <div style={{ marginTop: 8 }}>
+              <strong>Session</strong>
+              <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
             </div>
 
             {/* Basics */}
             <div style={{ marginTop: 8, lineHeight: 1.55 }}>
               {/* Date / Time side-by-side */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
-                <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
+                <div>
+                  <strong>Date</strong>
+                  <span style={{ marginLeft: 8 }}>{dateLine}</span>
+                </div>
+                <div>
+                  <strong>Time</strong>
+                  <span style={{ marginLeft: 8 }}>{timeLine}</span>
+                </div>
               </div>
 
-              {/* Venue (its own line) */}
+              {/* Venue */}
               <div style={{ marginTop: 6 }}>
                 <strong>Venue</strong>
                 <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
               </div>
 
-              {/* Session (its own line) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Session</strong>
-                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
-              </div>
-
-              {/* === Physical-only options (ALWAYS visible when physical) === */}
+              {/* === Physical-only: Transport options & allowances === */}
               {isPhysical && (
                 <>
                   <div style={{ marginTop: 6 }}>
                     <strong>Transport</strong>
-                    <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
+                    <div style={{ marginTop: 6 }}>
+                      <TransportBadges job={j} />
+                    </div>
                     {pa != null && (
                       <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
                         ATAG Bus allowance: RM{pa} per person (if selected)
@@ -231,20 +253,25 @@ export default function JobList({
                     )}
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
-                    <div>
+                  {/* Physical-only: Early Call (only when enabled) */}
+                  {ec?.enabled && (
+                    <div style={{ marginTop: 6 }}>
                       <div style={{ fontWeight: 600 }}>Early Call</div>
                       <div style={{ color: "#374151" }}>
-                        {ec?.enabled ? `Yes · RM${Number(ec.amount || 0)} (≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
+                        Yes · RM{Number(ec.amount || 0)} (≥ {Number(ec.thresholdHours || 0)}h)
                       </div>
                     </div>
-                    <div>
+                  )}
+
+                  {/* Physical-only: Loading & Unloading (only when enabled) */}
+                  {lu?.enabled && (
+                    <div style={{ marginTop: 6 }}>
                       <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
                       <div style={{ color: "#374151" }}>
-                        {lu?.enabled ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(lu.quota || 0)}` : "No"}
+                        Yes · RM{Number(lu.price || 0)} / helper · Quota {Number(lu.quota || 0)}
                       </div>
                     </div>
-                  </div>
+                  )}
                 </>
               )}
 
@@ -264,7 +291,7 @@ export default function JobList({
                 </div>
               </div>
 
-              {/* Optional extra details (we keep, but physical-only blocks are already above) */}
+              {/* Optional extra details */}
               {showFullDetails && (
                 <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
                   <div>
@@ -275,8 +302,19 @@ export default function JobList({
               )}
 
               {/* Hiring line */}
-              <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-                <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
+              <div
+                style={{
+                  marginTop: 8,
+                  display: "flex",
+                  gap: 16,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <strong>Hiring for</strong>
+                  <span style={{ marginLeft: 8 }}>{total} pax</span>
+                </div>
                 <div style={{ color: "#667085" }}>
                   Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
                 </div>
@@ -284,8 +322,16 @@ export default function JobList({
             </div>
 
             {/* Actions */}
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              {/* Keep Approved + View + Discord in one line, compact, within the card */}
+            <div
+              style={{
+                marginTop: 10,
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
+              {/* Keep Apply + View + Discord compact */}
               <div
                 style={{
                   display: "inline-flex",
@@ -315,7 +361,7 @@ export default function JobList({
                 )}
               </div>
 
-              {/* Manager controls can wrap to a new line if needed */}
+              {/* Manager controls */}
               {canManage && (
                 <>
                   <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
