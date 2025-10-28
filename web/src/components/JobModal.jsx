@@ -418,6 +418,23 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
   /* ---------- Headcount (informational only) ---------- */
   const [headcount, setHeadcount] = useState(String(job?.headcount ?? job?.rolePlan?.junior ?? 0));
 
+  /* ---------- NEW: Early Call ---------- */
+  const [earlyCallEnabled, setEarlyCallEnabled] = useState(!!job?.earlyCall?.enabled);
+  const [earlyCallAmount, setEarlyCallAmount] = useState(
+    String(editing ? job?.earlyCall?.amount ?? 0 : gl?.earlyCallAmount ?? 0)
+  );
+
+  /* ---------- NEW: Loading & Unloading (L&U) ---------- */
+  const [luEnabled, setLuEnabled] = useState(!!(job?.loadingUnload?.enabled || job?.lAndU?.enabled));
+  const [luQuota, setLuQuota] = useState(
+    String(editing ? job?.loadingUnload?.quota ?? 0 : gl?.luQuota ?? 0)
+  );
+  const [luPay, setLuPay] = useState(
+    String(editing ? (job?.loadingUnload?.payPerPerson ?? job?.allowances?.loading?.amount ?? 0) : gl?.luPay ?? 0)
+  );
+  const [luBefore, setLuBefore] = useState(String(editing ? job?.loadingUnload?.minutesBefore ?? 0 : gl?.luBefore ?? 0));
+  const [luAfter, setLuAfter] = useState(String(editing ? job?.loadingUnload?.minutesAfter ?? 0 : gl?.luAfter ?? 0));
+
   /* ---------- time & date ---------- */
   const startInit = job?.startTime ? dayjs(job.startTime) : dayjs();
   const endInit = job?.endTime ? dayjs(job.endTime) : startInit;
@@ -614,7 +631,7 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
           hourlyEnabled: ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? !!hourlyAddon : false,
         },
 
-        // mirrors
+        // mirrors (for back-compat)
         mode: sessionMode,
         sessionMode,
         sessionKind: kind,
@@ -627,6 +644,18 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
         // keep rolePlan for back-compat (not used as caps)
         rolePlan: { junior: 0, senior: 0, lead: 0 },
 
+        // NEW: Early call
+        earlyCall: { enabled: !!earlyCallEnabled, amount: N(earlyCallAmount, 0) },
+
+        // NEW: Loading & Unloading configuration
+        loadingUnload: {
+          enabled: !!luEnabled,
+          quota: N(luQuota, 0),
+          payPerPerson: N(luPay, 0),
+          minutesBefore: N(luBefore, 0),
+          minutesAfter: N(luAfter, 0),
+        },
+
         rate: {
           transportBus: N(parkingAmount, 0),
           transportAllowance: N(parkingAmount, 0),
@@ -636,9 +665,15 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
           ...(physicalType === "hourly_flat"
             ? { flatHourly: { base: N(flatRate, 15), otRatePerHour: N(flatOT, 0) } }
             : {}),
+          // expose LU pay on rate as well for wage calculators (optional)
+          loadingUnloadPay: N(luPay, 0),
         },
 
-        allowances: { ...job?.allowances, parking: { enabled: !!optBus, amount: N(parkingAmount, 0) } },
+        allowances: {
+          ...job?.allowances,
+          parking: { enabled: !!optBus, amount: N(parkingAmount, 0) },
+          loading: { enabled: !!luEnabled, amount: N(luPay, 0) },
+        },
       };
 
       if (editing) {
@@ -753,6 +788,66 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
               <input value={headcount} onChange={(e) => setHeadcount(e.target.value)} inputMode="numeric" style={{ maxWidth: 240 }} />
               <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
                 Target number of people to hire. Everyone can apply — PM/Admin approval is still required for each person.
+              </div>
+            </div>
+
+            {/* NEW: Early Call */}
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Early Call</div>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", alignItems: "center", gap: 12 }}>
+                <label className="check" style={{ whiteSpace: "nowrap" }}>
+                  <input type="checkbox" checked={earlyCallEnabled} onChange={(e) => setEarlyCallEnabled(e.target.checked)} /> Enable
+                </label>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Amount (RM)</div>
+                  <input inputMode="decimal" value={earlyCallAmount} onChange={(e) => setEarlyCallAmount(e.target.value)} disabled={!earlyCallEnabled} />
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  One-off allowance for early reporting (if toggled on).
+                </div>
+              </div>
+            </div>
+
+            {/* NEW: Loading & Unloading */}
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Loading & Unloading (L&U)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", alignItems: "center", gap: 12 }}>
+                <label className="check" style={{ whiteSpace: "nowrap" }}>
+                  <input type="checkbox" checked={luEnabled} onChange={(e) => setLuEnabled(e.target.checked)} /> Enable
+                </label>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Quota (# people)</div>
+                  <input inputMode="numeric" value={luQuota} onChange={(e) => setLuQuota(e.target.value)} disabled={!luEnabled} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Pay per person (RM)</div>
+                  <input inputMode="decimal" value={luPay} onChange={(e) => setLuPay(e.target.value)} disabled={!luEnabled} />
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Minutes before event (optional)</div>
+                  <input
+                    inputMode="numeric"
+                    value={luBefore}
+                    onChange={(e) => setLuBefore(e.target.value)}
+                    disabled={!luEnabled}
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Minutes after event (optional)</div>
+                  <input
+                    inputMode="numeric"
+                    value={luAfter}
+                    onChange={(e) => setLuAfter(e.target.value)}
+                    disabled={!luEnabled}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                Applicants can opt in to L&U during application. PM can confirm participants on the PM page; quota limits how many can be confirmed.
               </div>
             </div>
 
