@@ -1,5 +1,5 @@
 // web/src/components/JobList.jsx
-import React from "react";
+import React, { useMemo, useState } from "react";
 
 /**
  * Props:
@@ -28,10 +28,9 @@ const money = (v) => {
 // ---- Discord/constants ----
 const DISCORD_URL = "https://discord.gg/AwGaCG3W";
 const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
-// Compact button helper to keep actions on a single line without overflowing
 const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
 
-/* === EXACTLY MATCH JobDetails helpers === */
+/* ================= Helpers (must match JobDetails logic) ================= */
 function deriveViewerRank(user) {
   const raw = (
     user?.ptRole || user?.jobRole || user?.rank || user?.tier || user?.level || user?.roleRank || ""
@@ -40,14 +39,6 @@ function deriveViewerRank(user) {
   if (["senior", "sr"].includes(raw)) return "senior";
   return "junior";
 }
-
-/** Resolve session kind:
- * - "virtual"
- * - physical presets: "half_day" | "full_day" | "2d1n" | "3d2n"
- * - hourly variants:
- *   - "hourly_by_role"  -> Hourly, rate depends on role/tier
- *   - "hourly_flat"     -> Hourly, flat backend hourly for everyone
- */
 function deriveKind(job) {
   const kind =
     job?.rate?.sessionKind ||
@@ -76,14 +67,11 @@ function deriveKind(job) {
 
   return { isVirtual, kind: resolvedKind, label };
 }
-
 function otSuffix(hourlyRM, otRM) {
-  // New OT policy: billed per full hour after event end; show explicit rate if provided.
   if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
   if (hourlyRM) return ` (OT billed hourly after end)`;
   return "";
 }
-
 function buildPayForViewer(job, user) {
   const { kind } = deriveKind(job);
   const rank = deriveViewerRank(user);
@@ -129,8 +117,11 @@ function buildPayForViewer(job, user) {
   return "-";
 }
 
-/* ---- Badges ---- */
 function TransportBadges({ job }) {
+  const { isVirtual } = deriveKind(job);
+  if (isVirtual) {
+    return <span style={{ fontSize: 12, color: "#6b7280" }}>Transport selection not required (virtual)</span>;
+  }
   const t = job?.transportOptions || {};
   const items = [
     ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
@@ -148,30 +139,7 @@ function TransportBadges({ job }) {
   );
 }
 
-/* ---- Add-ons builders (Early Call, L&U, Transport allowance) ---- */
-function buildAddonsSummary(job) {
-  const ec = job?.earlyCall || {};
-  const lu = job?.loadingUnload || {};
-  const r  = job?.rate || {};
-
-  // Prefer parkingAllowance first, then generic transportAllowance, then legacy transportBus
-  const paVal = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
-              : Number.isFinite(r.transportAllowance) ? r.transportAllowance
-              : Number.isFinite(r.transportBus) ? r.transportBus
-              : null;
-  const busAllowance = paVal == null ? null : Math.round(Number(paVal));
-
-  const earlyCall = ec?.enabled
-    ? `Yes · RM${Number(ec.amount || 0)}${Number(ec.thresholdHours) ? ` (≥ ${Number(ec.thresholdHours)}h)` : ""}`
-    : "No";
-
-  const luText = lu?.enabled
-    ? `Yes · RM${Number(lu.price || 0)} / helper${Number(lu.quota) ? ` · Quota ${Number(lu.quota)}` : ""}`
-    : "No";
-
-  return { earlyCall, luText, busAllowance };
-}
-
+/* =============================== Component =============================== */
 export default function JobList({
   jobs = [],
   onApply,
@@ -185,174 +153,197 @@ export default function JobList({
   showFullDetails = false,
   viewerUser = null,
 }) {
+  /* ---- New: Mode selector (All / Physical / Virtual) ---- */
+  const [modeFilter, setModeFilter] = useState("all"); // 'all' | 'physical' | 'virtual'
+  const filteredJobs = useMemo(() => {
+    if (!Array.isArray(jobs)) return [];
+    return jobs.filter((j) => {
+      const { isVirtual } = deriveKind(j);
+      if (modeFilter === "all") return true;
+      return modeFilter === "virtual" ? isVirtual : !isVirtual;
+    });
+  }, [jobs, modeFilter]);
+
   return (
-    <div className="grid">
-      {jobs.map((j) => {
-        const my = myStatuses[j.id];
-        const start = new Date(j.startTime);
-        const end = new Date(j.endTime);
+    <>
+      {/* Filter bar */}
+      <div className="card" style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 700 }}>Mode</div>
+        <label><input type="radio" name="modeFilter" checked={modeFilter === "all"} onChange={() => setModeFilter("all")} /> All</label>
+        <label><input type="radio" name="modeFilter" checked={modeFilter === "physical"} onChange={() => setModeFilter("physical")} /> Physical</label>
+        <label><input type="radio" name="modeFilter" checked={modeFilter === "virtual"} onChange={() => setModeFilter("virtual")} /> Virtual</label>
+      </div>
 
-        const dateLine = fmtDateShort(start);
-        const timeLine = `${fmtHourCompact(start)} — ${fmtHourCompact(end)}`;
+      <div className="grid">
+        {filteredJobs.map((j) => {
+          const my = myStatuses[j.id];
+          const start = new Date(j.startTime);
+          const end = new Date(j.endTime);
 
-        const approved = Number(j.approvedCount || 0);
-        const applied = Number(j.appliedCount || 0);
-        const total = Number(j.headcount || 0);
+          const dateLine = fmtDateShort(start);
+          const timeLine = `${fmtHourCompact(start)} — ${fmtHourCompact(end)}`;
 
-        const { label, kind } = deriveKind(j);
-        const { earlyCall, luText, busAllowance } = buildAddonsSummary(j);
+          const approved = Number(j.approvedCount || 0);
+          const applied = Number(j.appliedCount || 0);
+          const total = Number(j.headcount || 0);
 
-        const payForViewer = buildPayForViewer(j, viewerUser);
+          const { label, kind, isVirtual } = deriveKind(j);
+          const pa = (() => {
+            const r = j?.rate || {};
+            const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
+              : Number.isFinite(r.transportAllowance) ? r.transportAllowance
+              : Number.isFinite(r.transportBus) ? r.transportBus
+              : null;
+            return v == null ? null : Math.round(Number(v));
+          })();
 
-        function ApplyArea() {
-          if (!canApply) return null;
-          if (my === "approved") return <button className="btn green" style={COMPACT_BTN} disabled>Approved</button>;
-          if (my === "applied")  return <button className="btn gray"  style={COMPACT_BTN} disabled>Applied</button>;
-          if (my === "rejected") return <button className="btn gray"  style={COMPACT_BTN} disabled>Full</button>;
-          return <button className="btn red" style={COMPACT_BTN} onClick={() => onApply && onApply(j)}>Apply</button>;
-        }
+          const ec = j.earlyCall || {};
+          const lu = j.loadingUnload || {};
+          const payForViewer = buildPayForViewer(j, viewerUser);
 
-        return (
-          <div key={j.id} className="card">
-            {/* Title + status */}
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
-              <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
-            </div>
+          function ApplyArea() {
+            if (!canApply) return null;
+            if (my === "approved") return <button className="btn green" style={COMPACT_BTN} disabled>Approved</button>;
+            if (my === "applied")  return <button className="btn gray"  style={COMPACT_BTN} disabled>Applied</button>;
+            if (my === "rejected") return <button className="btn gray"  style={COMPACT_BTN} disabled>Full</button>;
+            return <button className="btn red" style={COMPACT_BTN} onClick={() => onApply && onApply(j)}>Apply</button>;
+          }
 
-            {/* Basics */}
-            <div style={{ marginTop: 8, lineHeight: 1.55 }}>
-              {/* Date / Time side-by-side */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
-                <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
+          return (
+            <div key={j.id} className="card">
+              {/* Title + status */}
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
+                <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
               </div>
 
-              {/* Venue (its own line) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Venue</strong>
-                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
+              {/* Basics */}
+              <div style={{ marginTop: 8, lineHeight: 1.55 }}>
+                {/* Date / Time side-by-side */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
+                  <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
+                </div>
+
+                {/* Venue */}
+                <div style={{ marginTop: 6 }}>
+                  <strong>Venue</strong>
+                  <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
+                </div>
+
+                {/* Session */}
+                <div style={{ marginTop: 6 }}>
+                  <strong>Session</strong>
+                  <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
+                </div>
+
+                {/* Transport (skip for virtual) */}
+                <div style={{ marginTop: 6 }}>
+                  <strong>Transport</strong>
+                  <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
+                  {!isVirtual && pa != null && (
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                      ATAG Bus allowance: RM{pa} per person (if selected)
+                    </div>
+                  )}
+                </div>
+
+                {/* NEW: Early Call & Loading/Unloading — placed just before Hourly/Pay */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Early Call Allowance</div>
+                    <div style={{ color: "#374151" }}>
+                      {ec?.enabled
+                        ? `Enabled · RM${Number(ec.amount || 0)} / person` + (ec.thresholdHours ? ` · ≥ ${Number(ec.thresholdHours)}h` : "")
+                        : "Disabled"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
+                    <div style={{ color: "#374151" }}>
+                      {lu?.enabled
+                        ? `Enabled · RM${Number(lu.price || 0)} / helper · Quota ${Number(lu.quota || 0)}`
+                        : "Disabled"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pay / Hourly (moved to the bottom, after Early Call & L&U) */}
+                <div style={{ marginTop: 8 }}>
+                  <strong>Pay</strong>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontFamily:
+                        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                      fontSize: 13,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {payForViewer}
+                  </div>
+                </div>
+
+                {showFullDetails && (
+                  <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                    <div>
+                      <strong>Description</strong>
+                      <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hiring line */}
+                <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                  <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
+                  <div style={{ color: "#667085" }}>
+                    Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
+                  </div>
+                </div>
               </div>
 
-              {/* Session (its own line) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Session</strong>
-                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
-              </div>
-
-              {/* Pay (IDENTICAL core logic) */}
-              <div>
-                <strong>Pay</strong>
+              {/* Actions */}
+              <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 <div
                   style={{
-                    marginTop: 6,
-                    fontFamily:
-                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                    fontSize: 13,
-                    lineHeight: 1.5,
+                    display: "inline-flex",
+                    gap: 6,
+                    alignItems: "center",
+                    flexShrink: 0,
+                    minWidth: 0,
+                    maxWidth: "100%",
                   }}
                 >
-                  {payForViewer}
-                </div>
-              </div>
+                  {canApply && <ApplyArea />}
 
-              {/* --- Add-ons summary (compact view; always visible) --- */}
-              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <div>
-                  <strong>Early Call</strong>
-                  <div style={{ marginTop: 4, color: "#374151" }}>{earlyCall}</div>
-                </div>
-                <div>
-                  <strong>Loading &amp; Unloading</strong>
-                  <div style={{ marginTop: 4, color: "#374151" }}>{luText}</div>
-                </div>
-              </div>
+                  <button className="btn" style={COMPACT_BTN} onClick={() => onView && onView(j)}>
+                    View details
+                  </button>
 
-              {/* Transport section + bus allowance note */}
-              <div style={{ marginTop: 8 }}>
-                <strong>Transport</strong>
-                <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
-                {busAllowance != null && (
-                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                    ATAG Bus allowance: RM{busAllowance} per person (if selected)
-                  </div>
+                  {my === "approved" && (
+                    <a
+                      href={DISCORD_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn"
+                      style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
+                    >
+                      Join Discord Channel
+                    </a>
+                  )}
+                </div>
+
+                {canManage && (
+                  <>
+                    <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
+                    <button className="btn red" onClick={() => onDelete && onDelete(j)}>Delete</button>
+                  </>
                 )}
               </div>
-
-              {/* Extra details panel */}
-              {showFullDetails && (
-                <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-                  <div>
-                    <strong>Description</strong>
-                    <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
-                  </div>
-
-                  {/* Repeat add-ons with a bit more context (kept simple) */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <div>
-                      <div style={{ fontWeight: 600 }}>Early Call (detail)</div>
-                      <div style={{ color: "#374151" }}>{earlyCall}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontWeight: 600 }}>Loading &amp; Unloading (detail)</div>
-                      <div style={{ color: "#374151" }}>{luText}</div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Hiring line */}
-              <div style={{ marginTop: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-                <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
-                <div style={{ color: "#667085" }}>
-                  Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
-                </div>
-              </div>
             </div>
-
-            {/* Actions */}
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              {/* Keep Approved + View + Discord in one line, compact, within the card */}
-              <div
-                style={{
-                  display: "inline-flex",
-                  gap: 6,
-                  alignItems: "center",
-                  flexShrink: 0,
-                  minWidth: 0,
-                  maxWidth: "100%",
-                }}
-              >
-                {canApply && <ApplyArea />}
-
-                <button className="btn" style={COMPACT_BTN} onClick={() => onView && onView(j)}>
-                  View details
-                </button>
-
-                {my === "approved" && (
-                  <a
-                    href={DISCORD_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn"
-                    style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
-                  >
-                    Join Discord Channel
-                  </a>
-                )}
-              </div>
-
-              {/* Manager controls can wrap to a new line if needed */}
-              {canManage && (
-                <>
-                  <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
-                  <button className="btn red" onClick={() => onDelete && onDelete(j)}>Delete</button>
-                </>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
