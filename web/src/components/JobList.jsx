@@ -31,7 +31,7 @@ const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000"
 // Compact button helper to keep actions on a single line without overflowing
 const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
 
-// === EXACTLY MATCH JobDetails helpers ===
+/* === EXACTLY MATCH JobDetails helpers === */
 function deriveViewerRank(user) {
   const raw = (
     user?.ptRole || user?.jobRole || user?.rank || user?.tier || user?.level || user?.roleRank || ""
@@ -40,6 +40,14 @@ function deriveViewerRank(user) {
   if (["senior", "sr"].includes(raw)) return "senior";
   return "junior";
 }
+
+/** Resolve session kind:
+ * - "virtual"
+ * - physical presets: "half_day" | "full_day" | "2d1n" | "3d2n"
+ * - hourly variants:
+ *   - "hourly_by_role"  -> Hourly, rate depends on role/tier
+ *   - "hourly_flat"     -> Hourly, flat backend hourly for everyone
+ */
 function deriveKind(job) {
   const kind =
     job?.rate?.sessionKind ||
@@ -68,12 +76,14 @@ function deriveKind(job) {
 
   return { isVirtual, kind: resolvedKind, label };
 }
+
 function otSuffix(hourlyRM, otRM) {
   // New OT policy: billed per full hour after event end; show explicit rate if provided.
   if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
   if (hourlyRM) return ` (OT billed hourly after end)`;
   return "";
 }
+
 function buildPayForViewer(job, user) {
   const { kind } = deriveKind(job);
   const rank = deriveViewerRank(user);
@@ -119,7 +129,7 @@ function buildPayForViewer(job, user) {
   return "-";
 }
 
-// badges unchanged
+/* ---- Badges ---- */
 function TransportBadges({ job }) {
   const t = job?.transportOptions || {};
   const items = [
@@ -136,6 +146,30 @@ function TransportBadges({ job }) {
       ))}
     </div>
   );
+}
+
+/* ---- Add-ons builders (Early Call, L&U, Transport allowance) ---- */
+function buildAddonsSummary(job) {
+  const ec = job?.earlyCall || {};
+  const lu = job?.loadingUnload || {};
+  const r  = job?.rate || {};
+
+  // Prefer parkingAllowance first, then generic transportAllowance, then legacy transportBus
+  const paVal = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
+              : Number.isFinite(r.transportAllowance) ? r.transportAllowance
+              : Number.isFinite(r.transportBus) ? r.transportBus
+              : null;
+  const busAllowance = paVal == null ? null : Math.round(Number(paVal));
+
+  const earlyCall = ec?.enabled
+    ? `Yes · RM${Number(ec.amount || 0)}${Number(ec.thresholdHours) ? ` (≥ ${Number(ec.thresholdHours)}h)` : ""}`
+    : "No";
+
+  const luText = lu?.enabled
+    ? `Yes · RM${Number(lu.price || 0)} / helper${Number(lu.quota) ? ` · Quota ${Number(lu.quota)}` : ""}`
+    : "No";
+
+  return { earlyCall, luText, busAllowance };
 }
 
 export default function JobList({
@@ -166,17 +200,8 @@ export default function JobList({
         const total = Number(j.headcount || 0);
 
         const { label, kind } = deriveKind(j);
-        const pa = (() => {
-          const r = j?.rate || {};
-          const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
-            : Number.isFinite(r.transportAllowance) ? r.transportAllowance
-            : Number.isFinite(r.transportBus) ? r.transportBus
-            : null;
-          return v == null ? null : Math.round(Number(v));
-        })();
+        const { earlyCall, luText, busAllowance } = buildAddonsSummary(j);
 
-        const ec = j.earlyCall || {};
-        const lu = j.loadingUnload || {};
         const payForViewer = buildPayForViewer(j, viewerUser);
 
         function ApplyArea() {
@@ -215,7 +240,7 @@ export default function JobList({
                 <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
               </div>
 
-              {/* Pay (IDENTICAL to JobDetails.jsx) */}
+              {/* Pay (IDENTICAL core logic) */}
               <div>
                 <strong>Pay</strong>
                 <div
@@ -231,45 +256,53 @@ export default function JobList({
                 </div>
               </div>
 
+              {/* --- Add-ons summary (compact view; always visible) --- */}
+              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div>
+                  <strong>Early Call</strong>
+                  <div style={{ marginTop: 4, color: "#374151" }}>{earlyCall}</div>
+                </div>
+                <div>
+                  <strong>Loading &amp; Unloading</strong>
+                  <div style={{ marginTop: 4, color: "#374151" }}>{luText}</div>
+                </div>
+              </div>
+
+              {/* Transport section + bus allowance note */}
+              <div style={{ marginTop: 8 }}>
+                <strong>Transport</strong>
+                <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
+                {busAllowance != null && (
+                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                    ATAG Bus allowance: RM{busAllowance} per person (if selected)
+                  </div>
+                )}
+              </div>
+
+              {/* Extra details panel */}
               {showFullDetails && (
-                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
                   <div>
                     <strong>Description</strong>
                     <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
                   </div>
 
-                  <div>
-                    <strong>Transport</strong>
-                    <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
-                    {pa != null && (
-                      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                        ATAG Bus allowance: RM{pa} per person (if selected)
-                      </div>
-                    )}
-                  </div>
-
-                  {kind !== "virtual" && (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <div>
-                        <div style={{ fontWeight: 600 }}>Early Call</div>
-                        <div style={{ color: "#374151" }}>
-                          {ec?.enabled ? `Yes · RM${Number(ec.amount || 0)} (≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
-                        <div style={{ color: "#374151" }}>
-                          {lu?.enabled ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(lu.quota || 0)}` : "No"}
-                        </div>
-                      </div>
+                  {/* Repeat add-ons with a bit more context (kept simple) */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Early Call (detail)</div>
+                      <div style={{ color: "#374151" }}>{earlyCall}</div>
                     </div>
-                  )}
-                  {/* removed duplicate Pay block to avoid "multiple pay" */}
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Loading &amp; Unloading (detail)</div>
+                      <div style={{ color: "#374151" }}>{luText}</div>
+                    </div>
+                  </div>
                 </div>
               )}
 
               {/* Hiring line */}
-              <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ marginTop: 10, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
                 <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
                 <div style={{ color: "#667085" }}>
                   Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
