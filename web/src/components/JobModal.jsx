@@ -1,915 +1,339 @@
-// web/src/components/JobModal.jsx
-import React, { useRef, useState, memo } from "react";
-import dayjs from "dayjs";
-import { apiPost, apiPatch } from "../api";
+// web/src/components/JobList.jsx
+import React from "react";
 
-/* ---------- helpers ---------- */
-const N = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
-const GLOBAL_KEY = "atag.globalWageDefaults.v2";
-
-function loadGlobalDefaults() {
-  try {
-    const raw = localStorage.getItem(GLOBAL_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+/**
+ * Props:
+ * - jobs: []
+ * - onApply(job), onView(job)
+ * - canApply: boolean
+ * - myStatuses?: { [jobId]: 'applied'|'approved'|'rejected' }
+ * - canManage?: boolean
+ * - onEdit?(job), onDelete?(job)
+ * - loading?: boolean
+ * - showFullDetails?: boolean
+ * - viewerUser?: object
+ */
+function fmtDateShort(d) { return d.toLocaleDateString("en-US"); }
+function fmtHourCompact(d) {
+  const h = d.toLocaleTimeString("en-US", { hour: "numeric", hour12: true });
+  return h.replace(" ", "");
 }
 
-function combineLocal(dateStr, timeStr) {
-  if (!dateStr || !timeStr) return null;
-  const isoLocal = `${dateStr}T${timeStr}`;
-  const d = dayjs(isoLocal);
-  return d.isValid() ? d.toISOString() : null;
-}
-
-const DEFAULT_END_BY_TYPE = {
-  virtual: (startDate) => startDate,
-  half_day: (startDate) => startDate,
-  full_day: (startDate) => startDate,
-  "2d1n": (startDate) => dayjs(startDate).add(1, "day").format("YYYY-MM-DD"),
-  "3d2n": (startDate) => dayjs(startDate).add(2, "day").format("YYYY-MM-DD"),
-  hourly_by_role: (startDate) => startDate,
-  hourly_flat: (startDate) => startDate,
+const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
+const money = (v) => {
+  const n = num(v);
+  return Number.isFinite(n) && n > 0 ? `RM${n % 1 === 0 ? n : n.toFixed(2)}` : null;
 };
 
-/* =========================================================
-   Hoisted, stable subcomponents (prevents remount/focus loss)
-   ========================================================= */
+// ---- Discord/constants ----
+const DISCORD_URL = "https://discord.gg/AwGaCG3W";
+const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
+// Compact button helper to keep actions on a single line without overflowing
+const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
 
-const DatesBlock = memo(function DatesBlock({
-  sessionMode,
-  physicalType,
-  dateStart,
-  dateEnd,
-  timeStart,
-  timeEnd,
-  dateStartRef,
-  dateEndRef,
-  timeStartRef,
-  timeEndRef,
-}) {
-  const kind = sessionMode === "virtual" ? "virtual" : physicalType;
-  const singleDate = ["virtual", "half_day", "full_day", "hourly_by_role", "hourly_flat"].includes(kind);
+// === EXACTLY MATCH JobDetails helpers ===
+function deriveViewerRank(user) {
+  const raw = (
+    user?.ptRole || user?.jobRole || user?.rank || user?.tier || user?.level || user?.roleRank || ""
+  ).toString().toLowerCase();
+  if (["lead", "leader", "supervisor", "captain"].includes(raw)) return "lead";
+  if (["senior", "sr"].includes(raw)) return "senior";
+  return "junior";
+}
+function deriveKind(job) {
+  const kindCandidate =
+    job?.rate?.sessionKind ||
+    job?.sessionKind ||
+    job?.physicalSubtype ||
+    job?.session?.physicalType ||
+    (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  return (
-    <div className="card" style={{ padding: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Date & Time</div>
+  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kindCandidate === "virtual" ? "virtual" : "physical");
+  const isVirtual = mode === "virtual" || kindCandidate === "virtual";
 
-      <div style={{ display: "grid", gridTemplateColumns: singleDate ? "1fr" : "1fr 1fr", gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
-            {singleDate ? "Date" : "Start Date"}
-          </div>
-          <input ref={dateStartRef} type="date" defaultValue={dateStart} />
-        </div>
+  const resolvedKind = isVirtual
+    ? "virtual"
+    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kindCandidate)
+      ? kindCandidate
+      : "half_day";
 
-        {!singleDate && (
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>End Date</div>
-            <input ref={dateEndRef} type="date" defaultValue={dateEnd} />
-          </div>
-        )}
-      </div>
+  const label =
+    resolvedKind === "virtual" ? "Virtual"
+      : resolvedKind === "half_day" ? "Physical — Half Day"
+      : resolvedKind === "full_day" ? "Physical — Full Day"
+      : resolvedKind === "2d1n" ? "Physical — 2D1N"
+      : resolvedKind === "3d2n" ? "Physical — 3D2N"
+      : resolvedKind === "hourly_by_role" ? "Physical — Hourly (by role)"
+      : "Physical — Backend (flat hourly)";
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Start Time</div>
-          <input ref={timeStartRef} type="time" defaultValue={timeStart} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>End Time</div>
-          <input ref={timeEndRef} type="time" defaultValue={timeEnd} />
-        </div>
-      </div>
+  return { isVirtual, kind: resolvedKind, label };
+}
+function otSuffix(hourlyRM, otRM) {
+  // New OT policy: billed per full hour after event end; show explicit rate if provided.
+  if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
+  if (hourlyRM) return ` (OT billed hourly after end)`;
+  return "";
+}
+function buildPayForViewer(job, user) {
+  const { kind } = deriveKind(job);
+  const rank = deriveViewerRank(user);
+  const tr = job?.rate?.tierRates || job?.roleRates || {};
+  const tier = tr?.[rank] || {};
+  const flat = job?.rate?.flatHourly || null;
 
-      <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-        OT is counted for every full hour after the scheduled <b>End Time</b>.
-      </div>
-    </div>
-  );
-});
-
-const HourlySimpleGrid = memo(function HourlySimpleGrid({
-  title,
-  hrJr,
-  setHrJr,
-  hrJrOT,
-  setHrJrOT,
-  hrSr,
-  setHrSr,
-  hrSrOT,
-  setHrSrOT,
-  hrLead,
-  setHrLead,
-  hrLeadOT,
-  setHrLeadOT,
-}) {
-  return (
-    <div className="card" style={{ padding: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: 8,
-          fontSize: 12,
-          color: "#6b7280",
-          marginBottom: 4,
-        }}
-      >
-        <div>Role</div>
-        <div>Rate (RM/hr)</div>
-        <div>OT Rate (RM/hr)</div>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Junior</div>
-        <input value={hrJr} onChange={(e) => setHrJr(e.target.value)} inputMode="decimal" />
-        <input value={hrJrOT} onChange={(e) => setHrJrOT(e.target.value)} inputMode="decimal" />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Senior</div>
-        <input value={hrSr} onChange={(e) => setHrSr(e.target.value)} inputMode="decimal" />
-        <input value={hrSrOT} onChange={(e) => setHrSrOT(e.target.value)} inputMode="decimal" />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Lead Host</div>
-        <input value={hrLead} onChange={(e) => setHrLead(e.target.value)} inputMode="decimal" />
-        <input value={hrLeadOT} onChange={(e) => setHrLeadOT(e.target.value)} inputMode="decimal" />
-      </div>
-    </div>
-  );
-});
-
-const FlatHourlyBlock = memo(function FlatHourlyBlock({ flatRate, setFlatRate, flatOT, setFlatOT }) {
-  return (
-    <div className="card" style={{ padding: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Backend (flat hourly for everyone)</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
-        <div>Rate (RM/hr)</div>
-        <div>OT Rate (RM/hr)</div>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <input value={flatRate} onChange={(e) => setFlatRate(e.target.value)} inputMode="decimal" />
-        <input value={flatOT} onChange={(e) => setFlatOT(e.target.value)} inputMode="decimal" />
-      </div>
-      <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-        Everyone is paid the same hourly and OT rate regardless of role.
-      </div>
-    </div>
-  );
-});
-
-const PaymentBlock = memo(function PaymentBlock({
-  sessionMode,
-  physicalType,
-  // hourly by role
-  hrJr,
-  setHrJr,
-  hrJrOT,
-  setHrJrOT,
-  hrSr,
-  setHrSr,
-  hrSrOT,
-  setHrSrOT,
-  hrLead,
-  setHrLead,
-  hrLeadOT,
-  setHrLeadOT,
-  // flat hourly
-  flatRate,
-  setFlatRate,
-  flatOT,
-  setFlatOT,
-  // session prices
-  pHalfJr,
-  setPHalfJr,
-  pHalfSr,
-  setPHalfSr,
-  pHalfLead,
-  setPHalfLead,
-  pFullJr,
-  setPFullJr,
-  pFullSr,
-  setPFullSr,
-  pFullLead,
-  setPFullLead,
-  p2d1nJr,
-  setP2d1nJr,
-  p2d1nSr,
-  setP2d1nSr,
-  p2d1nLead,
-  setP2d1nLead,
-  p3d2nJr,
-  setP3d2nJr,
-  p3d2nSr,
-  setP3d2nSr,
-  p3d2nLead,
-  setP3d2nLead,
-  // hourly add-on
-  hourlyAddon,
-  setHourlyAddon,
-}) {
-  if (sessionMode === "virtual") {
-    return (
-      <HourlySimpleGrid
-        title="Hourly (Virtual)"
-        hrJr={hrJr}
-        setHrJr={setHrJr}
-        hrJrOT={hrJrOT}
-        setHrJrOT={setHrJrOT}
-        hrSr={hrSr}
-        setHrSr={setHrSr}
-        hrSrOT={hrSrOT}
-        setHrSrOT={setHrSrOT}
-        hrLead={hrLead}
-        setHrLead={setHrLead}
-        hrLeadOT={hrLeadOT}
-        setHrLeadOT={setHrLeadOT}
-      />
-    );
+  if (kind === "hourly_flat") {
+    const base = money(flat?.base ?? tier.base);
+    const ot   = money(flat?.otRatePerHour);
+    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    return "-";
   }
 
-  if (physicalType === "hourly_by_role") {
-    return (
-      <HourlySimpleGrid
-        title="Hourly (by role)"
-        hrJr={hrJr}
-        setHrJr={setHrJr}
-        hrJrOT={hrJrOT}
-        setHrJrOT={setHrJrOT}
-        hrSr={hrSr}
-        setHrSr={setHrSr}
-        hrSrOT={hrSrOT}
-        setHrSrOT={setHrSrOT}
-        hrLead={hrLead}
-        setHrLead={setHrLead}
-        hrLeadOT={hrLeadOT}
-        setHrLeadOT={setHrLeadOT}
-      />
-    );
+  if (kind === "virtual" || kind === "hourly_by_role") {
+    const base = money(tier.base);
+    const ot   = money(tier.otRatePerHour);
+    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    return "-";
   }
 
-  if (physicalType === "hourly_flat") {
-    return <FlatHourlyBlock flatRate={flatRate} setFlatRate={setFlatRate} flatOT={flatOT} setFlatOT={setFlatOT} />;
-  }
-
-  // session-based
-  const showHalf = physicalType === "half_day";
-  const showFull = physicalType === "full_day";
-  const show2d1n = physicalType === "2d1n";
-  const show3d2n = physicalType === "3d2n";
-
-  return (
-    <div className="card" style={{ padding: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Session payment (Physical)</div>
-
-      {showHalf && (
-        <div>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>Half Day (per person)</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-              <input value={pHalfJr} onChange={(e) => setPHalfJr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-              <input value={pHalfSr} onChange={(e) => setPHalfSr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-              <input value={pHalfLead} onChange={(e) => setPHalfLead(e.target.value)} inputMode="decimal" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showFull && (
-        <div>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>Full Day (per person)</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-              <input value={pFullJr} onChange={(e) => setPFullJr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-              <input value={pFullSr} onChange={(e) => setPFullSr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-              <input value={pFullLead} onChange={(e) => setPFullLead(e.target.value)} inputMode="decimal" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {show2d1n && (
-        <div>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>2D1N (per person)</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-              <input value={p2d1nJr} onChange={(e) => setP2d1nJr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-              <input value={p2d1nSr} onChange={(e) => setP2d1nSr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-              <input value={p2d1nLead} onChange={(e) => setP2d1nLead(e.target.value)} inputMode="decimal" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {show3d2n && (
-        <div>
-          <div style={{ marginBottom: 8, fontWeight: 600 }}>3D2N (per person)</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-              <input value={p3d2nJr} onChange={(e) => setP3d2nJr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-              <input value={p3d2nSr} onChange={(e) => setP3d2nSr(e.target.value)} inputMode="decimal" />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-              <input value={p3d2nLead} onChange={(e) => setP3d2nLead(e.target.value)} inputMode="decimal" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Optional hourly add-on for session variants */}
-      <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", gap: 10, alignItems: "center" }}>
-        <input id="hourlyToggle" type="checkbox" checked={hourlyAddon} onChange={(e) => setHourlyAddon(e.target.checked)} />
-        <label htmlFor="hourlyToggle" style={{ userSelect: "none" }}>
-          Enable hourly add-on (in addition to session price)
-        </label>
-      </div>
-
-      {hourlyAddon && (
-        <div className="card" style={{ marginTop: 12, padding: 12, background: "#f8fafc" }}>
-          <HourlySimpleGrid
-            title="Hourly add-on (Physical)"
-            hrJr={hrJr}
-            setHrJr={setHrJr}
-            hrJrOT={hrJrOT}
-            setHrJrOT={setHrJrOT}
-            hrSr={hrSr}
-            setHrSr={setHrSr}
-            hrSrOT={hrSrOT}
-            setHrSrOT={setHrSrOT}
-            hrLead={hrLead}
-            setHrLead={setHrLead}
-            hrLeadOT={hrLeadOT}
-            setHrLeadOT={setHrLeadOT}
-          />
-        </div>
-      )}
-    </div>
-  );
-});
-
-/* =========================
-   Main Component: JobModal
-   ========================= */
-export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
-  if (!open) return null;
-  const editing = !!job?.id;
-
-  /* -------- inference (back-compat) -------- */
-  const sessionKindFromRate = job?.rate?.sessionKind;
-  const inferMode = () => {
-    if (sessionKindFromRate === "virtual") return "virtual";
-    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(sessionKindFromRate)) return "physical";
-    return job?.session?.mode || job?.sessionMode || job?.mode || "virtual";
+  const pick = (k) => {
+    if (k === "half_day") return tier?.halfDay ?? tier?.specificPayment ?? null;
+    if (k === "full_day") return tier?.fullDay ?? tier?.specificPayment ?? null;
+    if (k === "2d1n")     return tier?.twoD1N ?? tier?.specificPayment ?? null;
+    if (k === "3d2n")     return tier?.threeD2N ?? tier?.specificPayment ?? null;
+    return null;
   };
-  const inferPhysType = () => {
-    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(sessionKindFromRate)) return sessionKindFromRate;
-    const legacy = job?.session?.physicalType || job?.physicalType || job?.physicalSubtype;
-    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy) ? legacy : "half_day";
-  };
+  const sessionRM = money(pick(kind));
+  const hasAddon =
+    job?.session?.hourlyEnabled ||
+    job?.physicalHourlyEnabled ||
+    tier?.payMode === "specific_plus_hourly";
+  const base = money(tier.base);
+  const ot   = money(tier.otRatePerHour);
 
-  /* ---------- base fields ---------- */
-  const [title, setTitle] = useState(job?.title || "");
-  const [venue, setVenue] = useState(job?.venue || "");
-  const [description, setDescription] = useState(job?.description || "");
-
-  const [sessionMode, setSessionMode] = useState(inferMode());
-  const [physicalType, setPhysicalType] = useState(inferPhysType());
-
-  /* ---------- transport ---------- */
-  const gl = loadGlobalDefaults();
-  const [optBus, setOptBus] = useState(job?.transportOptions?.bus !== false);
-  const [optOwn, setOptOwn] = useState(job?.transportOptions?.own !== false);
-  const [parkingAmount, setParkingAmount] = useState(
-    String(
-      editing
-        ? job?.allowances?.parking?.amount ?? job?.rate?.transportAllowance ?? job?.rate?.transportBus ?? 0
-        : gl?.parkingAllowance ?? 0
-    )
-  );
-
-  /* ---------- Headcount (informational only) ---------- */
-  const [headcount, setHeadcount] = useState(String(job?.headcount ?? job?.rolePlan?.junior ?? 0));
-
-  /* ---------- NEW: Early Call ---------- */
-  const [earlyCallEnabled, setEarlyCallEnabled] = useState(!!job?.earlyCall?.enabled);
-  const [earlyCallAmount, setEarlyCallAmount] = useState(
-    String(editing ? job?.earlyCall?.amount ?? 0 : gl?.earlyCallAmount ?? 0)
-  );
-
-  /* ---------- NEW: Loading & Unloading (L&U) ---------- */
-  const [luEnabled, setLuEnabled] = useState(!!(job?.loadingUnload?.enabled || job?.lAndU?.enabled));
-  const [luQuota, setLuQuota] = useState(
-    String(editing ? job?.loadingUnload?.quota ?? 0 : gl?.luQuota ?? 0)
-  );
-  const [luPay, setLuPay] = useState(
-    String(editing ? (job?.loadingUnload?.payPerPerson ?? job?.allowances?.loading?.amount ?? 0) : gl?.luPay ?? 0)
-  );
-  const [luBefore, setLuBefore] = useState(String(editing ? job?.loadingUnload?.minutesBefore ?? 0 : gl?.luBefore ?? 0));
-  const [luAfter, setLuAfter] = useState(String(editing ? job?.loadingUnload?.minutesAfter ?? 0 : gl?.luAfter ?? 0));
-
-  /* ---------- time & date ---------- */
-  const startInit = job?.startTime ? dayjs(job.startTime) : dayjs();
-  const endInit = job?.endTime ? dayjs(job.endTime) : startInit;
-
-  const [dateStart] = useState(startInit.format("YYYY-MM-DD"));
-  const [timeStart] = useState(startInit.format("HH:mm"));
-  const [dateEnd] = useState(endInit.format("YYYY-MM-DD"));
-  const [timeEnd] = useState(endInit.format("HH:mm"));
-
-  // Uncontrolled refs (keep native pickers open)
-  const dateStartRef = useRef(null);
-  const timeStartRef = useRef(null);
-  const dateEndRef = useRef(null);
-  const timeEndRef = useRef(null);
-
-  /* ---------- pay state ---------- */
-  // hardcoded fallbacks if no global defaults stored
-  const defaultsHourly = { jr: "15", sr: "20", lead: "25" };
-  const defaultsHalf = { jr: "60", sr: "80", lead: "100" };
-  const defaultsFull = { jr: "120", sr: "160", lead: "200" };
-  const defaults2d1n = { jr: "300", sr: "400", lead: "500" };
-  const defaults3d2n = { jr: "450", sr: "600", lead: "750" };
-
-  const tr = job?.rate?.tierRates || {};
-  const gHr = gl?.hourly_by_role || {};
-  const gFlat = gl?.hourly_flat || {};
-  const gSess = gl?.session || {};
-
-  // Hourly (role-based): Rate + OT Rate
-  const [hrJr, setHrJr] = useState(String(editing ? tr.junior?.base ?? defaultsHourly.jr : gHr.junior?.base ?? defaultsHourly.jr));
-  const [hrSr, setHrSr] = useState(String(editing ? tr.senior?.base ?? defaultsHourly.sr : gHr.senior?.base ?? defaultsHourly.sr));
-  const [hrLead, setHrLead] = useState(String(editing ? tr.lead?.base ?? defaultsHourly.lead : gHr.lead?.base ?? defaultsHourly.lead));
-
-  const [hrJrOT, setHrJrOT] = useState(String(editing ? tr.junior?.otRatePerHour ?? "0" : gHr.junior?.otRatePerHour ?? "0"));
-  const [hrSrOT, setHrSrOT] = useState(String(editing ? tr.senior?.otRatePerHour ?? "0" : gHr.senior?.otRatePerHour ?? "0"));
-  const [hrLeadOT, setHrLeadOT] = useState(String(editing ? tr.lead?.otRatePerHour ?? "0" : gHr.lead?.otRatePerHour ?? "0"));
-
-  // Hourly (flat for all / “Backend”)
-  const [flatRate, setFlatRate] = useState(
-    String(editing ? job?.rate?.flatHourly?.base ?? tr.junior?.base ?? defaultsHourly.jr : gFlat.base ?? gHr.junior?.base ?? defaultsHourly.jr)
-  );
-  const [flatOT, setFlatOT] = useState(
-    String(editing ? job?.rate?.flatHourly?.otRatePerHour ?? tr.junior?.otRatePerHour ?? "0" : gFlat.otRatePerHour ?? gHr.junior?.otRatePerHour ?? "0")
-  );
-
-  // Session prices (Half/Full/2D1N/3D2N)
-  const [pHalfJr, setPHalfJr] = useState(
-    String(editing ? tr.junior?.halfDay ?? tr.junior?.specificPayment ?? defaultsHalf.jr : gSess?.half_day?.jr ?? defaultsHalf.jr)
-  );
-  const [pHalfSr, setPHalfSr] = useState(
-    String(editing ? tr.senior?.halfDay ?? tr.senior?.specificPayment ?? defaultsHalf.sr : gSess?.half_day?.sr ?? defaultsHalf.sr)
-  );
-  const [pHalfLead, setPHalfLead] = useState(
-    String(editing ? tr.lead?.halfDay ?? tr.lead?.specificPayment ?? defaultsHalf.lead : gSess?.half_day?.lead ?? defaultsHalf.lead)
-  );
-
-  const [pFullJr, setPFullJr] = useState(
-    String(editing ? tr.junior?.fullDay ?? tr.junior?.specificPayment ?? defaultsFull.jr : gSess?.full_day?.jr ?? defaultsFull.jr)
-  );
-  const [pFullSr, setPFullSr] = useState(
-    String(editing ? tr.senior?.fullDay ?? tr.senior?.specificPayment ?? defaultsFull.sr : gSess?.full_day?.sr ?? defaultsFull.sr)
-  );
-  const [pFullLead, setPFullLead] = useState(
-    String(editing ? tr.lead?.fullDay ?? tr.lead?.specificPayment ?? defaultsFull.lead : gSess?.full_day?.lead ?? defaultsFull.lead)
-  );
-
-  const [p2d1nJr, setP2d1nJr] = useState(
-    String(editing ? tr.junior?.twoD1N ?? tr.junior?.specificPayment ?? defaults2d1n.jr : gSess?.twoD1N?.jr ?? defaults2d1n.jr)
-  );
-  const [p2d1nSr, setP2d1nSr] = useState(
-    String(editing ? tr.senior?.twoD1N ?? tr.senior?.specificPayment ?? defaults2d1n.sr : gSess?.twoD1N?.sr ?? defaults2d1n.sr)
-  );
-  const [p2d1nLead, setP2d1nLead] = useState(
-    String(editing ? tr.lead?.twoD1N ?? tr.lead?.specificPayment ?? defaults2d1n.lead : gSess?.twoD1N?.lead ?? defaults2d1n.lead)
-  );
-
-  const [p3d2nJr, setP3d2nJr] = useState(
-    String(editing ? tr.junior?.threeD2N ?? tr.junior?.specificPayment ?? defaults3d2n.jr : gSess?.threeD2N?.jr ?? defaults3d2n.jr)
-  );
-  const [p3d2nSr, setP3d2nSr] = useState(
-    String(editing ? tr.senior?.threeD2N ?? tr.senior?.specificPayment ?? defaults3d2n.sr : gSess?.threeD2N?.sr ?? defaults3d2n.sr)
-  );
-  const [p3d2nLead, setP3d2nLead] = useState(
-    String(editing ? tr.lead?.threeD2N ?? tr.lead?.specificPayment ?? defaults3d2n.lead : gSess?.threeD2N?.lead ?? defaults3d2n.lead)
-  );
-
-  // Optional hourly add-on for session variants (no global toggle, keep as-is)
-  const [hourlyAddon, setHourlyAddon] = useState(!!(job?.session?.hourlyEnabled || job?.physicalHourlyEnabled));
-
-  function buildTierRates() {
-    const kind = sessionMode === "virtual" ? "virtual" : physicalType;
-
-    if (kind === "virtual") {
-      return {
-        junior: { payMode: "hourly", base: N(hrJr, 15), otRatePerHour: N(hrJrOT, 0) },
-        senior: { payMode: "hourly", base: N(hrSr, 20), otRatePerHour: N(hrSrOT, 0) },
-        lead: { payMode: "hourly", base: N(hrLead, 25), otRatePerHour: N(hrLeadOT, 0) },
-      };
-    }
-    if (kind === "hourly_by_role") {
-      return {
-        junior: { payMode: "hourly", base: N(hrJr, 15), otRatePerHour: N(hrJrOT, 0) },
-        senior: { payMode: "hourly", base: N(hrSr, 20), otRatePerHour: N(hrSrOT, 0) },
-        lead: { payMode: "hourly", base: N(hrLead, 25), otRatePerHour: N(hrLeadOT, 0) },
-      };
-    }
-    if (kind === "hourly_flat") {
-      const base = N(flatRate, 15);
-      const ot = N(flatOT, 0);
-      return {
-        junior: { payMode: "hourly", base, otRatePerHour: ot },
-        senior: { payMode: "hourly", base, otRatePerHour: ot },
-        lead: { payMode: "hourly", base, otRatePerHour: ot },
-      };
-    }
-
-    // Session-based (half/full/2d1n/3d2n)
-    const priceFor = (tier) => {
-      if (kind === "half_day") return tier === "jr" ? N(pHalfJr) : tier === "sr" ? N(pHalfSr) : N(pHalfLead);
-      if (kind === "full_day") return tier === "jr" ? N(pFullJr) : tier === "sr" ? N(pFullSr) : N(pFullLead);
-      if (kind === "2d1n") return tier === "jr" ? N(p2d1nJr) : tier === "sr" ? N(p2d1nSr) : N(p2d1nLead);
-      return /* 3d2n */ tier === "jr" ? N(p3d2nJr) : tier === "sr" ? N(p3d2nSr) : N(p3d2nLead);
-    };
-
-    const mode = hourlyAddon ? "specific_plus_hourly" : "specific";
-    const ifHourly = (base, ot) => (hourlyAddon ? { base, otRatePerHour: ot } : {});
-
-    return {
-      junior: {
-        payMode: mode,
-        specificPayment: priceFor("jr"),
-        ...ifHourly(N(hrJr, 15), N(hrJrOT, 0)),
-        halfDay: N(pHalfJr),
-        fullDay: N(pFullJr),
-        twoD1N: N(p2d1nJr),
-        threeD2N: N(p3d2nJr),
-      },
-      senior: {
-        payMode: mode,
-        specificPayment: priceFor("sr"),
-        ...ifHourly(N(hrSr, 20), N(hrSrOT, 0)),
-        halfDay: N(pHalfSr),
-        fullDay: N(pFullSr),
-        twoD1N: N(p2d1nSr),
-        threeD2N: N(p3d2nSr),
-      },
-      lead: {
-        payMode: mode,
-        specificPayment: priceFor("lead"),
-        ...ifHourly(N(hrLead, 25), N(hrLeadOT, 0)),
-        halfDay: N(pHalfLead),
-        fullDay: N(pFullLead),
-        twoD1N: N(p2d1nLead),
-        threeD2N: N(p3d2nLead),
-      },
-    };
+  if (sessionRM) {
+    if (hasAddon && (base || ot)) return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    return sessionRM;
   }
 
-  const [busy, setBusy] = useState(false);
+  if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+  return "-";
+}
 
-  async function onSave() {
-    if (!title.trim()) return alert("Title is required.");
-    if (!venue.trim()) return alert("Venue is required.");
-    if (!optBus && !optOwn) return alert("Select at least one transport option.");
-
-    const kind = sessionMode === "virtual" ? "virtual" : physicalType;
-    const singleDate = ["virtual", "half_day", "full_day", "hourly_by_role", "hourly_flat"].includes(kind);
-
-    const ds = dateStartRef.current?.value || dateStart;
-    const ts = timeStartRef.current?.value || timeStart;
-    const te = timeEndRef.current?.value || timeEnd;
-    const deCandidate = dateEndRef.current?.value || dateEnd;
-    const de = singleDate ? ds : deCandidate || DEFAULT_END_BY_TYPE[kind]?.(ds) || ds;
-
-    if (!ds || !ts || !te) return alert("Please fill date/time fields.");
-
-    const startISO = combineLocal(ds, ts);
-    const endISO = combineLocal(de, te);
-    if (!startISO || !endISO) return alert("Invalid start/end date or time.");
-
-    setBusy(true);
-    try {
-      const payload = {
-        title: title.trim(),
-        venue: venue.trim(),
-        description,
-        startTime: startISO,
-        endTime: endISO,
-        headcount: N(headcount, 0),
-
-        session: {
-          mode: sessionMode,
-          physicalType: sessionMode === "physical" ? physicalType : null,
-          hourlyEnabled: ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? !!hourlyAddon : false,
-        },
-
-        // mirrors (for back-compat)
-        mode: sessionMode,
-        sessionMode,
-        sessionKind: kind,
-        physicalType: sessionMode === "physical" ? physicalType : null,
-        physicalSubtype: sessionMode === "physical" ? physicalType : null,
-        physicalHourlyEnabled: ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? !!hourlyAddon : false,
-
-        transportOptions: { bus: !!optBus, own: !!optOwn, atagTransport: !!optBus, ownTransport: !!optOwn },
-
-        // keep rolePlan for back-compat (not used as caps)
-        rolePlan: { junior: 0, senior: 0, lead: 0 },
-
-        // NEW: Early call
-        earlyCall: { enabled: !!earlyCallEnabled, amount: N(earlyCallAmount, 0) },
-
-        // NEW: Loading & Unloading configuration
-        loadingUnload: {
-          enabled: !!luEnabled,
-          quota: N(luQuota, 0),
-          payPerPerson: N(luPay, 0),
-          minutesBefore: N(luBefore, 0),
-          minutesAfter: N(luAfter, 0),
-        },
-
-        rate: {
-          transportBus: N(parkingAmount, 0),
-          transportAllowance: N(parkingAmount, 0),
-          parkingAllowance: N(parkingAmount, 0),
-          sessionKind: kind,
-          tierRates: buildTierRates(),
-          ...(physicalType === "hourly_flat"
-            ? { flatHourly: { base: N(flatRate, 15), otRatePerHour: N(flatOT, 0) } }
-            : {}),
-          // expose LU pay on rate as well for wage calculators (optional)
-          loadingUnloadPay: N(luPay, 0),
-        },
-
-        allowances: {
-          ...job?.allowances,
-          parking: { enabled: !!optBus, amount: N(parkingAmount, 0) },
-          loading: { enabled: !!luEnabled, amount: N(luPay, 0) },
-        },
-      };
-
-      if (editing) {
-        await apiPatch(`/jobs/${job.id}`, payload);
-        onUpdated && onUpdated();
-      } else {
-        await apiPost("/jobs", payload);
-        onCreated && onCreated();
-      }
-    } catch (e) {
-      alert("Save failed: " + (e?.message || e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
+// badges (only used for physical)
+function TransportBadges({ job }) {
+  const t = job?.transportOptions || {};
+  const items = [
+    ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
+    ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
+  ];
+  if (!items.length) return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
   return (
-    <>
-      <div className="modal-backdrop" onClick={busy ? undefined : onClose} />
-      <div className="modal" role="dialog" aria-modal="true">
-        <div className="modal-card modal-lg">
-          <div className="modal-header">{editing ? "Edit Job" : "Create Job"}</div>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {items.map((it, i) => (
+        <span key={i} style={{ background: it.bg, color: it.color, padding: "2px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+          {it.text}
+        </span>
+      ))}
+    </div>
+  );
+}
 
-          <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+export default function JobList({
+  jobs = [],
+  onApply,
+  onView,
+  canApply = true,
+  myStatuses = {},
+  canManage = false,
+  onEdit,
+  onDelete,
+  loading = false,
+  showFullDetails = false,
+  viewerUser = null,
+}) {
+  return (
+    <div className="grid">
+      {jobs.map((j) => {
+        const my = myStatuses[j.id];
+        const start = new Date(j.startTime);
+        const end = new Date(j.endTime);
+
+        const dateLine = fmtDateShort(start);
+        const timeLine = `${fmtHourCompact(start)} — ${fmtHourCompact(end)}`;
+
+        const approved = Number(j.approvedCount || 0);
+        const applied = Number(j.appliedCount || 0);
+        const total = Number(j.headcount || 0);
+
+        const { label, kind, isVirtual } = deriveKind(j);
+        const isPhysical = !isVirtual;
+
+        // Allowances (for physical transport)
+        const pa = (() => {
+          const r = j?.rate || {};
+          const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
+            : Number.isFinite(r.transportAllowance) ? r.transportAllowance
+            : Number.isFinite(r.transportBus) ? r.transportBus
+            : null;
+          return v == null ? null : Math.round(Number(v));
+        })();
+
+        const ec = j.earlyCall || {};
+        const lu = j.loadingUnload || {};
+        const payForViewer = buildPayForViewer(j, viewerUser);
+
+        function ApplyArea() {
+          if (!canApply) return null;
+          if (my === "approved") return <button className="btn green" style={COMPACT_BTN} disabled>Approved</button>;
+          if (my === "applied")  return <button className="btn gray"  style={COMPACT_BTN} disabled>Applied</button>;
+          if (my === "rejected") return <button className="btn gray"  style={COMPACT_BTN} disabled>Full</button>;
+          return <button className="btn red" style={COMPACT_BTN} onClick={() => onApply && onApply(j)}>Apply</button>;
+        }
+
+        return (
+          <div key={j.id} className="card">
+            {/* Title + status */}
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
+              <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
+            </div>
+
             {/* Basics */}
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Title</div>
-                  <input value={title} onChange={(e) => setTitle(e.target.value)} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Venue</div>
-                  <input value={venue} onChange={(e) => setVenue(e.target.value)} />
-                </div>
+            <div style={{ marginTop: 8, lineHeight: 1.55 }}>
+              {/* Date / Time side-by-side */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
+                <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
               </div>
 
-              <div style={{ marginTop: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Description</div>
-                <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+              {/* Venue (its own line) */}
+              <div style={{ marginTop: 6 }}>
+                <strong>Venue</strong>
+                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
               </div>
 
-              {/* Transport */}
-              <div style={{ marginTop: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Transport options</div>
-                <div className="transport-options" style={{ marginTop: 6 }}>
-                  <label className="check">
-                    <input type="checkbox" checked={optBus} onChange={(e) => setOptBus(e.target.checked)} /> ATAG Transport
-                  </label>
-                  <label className="check">
-                    <input type="checkbox" checked={optOwn} onChange={(e) => setOptOwn(e.target.checked)} /> Own Transport
-                  </label>
-                </div>
+              {/* Session (its own line) — appears BEFORE transport/options by request */}
+              <div style={{ marginTop: 6 }}>
+                <strong>Session</strong>
+                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
+              </div>
 
-                {optBus && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
-                    <div>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>Parking Allowance (RM)</div>
-                      <input inputMode="decimal" value={parkingAmount} onChange={(e) => setParkingAmount(e.target.value)} />
-                    </div>
-                    <div style={{ alignSelf: "end", fontSize: 12, color: "#6b7280" }}>
-                      Applied to every person who selects <b>ATAG Transport</b>.
-                    </div>
+              {/* === Physical-only options === */}
+              {isPhysical && (
+                <>
+                  {/* Transport */}
+                  <div style={{ marginTop: 6 }}>
+                    <strong>Transport</strong>
+                    <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
+                    {pa != null && (
+                      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                        ATAG Bus allowance: RM{pa} per person (if selected)
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
 
-            {/* Session */}
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ display: "grid", gridTemplateColumns: sessionMode === "physical" ? "1fr 1fr" : "1fr", gap: 12 }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Session Type</div>
-                  <select value={sessionMode} onChange={(e) => setSessionMode(e.target.value)}>
-                    <option value="virtual">Virtual</option>
-                    <option value="physical">Physical</option>
-                  </select>
+                  {/* Early Call & Loading — show ONLY if enabled */}
+                  {(ec?.enabled || lu?.enabled) && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
+                      {ec?.enabled && (
+                        <div>
+                          <div style={{ fontWeight: 600 }}>Early Call</div>
+                          <div style={{ color: "#374151" }}>
+                            Yes · RM{Number(ec.amount || 0)} (≥ {Number(ec.thresholdHours || 0)}h)
+                          </div>
+                        </div>
+                      )}
+                      {lu?.enabled && (
+                        <div>
+                          <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
+                          <div style={{ color: "#374151" }}>
+                            Yes · RM{Number(lu.price || 0)} / helper · Quota {Number(lu.quota || 0)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Pay (IDENTICAL to JobDetails.jsx) */}
+              <div style={{ marginTop: 6 }}>
+                <strong>Pay</strong>
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {payForViewer}
                 </div>
-                {sessionMode === "physical" && (
+              </div>
+
+              {/* Optional extra details */}
+              {showFullDetails && (
+                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>Physical Subtype</div>
-                    <select value={physicalType} onChange={(e) => setPhysicalType(e.target.value)}>
-                      <option value="half_day">Half Day</option>
-                      <option value="full_day">Full Day</option>
-                      <option value="2d1n">2D1N</option>
-                      <option value="3d2n">3D2N</option>
-                      <option value="hourly_by_role">Hourly (by role)</option>
-                      <option value="hourly_flat">Backend (flat hourly for all)</option>
-                    </select>
+                    <strong>Description</strong>
+                    <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
                   </div>
+                </div>
+              )}
+
+              {/* Hiring line */}
+              <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
+                <div style={{ color: "#667085" }}>
+                  Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {/* Keep Approved + View + Discord in one line, compact, within the card */}
+              <div
+                style={{
+                  display: "inline-flex",
+                  gap: 6,
+                  alignItems: "center",
+                  flexShrink: 0,
+                  minWidth: 0,
+                  maxWidth: "100%",
+                }}
+              >
+                {canApply && <ApplyArea />}
+
+                <button className="btn" style={COMPACT_BTN} onClick={() => onView && onView(j)}>
+                  View details
+                </button>
+
+                {my === "approved" && (
+                  <a
+                    href={DISCORD_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn"
+                    style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
+                  >
+                    Join Discord Channel
+                  </a>
                 )}
               </div>
+
+              {/* Manager controls can wrap to a new line if needed */}
+              {canManage && (
+                <>
+                  <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
+                  <button className="btn red" onClick={() => onDelete && onDelete(j)}>Delete</button>
+                </>
+              )}
             </div>
-
-            {/* Dates & Times */}
-            <DatesBlock
-              sessionMode={sessionMode}
-              physicalType={physicalType}
-              dateStart={dateStart}
-              dateEnd={dateEnd}
-              timeStart={timeStart}
-              timeEnd={timeEnd}
-              dateStartRef={dateStartRef}
-              dateEndRef={dateEndRef}
-              timeStartRef={timeStartRef}
-              timeEndRef={timeEndRef}
-            />
-
-            {/* Headcount */}
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Headcount</div>
-              <input value={headcount} onChange={(e) => setHeadcount(e.target.value)} inputMode="numeric" style={{ maxWidth: 240 }} />
-              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-                Target number of people to hire. Everyone can apply — PM/Admin approval is still required for each person.
-              </div>
-            </div>
-
-            {/* NEW: Early Call */}
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Early Call</div>
-              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", alignItems: "center", gap: 12 }}>
-                <label className="check" style={{ whiteSpace: "nowrap" }}>
-                  <input type="checkbox" checked={earlyCallEnabled} onChange={(e) => setEarlyCallEnabled(e.target.checked)} /> Enable
-                </label>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Amount (RM)</div>
-                  <input inputMode="decimal" value={earlyCallAmount} onChange={(e) => setEarlyCallAmount(e.target.value)} disabled={!earlyCallEnabled} />
-                </div>
-                <div style={{ fontSize: 12, color: "#6b7280" }}>
-                  One-off allowance for early reporting (if toggled on).
-                </div>
-              </div>
-            </div>
-
-            {/* NEW: Loading & Unloading */}
-            <div className="card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>Loading & Unloading (L&U)</div>
-              <div style={{ display: "grid", gridTemplateColumns: "auto 1fr 1fr", alignItems: "center", gap: 12 }}>
-                <label className="check" style={{ whiteSpace: "nowrap" }}>
-                  <input type="checkbox" checked={luEnabled} onChange={(e) => setLuEnabled(e.target.checked)} /> Enable
-                </label>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Quota (# people)</div>
-                  <input inputMode="numeric" value={luQuota} onChange={(e) => setLuQuota(e.target.value)} disabled={!luEnabled} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Pay per person (RM)</div>
-                  <input inputMode="decimal" value={luPay} onChange={(e) => setLuPay(e.target.value)} disabled={!luEnabled} />
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Minutes before event (optional)</div>
-                  <input
-                    inputMode="numeric"
-                    value={luBefore}
-                    onChange={(e) => setLuBefore(e.target.value)}
-                    disabled={!luEnabled}
-                  />
-                </div>
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Minutes after event (optional)</div>
-                  <input
-                    inputMode="numeric"
-                    value={luAfter}
-                    onChange={(e) => setLuAfter(e.target.value)}
-                    disabled={!luEnabled}
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-                Applicants can opt in to L&U during application. PM can confirm participants on the PM page; quota limits how many can be confirmed.
-              </div>
-            </div>
-
-            {/* Payments */}
-            <PaymentBlock
-              sessionMode={sessionMode}
-              physicalType={physicalType}
-              hrJr={hrJr}
-              setHrJr={setHrJr}
-              hrJrOT={hrJrOT}
-              setHrJrOT={setHrJrOT}
-              hrSr={hrSr}
-              setHrSr={setHrSr}
-              hrSrOT={hrSrOT}
-              setHrSrOT={setHrSrOT}
-              hrLead={hrLead}
-              setHrLead={setHrLead}
-              hrLeadOT={hrLeadOT}
-              setHrLeadOT={setHrLeadOT}
-              flatRate={flatRate}
-              setFlatRate={setFlatRate}
-              flatOT={flatOT}
-              setFlatOT={setFlatOT}
-              pHalfJr={pHalfJr}
-              setPHalfJr={setPHalfJr}
-              pHalfSr={pHalfSr}
-              setPHalfSr={setPHalfSr}
-              pHalfLead={pHalfLead}
-              setPHalfLead={setPHalfLead}
-              pFullJr={pFullJr}
-              setPFullJr={setPFullJr}
-              pFullSr={pFullSr}
-              setPFullSr={setPFullSr}
-              pFullLead={pFullLead}
-              setPFullLead={setPFullLead}
-              p2d1nJr={p2d1nJr}
-              setP2d1nJr={setP2d1nJr}
-              p2d1nSr={p2d1nSr}
-              setP2d1nSr={setP2d1nSr}
-              p2d1nLead={p2d1nLead}
-              setP2d1nLead={setP2d1nLead}
-              p3d2nJr={p3d2nJr}
-              setP3d2nJr={setP3d2nJr}
-              p3d2nSr={p3d2nSr}
-              setP3d2nSr={setP3d2nSr}
-              p3d2nLead={p3d2nLead}
-              setP3d2nLead={setP3d2nLead}
-              hourlyAddon={hourlyAddon}
-              setHourlyAddon={setHourlyAddon}
-            />
           </div>
-
-          <div className="modal-footer">
-            <button className="btn" onClick={onClose} disabled={busy}>
-              Cancel
-            </button>
-            <button className="btn primary" onClick={onSave} disabled={busy}>
-              {busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create job"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </>
+        );
+      })}
+    </div>
   );
 }
