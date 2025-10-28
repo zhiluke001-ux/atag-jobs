@@ -1,358 +1,494 @@
-// web/src/components/JobList.jsx
-import React from "react";
+// web/src/components/JobCreateModal.jsx
+import React, { useMemo, useState } from "react";
+import dayjs from "dayjs";
+import { apiPost } from "../api";
 
 /**
  * Props:
- * - jobs: []
- * - onApply(job), onView(job)
- * - canApply: boolean
- * - myStatuses?: { [jobId]: 'applied'|'approved'|'rejected' }
- * - canManage?: boolean
- * - onEdit?(job), onDelete?(job)
- * - loading?: boolean
- * - showFullDetails?: boolean
- * - viewerUser?: object
+ * - onClose()
+ * - onCreated?(job)
  */
-function fmtDateShort(d) { return d.toLocaleDateString("en-US"); }
-function fmtHourCompact(d) {
-  const h = d.toLocaleTimeString("en-US", { hour: "numeric", hour12: true });
-  return h.replace(" ", "");
-}
-
-const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
-const money = (v) => {
-  const n = num(v);
-  return Number.isFinite(n) && n > 0 ? `RM${n % 1 === 0 ? n : n.toFixed(2)}` : null;
-};
-
-// ---- Discord/constants ----
-const DISCORD_URL = "https://discord.gg/AwGaCG3W";
-const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
-// Compact button helper to keep actions on a single line without overflowing
-const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
-
-/* small visual pill to show Enabled/Disabled (non-interactive) */
-const SwitchPill = ({ on }) => (
-  <span
-    style={{
-      display: "inline-block",
-      padding: "2px 10px",
-      borderRadius: 999,
-      background: on ? "#dcfce7" : "#f3f4f6",
-      color: on ? "#166534" : "#374151",
-      fontWeight: 700,
-      fontSize: 12,
-    }}
-  >
-    {on ? "Enabled" : "Disabled"}
-  </span>
+const Card = ({ title, children, style }) => (
+  <div className="card" style={{ padding: 12, borderRadius: 12, ...style }}>
+    {title && <div style={{ fontWeight: 800, marginBottom: 8 }}>{title}</div>}
+    {children}
+  </div>
 );
 
-// === EXACTLY MATCH JobDetails helpers ===
-function deriveViewerRank(user) {
-  const raw = (
-    user?.ptRole || user?.jobRole || user?.rank || user?.tier || user?.level || user?.roleRank || ""
-  ).toString().toLowerCase();
-  if (["lead", "leader", "supervisor", "captain"].includes(raw)) return "lead";
-  if (["senior", "sr"].includes(raw)) return "senior";
-  return "junior";
-}
-function deriveKind(job) {
-  const kind =
-    job?.rate?.sessionKind ||
-    job?.sessionKind ||
-    job?.physicalSubtype ||
-    job?.session?.physicalType ||
-    (job?.session?.mode === "virtual" ? "virtual" : null);
+const Row2 = ({ children }) => (
+  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>{children}</div>
+);
 
-  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
-  const isVirtual = mode === "virtual" || kind === "virtual";
+const Field = ({ label, children, hint }) => (
+  <div className="card" style={{ padding: 10 }}>
+    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: "#374151" }}>{label}</div>
+    {children}
+    {hint ? <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{hint}</div> : null}
+  </div>
+);
 
-  const resolvedKind = isVirtual
-    ? "virtual"
-    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
-      ? kind
-      : "half_day";
+const money = (n) => {
+  const v = Number(n);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+};
 
-  const label =
-    resolvedKind === "virtual" ? "Virtual"
-      : resolvedKind === "half_day" ? "Physical — Half Day"
-      : resolvedKind === "full_day" ? "Physical — Full Day"
-      : resolvedKind === "2d1n" ? "Physical — 2D1N"
-      : resolvedKind === "3d2n" ? "Physical — 3D2N"
-      : resolvedKind === "hourly_by_role" ? "Physical — Hourly (by role)"
-      : "Physical — Backend (flat hourly)";
+export default function JobCreateModal({ onClose, onCreated }) {
+  // Step 1 — basics
+  const [title, setTitle] = useState("");
+  const [venue, setVenue] = useState("");
+  const [description, setDescription] = useState("");
+  const basicsOK = title.trim() && venue.trim();
 
-  return { isVirtual, kind: resolvedKind, label };
-}
-function otSuffix(hourlyRM, otRM) {
-  // New OT policy: billed per full hour after event end; show explicit rate if provided.
-  if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
-  if (hourlyRM) return ` (OT billed hourly after end)`;
-  return "";
-}
-function buildPayForViewer(job, user) {
-  const { kind } = deriveKind(job);
-  const rank = deriveViewerRank(user);
-  const tr = job?.rate?.tierRates || job?.roleRates || {};
-  const tier = tr?.[rank] || {};
-  const flat = job?.rate?.flatHourly || null;
+  // Dates / times & headcount
+  const [startDate, setStartDate] = useState(dayjs().format("YYYY-MM-DD"));
+  const [startTime, setStartTime] = useState("09:00");
+  const [endDate, setEndDate] = useState(dayjs().add(1, "hour").format("YYYY-MM-DD"));
+  const [endTime, setEndTime] = useState("12:00");
+  const [headcount, setHeadcount] = useState(5);
 
-  if (kind === "hourly_flat") {
-    const base = money(flat?.base ?? tier.base);
-    const ot   = money(flat?.otRatePerHour);
-    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
-    return "-";
-  }
+  // Step 2 — session type
+  const [sessionType, setSessionType] = useState(""); // "physical" | "virtual"
+  const isVirtual = sessionType === "virtual";
+  const sessionOK = basicsOK && (sessionType === "physical" || sessionType === "virtual");
 
-  if (kind === "virtual" || kind === "hourly_by_role") {
-    const base = money(tier.base);
-    const ot   = money(tier.otRatePerHour);
-    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
-    return "-";
-  }
+  // Step 3 — physical subtype (if physical)
+  const [physicalSubtype, setPhysicalSubtype] = useState(""); // half_day, full_day, 2d1n, 3d2n, hourly_by_role, hourly_flat
+  const physicalOK = sessionOK && (isVirtual || (!!physicalSubtype && sessionType === "physical"));
 
-  const pick = (k) => {
-    if (k === "half_day") return tier?.halfDay ?? tier?.specificPayment ?? null;
-    if (k === "full_day") return tier?.fullDay ?? tier?.specificPayment ?? null;
-    if (k === "2d1n")     return tier?.twoD1N ?? tier?.specificPayment ?? null;
-    if (k === "3d2n")     return tier?.threeD2N ?? tier?.specificPayment ?? null;
-    return null;
-  };
-  const sessionRM = money(pick(kind));
-  const hasAddon =
-    job?.session?.hourlyEnabled ||
-    job?.physicalHourlyEnabled ||
-    tier?.payMode === "specific_plus_hourly";
-  const base = money(tier.base);
-  const ot   = money(tier.otRatePerHour);
+  // Step 4 — physical-only options
+  const [transportBus, setTransportBus] = useState(false);
+  const [transportOwn, setTransportOwn] = useState(false);
+  const [parkingAllowance, setParkingAllowance] = useState("");
 
-  if (sessionRM) {
-    if (hasAddon && (base || ot)) return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
-    return sessionRM;
-  }
+  const [ecEnabled, setEcEnabled] = useState(false);
+  const [ecAmount, setEcAmount] = useState("");
+  const [ecThresholdHours, setEcThresholdHours] = useState("2");
 
-  if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
-  return "-";
-}
+  const [luEnabled, setLuEnabled] = useState(false);
+  const [luQuota, setLuQuota] = useState("0");
+  const [luPrice, setLuPrice] = useState("");
 
-// badges
-function TransportBadges({ job }) {
-  const t = job?.transportOptions || {};
-  const items = [
-    ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
-    ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
-  ];
-  if (!items.length) return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
-  return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      {items.map((it, i) => (
-        <span key={i} style={{ background: it.bg, color: it.color, padding: "2px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
-          {it.text}
-        </span>
-      ))}
-    </div>
+  // Scanner defaults
+  const [scanMaxMeters, setScanMaxMeters] = useState(500);
+
+  // Pay settings (simple / minimal)
+  // For hourly_by_role OR virtual: per-tier hourly + OT
+  const [jrBase, setJrBase] = useState("");
+  const [jrOT, setJrOT] = useState("");
+  const [srBase, setSrBase] = useState("");
+  const [srOT, setSrOT] = useState("");
+  const [leadBase, setLeadBase] = useState("");
+  const [leadOT, setLeadOT] = useState("");
+
+  // For hourly_flat (backend flat hourly)
+  const [flatBase, setFlatBase] = useState("");
+  const [flatOT, setFlatOT] = useState("");
+
+  // For session payments (half/full/2d1n/3d2n)
+  const [jrSession, setJrSession] = useState("");
+  const [srSession, setSrSession] = useState("");
+  const [leadSession, setLeadSession] = useState("");
+
+  const startISO = useMemo(
+    () => dayjs(`${startDate}T${startTime}`).toISOString(),
+    [startDate, startTime]
   );
-}
+  const endISO = useMemo(
+    () => dayjs(`${endDate}T${endTime}`).toISOString(),
+    [endDate, endTime]
+  );
 
-export default function JobList({
-  jobs = [],
-  onApply,
-  onView,
-  canApply = true,
-  myStatuses = {},
-  canManage = false,
-  onEdit,
-  onDelete,
-  loading = false,
-  showFullDetails = false,
-  viewerUser = null,
-}) {
+  function buildRate() {
+    // Build according to selected mode/kind
+    if (isVirtual || physicalSubtype === "hourly_by_role") {
+      return {
+        sessionKind: isVirtual ? "virtual" : "hourly_by_role",
+        tierRates: {
+          junior: { base: money(jrBase) || undefined, otRatePerHour: money(jrOT) || undefined },
+          senior: { base: money(srBase) || undefined, otRatePerHour: money(srOT) || undefined },
+          lead:   { base: money(leadBase) || undefined, otRatePerHour: money(leadOT) || undefined },
+        },
+        parkingAllowance: money(parkingAllowance) || undefined,
+      };
+    }
+    if (physicalSubtype === "hourly_flat") {
+      return {
+        sessionKind: "hourly_flat",
+        flatHourly: {
+          base: money(flatBase) || undefined,
+          otRatePerHour: money(flatOT) || undefined,
+        },
+        parkingAllowance: money(parkingAllowance) || undefined,
+      };
+    }
+    if (["half_day", "full_day", "2d1n", "3d2n"].includes(physicalSubtype)) {
+      const key =
+        physicalSubtype === "half_day"
+          ? "halfDay"
+          : physicalSubtype === "full_day"
+          ? "fullDay"
+          : physicalSubtype === "2d1n"
+          ? "twoD1N"
+          : "threeD2N";
+      return {
+        sessionKind: physicalSubtype,
+        tierRates: {
+          junior: { [key]: money(jrSession) || undefined },
+          senior: { [key]: money(srSession) || undefined },
+          lead:   { [key]: money(leadSession) || undefined },
+        },
+        parkingAllowance: money(parkingAllowance) || undefined,
+      };
+    }
+    // Fallback
+    return { sessionKind: isVirtual ? "virtual" : "half_day" };
+  }
+
+  async function handleCreate() {
+    const payload = {
+      title: title.trim(),
+      venue: venue.trim(),
+      description: description.trim(),
+      startTime: startISO,
+      endTime: endISO,
+      headcount: Number(headcount) || 0,
+
+      // Session structure
+      session: {
+        mode: isVirtual ? "virtual" : "physical",
+        physicalType: isVirtual ? undefined : physicalSubtype || undefined,
+      },
+
+      // Display helpers to match your readers
+      mode: isVirtual ? "virtual" : "physical",
+      sessionMode: isVirtual ? "virtual" : "physical",
+      physicalSubtype: isVirtual ? undefined : physicalSubtype || undefined,
+
+      // Conditional blocks
+      transportOptions: isVirtual
+        ? undefined
+        : {
+            bus: !!transportBus,
+            own: !!transportOwn,
+          },
+
+      earlyCall: isVirtual
+        ? undefined
+        : {
+            enabled: !!ecEnabled,
+            amount: money(ecAmount) || 0,
+            thresholdHours: Number(ecThresholdHours) || 0,
+          },
+
+      loadingUnload: isVirtual
+        ? undefined
+        : {
+            enabled: !!luEnabled,
+            quota: Number(luQuota) || 0,
+            price: money(luPrice) || 0,
+          },
+
+      // Scan guard only matters for physical
+      scanRequired: !isVirtual,
+      scanMaxMeters: Number(scanMaxMeters) || 500,
+
+      // Pay setup
+      rate: buildRate(),
+    };
+
+    const created = await apiPost("/jobs", payload);
+    if (onCreated) onCreated(created);
+    onClose?.();
+  }
+
+  const canSubmit = basicsOK && sessionOK && physicalOK;
+
   return (
-    <div className="grid">
-      {jobs.map((j) => {
-        const my = myStatuses[j.id];
-        const start = new Date(j.startTime);
-        const end = new Date(j.endTime);
+    <div className="modal-overlay">
+      <div className="modal card" style={{ width: 900, maxWidth: "95vw" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 18, fontWeight: 800 }}>Create Job</div>
+          <button className="btn gray" onClick={onClose}>Close</button>
+        </div>
 
-        const dateLine = fmtDateShort(start);
-        const timeLine = `${fmtHourCompact(start)} — ${fmtHourCompact(end)}`;
+        {/* Step 1 — Basics */}
+        <Card title="1) Basics" style={{ marginTop: 10 }}>
+          <Row2>
+            <Field label="Title">
+              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Event name / role…" />
+            </Field>
+            <Field label="Venue">
+              <input value={venue} onChange={(e) => setVenue(e.target.value)} placeholder="Where is it?" />
+            </Field>
+          </Row2>
 
-        const approved = Number(j.approvedCount || 0);
-        const applied = Number(j.appliedCount || 0);
-        const total = Number(j.headcount || 0);
+          <Field label="Description">
+            <textarea
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Brief details for part-timers…"
+            />
+          </Field>
 
-        const { label, kind, isVirtual } = deriveKind(j);
-        const payForViewer = buildPayForViewer(j, viewerUser);
+          <Row2>
+            <Field label="Start (date)">
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </Field>
+            <Field label="Start (time)">
+              <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            </Field>
+          </Row2>
+          <Row2>
+            <Field label="End (date)">
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </Field>
+            <Field label="End (time)">
+              <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+            </Field>
+          </Row2>
 
-        // Allowances / options
-        const ec = j.earlyCall || {};
-        const lu = j.loadingUnload || {};
-        const tOpts = j.transportOptions || {};
+          <Field label="Headcount">
+            <input
+              type="number"
+              min="0"
+              value={headcount}
+              onChange={(e) => setHeadcount(e.target.value)}
+            />
+          </Field>
+        </Card>
 
-        // legacy transport allowance line (kept for display if provided)
-        const pa = (() => {
-          const r = j?.rate || {};
-          const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
-            : Number.isFinite(r.transportAllowance) ? r.transportAllowance
-            : Number.isFinite(r.transportBus) ? r.transportBus
-            : null;
-          return v == null ? null : Math.round(Number(v));
-        })();
-
-        function ApplyArea() {
-          if (!canApply) return null;
-          if (my === "approved") return <button className="btn green" style={COMPACT_BTN} disabled>Approved</button>;
-          if (my === "applied")  return <button className="btn gray"  style={COMPACT_BTN} disabled>Applied</button>;
-          if (my === "rejected") return <button className="btn gray"  style={COMPACT_BTN} disabled>Full</button>;
-          return <button className="btn red" style={COMPACT_BTN} onClick={() => onApply && onApply(j)}>Apply</button>;
-        }
-
-        return (
-          <div key={j.id} className="card">
-            {/* Title + status */}
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
-              <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
+        {/* Step 2 — Session Type */}
+        {basicsOK && (
+          <Card title="2) Session Type" style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", gap: 16 }}>
+              <label>
+                <input
+                  type="radio"
+                  name="sessionType"
+                  checked={sessionType === "physical"}
+                  onChange={() => setSessionType("physical")}
+                />{" "}
+                Physical
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="sessionType"
+                  checked={sessionType === "virtual"}
+                  onChange={() => setSessionType("virtual")}
+                />{" "}
+                Virtual
+              </label>
             </div>
-
-            {/* Basics */}
-            <div style={{ marginTop: 8, lineHeight: 1.55 }}>
-              {/* Date / Time side-by-side */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
-                <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
-              </div>
-
-              {/* Venue (its own line) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Venue</strong>
-                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
-              </div>
-
-              {/* Session (its own line) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Session</strong>
-                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
-              </div>
-
-              {/* 🔶 Early Call + Loading & Unloading (PHYSICAL ONLY) — placed BEFORE Pay */}
-              {!isVirtual && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-                  <div>
-                    <div style={{ fontWeight: 600 }}>Early Call</div>
-                    <div style={{ color: "#374151", display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
-                      <SwitchPill on={!!ec.enabled} />
-                      {ec.enabled ? <span>RM{Number(ec.amount || 0)} / person</span> : <span>—</span>}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600 }}>Loading &amp; Unloading</div>
-                    <div style={{ color: "#374151", display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
-                      <SwitchPill on={!!lu.enabled} />
-                      {lu.enabled ? (
-                        <span>
-                          Quota {Number(lu.quota || 0)} · RM{Number(lu.price || 0)} / person
-                        </span>
-                      ) : (
-                        <span>—</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Pay (IDENTICAL to JobDetails.jsx) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Pay</strong>
-                <div
-                  style={{
-                    marginTop: 6,
-                    fontFamily:
-                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                    fontSize: 13,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {payForViewer}
-                </div>
-              </div>
-
-              {/* Details (optional) */}
-              {showFullDetails && (
-                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-                  <div>
-                    <strong>Description</strong>
-                    <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
-                  </div>
-
-                  {/* Transport section:
-                      - Hidden for virtual (no need to pick)
-                      - Shown for physical only */}
-                  {!isVirtual && (
-                    <div>
-                      <strong>Transport</strong>
-                      <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
-                      {pa != null && (
-                        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                          ATAG Bus allowance: RM{pa} per person (if selected)
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Hiring line */}
-              <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-                <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
-                <div style={{ color: "#667085" }}>
-                  Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
-                </div>
-              </div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+              Transport, Early Call, and Loading &amp; Unloading are **physical only** and will be hidden for Virtual jobs.
             </div>
+          </Card>
+        )}
 
-            {/* Actions */}
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <div
-                style={{
-                  display: "inline-flex",
-                  gap: 6,
-                  alignItems: "center",
-                  flexShrink: 0,
-                  minWidth: 0,
-                  maxWidth: "100%",
-                }}
-              >
-                {canApply && <ApplyArea />}
+        {/* Step 3 — Physical subtype */}
+        {sessionOK && !isVirtual && (
+          <Card title="3) Physical Subtype" style={{ marginTop: 10 }}>
+            <Row2>
+              <Field label="Subtype">
+                <select value={physicalSubtype} onChange={(e) => setPhysicalSubtype(e.target.value)}>
+                  <option value="">-- choose --</option>
+                  <option value="half_day">Half Day</option>
+                  <option value="full_day">Full Day</option>
+                  <option value="2d1n">2D1N</option>
+                  <option value="3d2n">3D2N</option>
+                  <option value="hourly_by_role">Hourly (by role)</option>
+                  <option value="hourly_flat">Backend (flat hourly)</option>
+                </select>
+              </Field>
 
-                <button className="btn" style={COMPACT_BTN} onClick={() => onView && onView(j)}>
-                  View details
-                </button>
+              <Field label="Scan distance guard (meters)" hint="Default 500m; enforced at server too.">
+                <input
+                  type="number"
+                  min="100"
+                  value={scanMaxMeters}
+                  onChange={(e) => setScanMaxMeters(e.target.value)}
+                />
+              </Field>
+            </Row2>
+          </Card>
+        )}
 
-                {my === "approved" && (
-                  <a
-                    href={DISCORD_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="btn"
-                    style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
-                  >
-                    Join Discord Channel
-                  </a>
-                )}
+        {/* Step 4 — Physical-only: Transport + Allowances + Early Call + L&U */}
+        {physicalOK && !isVirtual && (
+          <Card title="4) Physical Options" style={{ marginTop: 10 }}>
+            <Field label="Transport options">
+              <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+                <label>
+                  <input type="checkbox" checked={transportBus} onChange={(e) => setTransportBus(e.target.checked)} /> ATAG Bus
+                </label>
+                <label>
+                  <input type="checkbox" checked={transportOwn} onChange={(e) => setTransportOwn(e.target.checked)} /> Own Transport
+                </label>
               </div>
+            </Field>
 
-              {canManage && (
-                <>
-                  <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
-                  <button className="btn red" onClick={() => onDelete && onDelete(j)}>Delete</button>
-                </>
-              )}
-            </div>
-          </div>
-        );
-      })}
+            <Row2>
+              <Field label="Parking allowance (RM per person)">
+                <input
+                  type="number"
+                  min="0"
+                  value={parkingAllowance}
+                  onChange={(e) => setParkingAllowance(e.target.value)}
+                  placeholder="e.g., 10"
+                />
+              </Field>
+              <div />
+            </Row2>
+
+            <Row2>
+              <Field label="Early Call">
+                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <label>
+                    <input type="checkbox" checked={ecEnabled} onChange={(e) => setEcEnabled(e.target.checked)} /> Enable
+                  </label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span>Amount</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={ecAmount}
+                      onChange={(e) => setEcAmount(e.target.value)}
+                      placeholder="RM per person"
+                      disabled={!ecEnabled}
+                      style={{ width: 140 }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span>Threshold (hours)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={ecThresholdHours}
+                      onChange={(e) => setEcThresholdHours(e.target.value)}
+                      disabled={!ecEnabled}
+                      style={{ width: 100 }}
+                    />
+                  </div>
+                </div>
+              </Field>
+
+              <Field label="Loading & Unloading">
+                <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <label>
+                    <input type="checkbox" checked={luEnabled} onChange={(e) => setLuEnabled(e.target.checked)} /> Enable
+                  </label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span>Quota</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={luQuota}
+                      onChange={(e) => setLuQuota(e.target.value)}
+                      disabled={!luEnabled}
+                      style={{ width: 100 }}
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span>Amount (RM / person)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={luPrice}
+                      onChange={(e) => setLuPrice(e.target.value)}
+                      disabled={!luEnabled}
+                      style={{ width: 140 }}
+                    />
+                  </div>
+                </div>
+              </Field>
+            </Row2>
+          </Card>
+        )}
+
+        {/* Step 5 — Pay (after session + physical options) */}
+        {sessionOK && (
+          <Card title="5) Pay Settings" style={{ marginTop: 10 }}>
+            {(isVirtual || physicalSubtype === "hourly_by_role") && (
+              <>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Per-tier hourly (Virtual / Hourly by role)</div>
+                <Row2>
+                  <Field label="Junior (base / hr)">
+                    <input type="number" min="0" value={jrBase} onChange={(e) => setJrBase(e.target.value)} />
+                  </Field>
+                  <Field label="Junior OT (per hr)">
+                    <input type="number" min="0" value={jrOT} onChange={(e) => setJrOT(e.target.value)} />
+                  </Field>
+                </Row2>
+                <Row2>
+                  <Field label="Senior (base / hr)">
+                    <input type="number" min="0" value={srBase} onChange={(e) => setSrBase(e.target.value)} />
+                  </Field>
+                  <Field label="Senior OT (per hr)">
+                    <input type="number" min="0" value={srOT} onChange={(e) => setSrOT(e.target.value)} />
+                  </Field>
+                </Row2>
+                <Row2>
+                  <Field label="Lead (base / hr)">
+                    <input type="number" min="0" value={leadBase} onChange={(e) => setLeadBase(e.target.value)} />
+                  </Field>
+                  <Field label="Lead OT (per hr)">
+                    <input type="number" min="0" value={leadOT} onChange={(e) => setLeadOT(e.target.value)} />
+                  </Field>
+                </Row2>
+              </>
+            )}
+
+            {physicalSubtype === "hourly_flat" && (
+              <>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Backend (flat hourly)</div>
+                <Row2>
+                  <Field label="Flat base (RM / hr)">
+                    <input type="number" min="0" value={flatBase} onChange={(e) => setFlatBase(e.target.value)} />
+                  </Field>
+                  <Field label="Flat OT (RM / hr)">
+                    <input type="number" min="0" value={flatOT} onChange={(e) => setFlatOT(e.target.value)} />
+                  </Field>
+                </Row2>
+              </>
+            )}
+
+            {["half_day", "full_day", "2d1n", "3d2n"].includes(physicalSubtype) && (
+              <>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>Session payment (per person)</div>
+                <Row2>
+                  <Field label="Junior">
+                    <input type="number" min="0" value={jrSession} onChange={(e) => setJrSession(e.target.value)} />
+                  </Field>
+                  <Field label="Senior">
+                    <input type="number" min="0" value={srSession} onChange={(e) => setSrSession(e.target.value)} />
+                  </Field>
+                </Row2>
+                <Row2>
+                  <Field label="Lead">
+                    <input type="number" min="0" value={leadSession} onChange={(e) => setLeadSession(e.target.value)} />
+                  </Field>
+                  <div />
+                </Row2>
+              </>
+            )}
+
+            {(!isVirtual && !physicalSubtype) && (
+              <div style={{ color: "#6b7280", fontSize: 13 }}>
+                Choose a physical subtype to reveal the corresponding pay inputs.
+              </div>
+            )}
+          </Card>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          <button className="btn gray" onClick={onClose}>Cancel</button>
+          <button className="btn red" disabled={!canSubmit} onClick={handleCreate}>
+            Create
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
