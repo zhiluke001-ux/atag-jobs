@@ -1,5 +1,5 @@
 // web/src/components/JobList.jsx
-import React, { useMemo, useState } from "react";
+import React from "react";
 
 /**
  * Props:
@@ -28,9 +28,27 @@ const money = (v) => {
 // ---- Discord/constants ----
 const DISCORD_URL = "https://discord.gg/AwGaCG3W";
 const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
+// Compact button helper to keep actions on a single line without overflowing
 const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
 
-/* ================= Helpers (must match JobDetails logic) ================= */
+/* small visual pill to show Enabled/Disabled (non-interactive) */
+const SwitchPill = ({ on }) => (
+  <span
+    style={{
+      display: "inline-block",
+      padding: "2px 10px",
+      borderRadius: 999,
+      background: on ? "#dcfce7" : "#f3f4f6",
+      color: on ? "#166534" : "#374151",
+      fontWeight: 700,
+      fontSize: 12,
+    }}
+  >
+    {on ? "Enabled" : "Disabled"}
+  </span>
+);
+
+// === EXACTLY MATCH JobDetails helpers ===
 function deriveViewerRank(user) {
   const raw = (
     user?.ptRole || user?.jobRole || user?.rank || user?.tier || user?.level || user?.roleRank || ""
@@ -68,6 +86,7 @@ function deriveKind(job) {
   return { isVirtual, kind: resolvedKind, label };
 }
 function otSuffix(hourlyRM, otRM) {
+  // New OT policy: billed per full hour after event end; show explicit rate if provided.
   if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
   if (hourlyRM) return ` (OT billed hourly after end)`;
   return "";
@@ -117,11 +136,8 @@ function buildPayForViewer(job, user) {
   return "-";
 }
 
+// badges
 function TransportBadges({ job }) {
-  const { isVirtual } = deriveKind(job);
-  if (isVirtual) {
-    return <span style={{ fontSize: 12, color: "#6b7280" }}>Transport selection not required (virtual)</span>;
-  }
   const t = job?.transportOptions || {};
   const items = [
     ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
@@ -139,7 +155,6 @@ function TransportBadges({ job }) {
   );
 }
 
-/* =============================== Component =============================== */
 export default function JobList({
   jobs = [],
   onApply,
@@ -153,197 +168,191 @@ export default function JobList({
   showFullDetails = false,
   viewerUser = null,
 }) {
-  /* ---- New: Mode selector (All / Physical / Virtual) ---- */
-  const [modeFilter, setModeFilter] = useState("all"); // 'all' | 'physical' | 'virtual'
-  const filteredJobs = useMemo(() => {
-    if (!Array.isArray(jobs)) return [];
-    return jobs.filter((j) => {
-      const { isVirtual } = deriveKind(j);
-      if (modeFilter === "all") return true;
-      return modeFilter === "virtual" ? isVirtual : !isVirtual;
-    });
-  }, [jobs, modeFilter]);
-
   return (
-    <>
-      {/* Filter bar */}
-      <div className="card" style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontWeight: 700 }}>Mode</div>
-        <label><input type="radio" name="modeFilter" checked={modeFilter === "all"} onChange={() => setModeFilter("all")} /> All</label>
-        <label><input type="radio" name="modeFilter" checked={modeFilter === "physical"} onChange={() => setModeFilter("physical")} /> Physical</label>
-        <label><input type="radio" name="modeFilter" checked={modeFilter === "virtual"} onChange={() => setModeFilter("virtual")} /> Virtual</label>
-      </div>
+    <div className="grid">
+      {jobs.map((j) => {
+        const my = myStatuses[j.id];
+        const start = new Date(j.startTime);
+        const end = new Date(j.endTime);
 
-      <div className="grid">
-        {filteredJobs.map((j) => {
-          const my = myStatuses[j.id];
-          const start = new Date(j.startTime);
-          const end = new Date(j.endTime);
+        const dateLine = fmtDateShort(start);
+        const timeLine = `${fmtHourCompact(start)} — ${fmtHourCompact(end)}`;
 
-          const dateLine = fmtDateShort(start);
-          const timeLine = `${fmtHourCompact(start)} — ${fmtHourCompact(end)}`;
+        const approved = Number(j.approvedCount || 0);
+        const applied = Number(j.appliedCount || 0);
+        const total = Number(j.headcount || 0);
 
-          const approved = Number(j.approvedCount || 0);
-          const applied = Number(j.appliedCount || 0);
-          const total = Number(j.headcount || 0);
+        const { label, kind, isVirtual } = deriveKind(j);
+        const payForViewer = buildPayForViewer(j, viewerUser);
 
-          const { label, kind, isVirtual } = deriveKind(j);
-          const pa = (() => {
-            const r = j?.rate || {};
-            const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
-              : Number.isFinite(r.transportAllowance) ? r.transportAllowance
-              : Number.isFinite(r.transportBus) ? r.transportBus
-              : null;
-            return v == null ? null : Math.round(Number(v));
-          })();
+        // Allowances / options
+        const ec = j.earlyCall || {};
+        const lu = j.loadingUnload || {};
+        const tOpts = j.transportOptions || {};
 
-          const ec = j.earlyCall || {};
-          const lu = j.loadingUnload || {};
-          const payForViewer = buildPayForViewer(j, viewerUser);
+        // legacy transport allowance line (kept for display if provided)
+        const pa = (() => {
+          const r = j?.rate || {};
+          const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
+            : Number.isFinite(r.transportAllowance) ? r.transportAllowance
+            : Number.isFinite(r.transportBus) ? r.transportBus
+            : null;
+          return v == null ? null : Math.round(Number(v));
+        })();
 
-          function ApplyArea() {
-            if (!canApply) return null;
-            if (my === "approved") return <button className="btn green" style={COMPACT_BTN} disabled>Approved</button>;
-            if (my === "applied")  return <button className="btn gray"  style={COMPACT_BTN} disabled>Applied</button>;
-            if (my === "rejected") return <button className="btn gray"  style={COMPACT_BTN} disabled>Full</button>;
-            return <button className="btn red" style={COMPACT_BTN} onClick={() => onApply && onApply(j)}>Apply</button>;
-          }
+        function ApplyArea() {
+          if (!canApply) return null;
+          if (my === "approved") return <button className="btn green" style={COMPACT_BTN} disabled>Approved</button>;
+          if (my === "applied")  return <button className="btn gray"  style={COMPACT_BTN} disabled>Applied</button>;
+          if (my === "rejected") return <button className="btn gray"  style={COMPACT_BTN} disabled>Full</button>;
+          return <button className="btn red" style={COMPACT_BTN} onClick={() => onApply && onApply(j)}>Apply</button>;
+        }
 
-          return (
-            <div key={j.id} className="card">
-              {/* Title + status */}
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
-                <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
+        return (
+          <div key={j.id} className="card">
+            {/* Title + status */}
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
+              <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
+            </div>
+
+            {/* Basics */}
+            <div style={{ marginTop: 8, lineHeight: 1.55 }}>
+              {/* Date / Time side-by-side */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
+                <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
               </div>
 
-              {/* Basics */}
-              <div style={{ marginTop: 8, lineHeight: 1.55 }}>
-                {/* Date / Time side-by-side */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
-                  <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
-                </div>
+              {/* Venue (its own line) */}
+              <div style={{ marginTop: 6 }}>
+                <strong>Venue</strong>
+                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
+              </div>
 
-                {/* Venue */}
-                <div style={{ marginTop: 6 }}>
-                  <strong>Venue</strong>
-                  <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
-                </div>
+              {/* Session (its own line) */}
+              <div style={{ marginTop: 6 }}>
+                <strong>Session</strong>
+                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
+              </div>
 
-                {/* Session */}
-                <div style={{ marginTop: 6 }}>
-                  <strong>Session</strong>
-                  <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
-                </div>
-
-                {/* Transport (skip for virtual) */}
-                <div style={{ marginTop: 6 }}>
-                  <strong>Transport</strong>
-                  <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
-                  {!isVirtual && pa != null && (
-                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                      ATAG Bus allowance: RM{pa} per person (if selected)
-                    </div>
-                  )}
-                </div>
-
-                {/* NEW: Early Call & Loading/Unloading — placed just before Hourly/Pay */}
+              {/* 🔶 Early Call + Loading & Unloading (PHYSICAL ONLY) — placed BEFORE Pay */}
+              {!isVirtual && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
                   <div>
-                    <div style={{ fontWeight: 600 }}>Early Call Allowance</div>
-                    <div style={{ color: "#374151" }}>
-                      {ec?.enabled
-                        ? `Enabled · RM${Number(ec.amount || 0)} / person` + (ec.thresholdHours ? ` · ≥ ${Number(ec.thresholdHours)}h` : "")
-                        : "Disabled"}
+                    <div style={{ fontWeight: 600 }}>Early Call</div>
+                    <div style={{ color: "#374151", display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
+                      <SwitchPill on={!!ec.enabled} />
+                      {ec.enabled ? <span>RM{Number(ec.amount || 0)} / person</span> : <span>—</span>}
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
-                    <div style={{ color: "#374151" }}>
-                      {lu?.enabled
-                        ? `Enabled · RM${Number(lu.price || 0)} / helper · Quota ${Number(lu.quota || 0)}`
-                        : "Disabled"}
+                    <div style={{ fontWeight: 600 }}>Loading &amp; Unloading</div>
+                    <div style={{ color: "#374151", display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
+                      <SwitchPill on={!!lu.enabled} />
+                      {lu.enabled ? (
+                        <span>
+                          Quota {Number(lu.quota || 0)} · RM{Number(lu.price || 0)} / person
+                        </span>
+                      ) : (
+                        <span>—</span>
+                      )}
                     </div>
                   </div>
                 </div>
+              )}
 
-                {/* Pay / Hourly (moved to the bottom, after Early Call & L&U) */}
-                <div style={{ marginTop: 8 }}>
-                  <strong>Pay</strong>
-                  <div
-                    style={{
-                      marginTop: 6,
-                      fontFamily:
-                        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                      fontSize: 13,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    {payForViewer}
-                  </div>
-                </div>
-
-                {showFullDetails && (
-                  <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-                    <div>
-                      <strong>Description</strong>
-                      <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Hiring line */}
-                <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-                  <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
-                  <div style={{ color: "#667085" }}>
-                    Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
-                  </div>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              {/* Pay (IDENTICAL to JobDetails.jsx) */}
+              <div style={{ marginTop: 6 }}>
+                <strong>Pay</strong>
                 <div
                   style={{
-                    display: "inline-flex",
-                    gap: 6,
-                    alignItems: "center",
-                    flexShrink: 0,
-                    minWidth: 0,
-                    maxWidth: "100%",
+                    marginTop: 6,
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                    fontSize: 13,
+                    lineHeight: 1.5,
                   }}
                 >
-                  {canApply && <ApplyArea />}
+                  {payForViewer}
+                </div>
+              </div>
 
-                  <button className="btn" style={COMPACT_BTN} onClick={() => onView && onView(j)}>
-                    View details
-                  </button>
+              {/* Details (optional) */}
+              {showFullDetails && (
+                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
+                  <div>
+                    <strong>Description</strong>
+                    <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
+                  </div>
 
-                  {my === "approved" && (
-                    <a
-                      href={DISCORD_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn"
-                      style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
-                    >
-                      Join Discord Channel
-                    </a>
+                  {/* Transport section:
+                      - Hidden for virtual (no need to pick)
+                      - Shown for physical only */}
+                  {!isVirtual && (
+                    <div>
+                      <strong>Transport</strong>
+                      <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
+                      {pa != null && (
+                        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                          ATAG Bus allowance: RM{pa} per person (if selected)
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
+              )}
 
-                {canManage && (
-                  <>
-                    <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
-                    <button className="btn red" onClick={() => onDelete && onDelete(j)}>Delete</button>
-                  </>
-                )}
+              {/* Hiring line */}
+              <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+                <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
+                <div style={{ color: "#667085" }}>
+                  Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
+                </div>
               </div>
             </div>
-          );
-        })}
-      </div>
-    </>
+
+            {/* Actions */}
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <div
+                style={{
+                  display: "inline-flex",
+                  gap: 6,
+                  alignItems: "center",
+                  flexShrink: 0,
+                  minWidth: 0,
+                  maxWidth: "100%",
+                }}
+              >
+                {canApply && <ApplyArea />}
+
+                <button className="btn" style={COMPACT_BTN} onClick={() => onView && onView(j)}>
+                  View details
+                </button>
+
+                {my === "approved" && (
+                  <a
+                    href={DISCORD_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn"
+                    style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
+                  >
+                    Join Discord Channel
+                  </a>
+                )}
+              </div>
+
+              {canManage && (
+                <>
+                  <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
+                  <button className="btn red" onClick={() => onDelete && onDelete(j)}>Delete</button>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
