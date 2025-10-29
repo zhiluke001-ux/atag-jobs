@@ -69,8 +69,7 @@ function extractLatLngFromToken(token) {
   // C) Last-two-floats pattern
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
-    const lat = Number(m[1]),
-      lng = Number(m[2]);
+    const lat = Number(m[1]), lng = Number(m[2]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;
@@ -85,16 +84,25 @@ function extractDirFromToken(token) {
   }
 }
 
-/* Grid styles */
-const gridRow = {
+/* ---------- Applicants grid (8 columns) ---------- */
+const applGrid = {
   display: "grid",
-  gridTemplateColumns: "minmax(220px,1.3fr) 1fr 0.8fr 0.9fr 1.1fr",
+  gridTemplateColumns:
+    "minmax(220px,1.4fr) minmax(140px,1.1fr) minmax(120px,1fr) minmax(140px,1.1fr) 0.8fr 0.8fr 0.7fr 1fr",
   alignItems: "center",
   gap: 8,
   padding: "10px 12px",
 };
-const headerRow = { ...gridRow, fontWeight: 700, borderBottom: "1px solid var(--border, #e5e7eb)", color: "#111827" };
-const bodyRow = { ...gridRow, borderBottom: "1px solid var(--border, #f1f5f9)" };
+const applHeaderRow = {
+  ...applGrid,
+  fontWeight: 700,
+  borderBottom: "1px solid var(--border, #e5e7eb)",
+  color: "#111827",
+};
+const applBodyRow = {
+  ...applGrid,
+  borderBottom: "1px solid var(--border, #f1f5f9)",
+};
 
 /* Robust virtual detector */
 function isVirtualJob(j) {
@@ -118,15 +126,9 @@ function isVirtualJob(j) {
 
 /* ---------- Better error extraction for apiPost failures ---------- */
 function readApiError(err) {
-  // Our api layer tends to throw strings or Error(message) with JSON text.
   if (!err) return {};
-  if (typeof err === "string") {
-    try { return JSON.parse(err); } catch { return { message: err }; }
-  }
-  if (err.message) {
-    try { return JSON.parse(err.message); } catch { return { message: err.message }; }
-  }
-  // network Response?
+  if (typeof err === "string") { try { return JSON.parse(err); } catch { return { message: err }; } }
+  if (err.message) { try { return JSON.parse(err.message); } catch { return { message: err.message }; } }
   if (err.response && typeof err.response.json === "function") {
     try { return err.response.json(); } catch {}
   }
@@ -180,7 +182,6 @@ export default function PMJobDetails({ jobId }) {
       const j = await apiGet(`/jobs/${jobId}${bust}`);
       let merged = statusForce ? { ...j, status: statusForce } : j;
 
-      // Normalize server alt keys
       const serverAltEnd =
         merged.actualEndAt ||
         merged.endedAt ||
@@ -188,10 +189,8 @@ export default function PMJobDetails({ jobId }) {
         merged.closedAt ||
         null;
 
-      // Read any locally cached end time
       const cachedEnd = LOCAL_KEY(jobId) ? localStorage.getItem(LOCAL_KEY(jobId)) : null;
 
-      // If server doesn't send an end time yet but we've already ended locally, keep cached/ref
       if (statusForce === "ended" || merged.status === "ended") {
         if (!serverAltEnd) {
           const actual = endedAtRef.current || cachedEnd;
@@ -212,9 +211,7 @@ export default function PMJobDetails({ jobId }) {
       setLoading(false);
     }
   }
-  useEffect(() => {
-    load(); // eslint-disable-next-line
-  }, [jobId]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [jobId]);
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
 
@@ -279,7 +276,6 @@ export default function PMJobDetails({ jobId }) {
       setJob((prev) => (prev ? { ...prev, status: "ongoing" } : prev));
       await apiPost(`/jobs/${jobId}/start`, {});
 
-      // Only open scanner for physical jobs
       if (!isVirtual) {
         openScanner();
       } else {
@@ -301,15 +297,12 @@ export default function PMJobDetails({ jobId }) {
 
       // Optimistic update FIRST
       endedAtRef.current = actualEndAt;
-      try {
-        localStorage.setItem(LOCAL_KEY(jobId), actualEndAt);
-      } catch {}
+      try { localStorage.setItem(LOCAL_KEY(jobId), actualEndAt); } catch {}
       setStatusForce("ended");
       setJob((prev) => (prev ? { ...prev, status: "ended", actualEndAt } : prev));
 
       await apiPost(`/jobs/${jobId}/end`, { actualEndAt });
 
-      // Virtual: best effort finalize outAt
       if (isVirtual && job) {
         const attendance = job.attendance || {};
         const presentIds = Object.keys(attendance).filter((uid) => !!attendance[uid]?.in);
@@ -334,9 +327,7 @@ export default function PMJobDetails({ jobId }) {
     try {
       await apiPost(`/jobs/${jobId}/reset`, { keepAttendance });
       endedAtRef.current = null;
-      try {
-        localStorage.removeItem(LOCAL_KEY(jobId));
-      } catch {}
+      try { localStorage.removeItem(LOCAL_KEY(jobId)); } catch {}
       setStatusForce("upcoming");
       setJob((prev) => (prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev));
       setScannerOpen(false);
@@ -386,17 +377,13 @@ export default function PMJobDetails({ jobId }) {
     hbTimerRef.current = setInterval(() => {
       if (loc) apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(() => {});
     }, 10000);
-    return () => {
-      stopHeartbeat();
-    };
+    return () => { stopHeartbeat(); };
     // eslint-disable-next-line
   }, [scannerOpen, jobId, loc?.lat, loc?.lng]);
 
   function stopHeartbeat() {
     if (watchIdRef.current != null) {
-      try {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-      } catch {}
+      try { navigator.geolocation.clearWatch(watchIdRef.current); } catch {}
       watchIdRef.current = null;
     }
     if (hbTimerRef.current) {
@@ -460,15 +447,11 @@ export default function PMJobDetails({ jobId }) {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
     if (videoRef.current?.srcObject) {
-      try {
-        videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
-      } catch {}
+      try { videoRef.current.srcObject.getTracks().forEach((t) => t.stop()); } catch {}
       videoRef.current.srcObject = null;
     }
     if (streamRef.current) {
-      try {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      } catch {}
+      try { streamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
       streamRef.current = null;
     }
     detRef.current = null;
@@ -490,8 +473,7 @@ export default function PMJobDetails({ jobId }) {
         }
       } else if (usingJsQRRef.current && window.jsQR && canvasCtxRef.current) {
         const v = videoRef.current;
-        const w = v.videoWidth,
-          h = v.videoHeight;
+        const w = v.videoWidth, h = v.videoHeight;
         if (w && h) {
           canvasCtxRef.current.drawImage(v, 0, 0, w, h);
           const img = canvasCtxRef.current.getImageData(0, 0, w, h);
@@ -523,7 +505,6 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // Client-side distance precheck (displayed separately below)
     const applicantLL = extractLatLngFromToken(token);
     const maxM = Number(job?.scanMaxMeters) || 500; // UI default; server enforces its own
     if (applicantLL) {
@@ -534,10 +515,8 @@ export default function PMJobDetails({ jobId }) {
       }
     }
 
-    // Optional direction mismatch warning (does not block, just informs)
     const tokenDir = extractDirFromToken(token);
     if (tokenDir && tokenDir !== scanDir) {
-      // Common when PM selected OUT but user generated IN
       setScanMsg(`Heads up: token is for "${tokenDir.toUpperCase()}" but you selected "${scanDir.toUpperCase()}". Proceeding…`);
     } else {
       setScanMsg("");
@@ -547,7 +526,6 @@ export default function PMJobDetails({ jobId }) {
     try {
       const r = await apiPost("/scan", {
         token,
-        // direction is ignored by server (dir is inside token), but harmless to include:
         direction: scanDir,
         scannerLat: loc.lat,
         scannerLng: loc.lng,
@@ -593,7 +571,7 @@ export default function PMJobDetails({ jobId }) {
         await apiPost(`/jobs/${jobId}/attendance/mark`, { userId, clear: true });
       }
       await load();
-    } catch (err) {
+    } catch {
       alert("Mark virtual attendance failed. Make sure the server has /jobs/:id/attendance/mark implemented.");
     }
   }
@@ -601,15 +579,13 @@ export default function PMJobDetails({ jobId }) {
   /* ------- End click time + OT whole hours (30-min rounding rule) ------- */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
 
-  // compute without relying solely on memo deps; read ref directly
   const actualEndIso =
     job?.actualEndAt || job?.endedAt || job?.finishedAt || job?.closedAt || endedAtRef.current || null;
   const actualEndDJ = actualEndIso ? dayjs(actualEndIso) : null;
 
-  // New OT rule: whole hours only, >30 min round up, ≤30 min round down
   const otRoundedHours = useMemo(() => {
     if (!scheduledEndDJ || !actualEndDJ) return 0;
-    const minutes = actualEndDJ.diff(scheduledEndDJ, "minute"); // signed minutes
+    const minutes = actualEndDJ.diff(scheduledEndDJ, "minute");
     if (minutes <= 0) return 0;
     const baseHours = Math.floor(minutes / 60);
     const remainder = minutes % 60;
@@ -618,10 +594,19 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
+  // Build display rows (now include name/phone/discord, remove late)
   const approvedRows = (job.approved || []).map((uid) => {
-    const app = (job.applications || []).find((a) => a.userId === uid);
+    const app = (job.applications || []).find((a) => a.userId === uid) || {};
     const rec = (job.attendance || {})[uid] || {};
-    return { userId: uid, email: app?.email || uid, in: rec.in, out: rec.out, late: rec.lateMinutes ?? "" };
+    return {
+      userId: uid,
+      email: app.email || uid,
+      name: app.name || app.fullName || app.displayName || "",
+      phone: app.phone || app.phoneNumber || "",
+      discord: app.discord || app.discordHandle || app.username || "",
+      in: rec.in,
+      out: rec.out,
+    };
   });
 
   const statusEff = effectiveStatus(job.status);
@@ -629,7 +614,6 @@ export default function PMJobDetails({ jobId }) {
   const isOngoing = statusEff === "ongoing";
   const isEnded = statusEff === "ended";
 
-  // Precompute precheck for UI (shown once, not duplicated into scanMsg)
   const precheck = (() => {
     if (!token || !loc) return null;
     const ll = extractLatLngFromToken(token);
@@ -651,9 +635,7 @@ export default function PMJobDetails({ jobId }) {
             <div style={{ color: "#374151", marginTop: 6 }}>{job.description || ""}</div>
 
             <div style={{ marginTop: 10, display: "flex", gap: 16, flexWrap: "wrap", color: "#374151" }}>
-              <div>
-                <strong>{job.venue}</strong>
-              </div>
+              <div><strong>{job.venue}</strong></div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
               <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
@@ -667,18 +649,15 @@ export default function PMJobDetails({ jobId }) {
             >
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                 <div>
-                  <b>Initial End Time:</b>
-                  <br />
+                  <b>Initial End Time:</b><br />
                   {fmtDateTime(job.endTime) || "-"}
                 </div>
                 <div>
-                  <b>PM Ended At:</b>
-                  <br />
+                  <b>PM Ended At:</b><br />
                   {actualEndDJ ? fmtDateTime(actualEndDJ.toISOString()) : "— (not ended)"}
                 </div>
                 <div>
-                  <b>OT (rounded hours):</b>
-                  <br />
+                  <b>OT (rounded hours):</b><br />
                   {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
                 </div>
               </div>
@@ -696,35 +675,21 @@ export default function PMJobDetails({ jobId }) {
               {startBusy ? "Starting…" : isVirtual ? "Start event" : "Start event & open scanner"}
             </button>
           ) : isOngoing ? (
-            <button className="btn gray" disabled>
-              Started
-            </button>
+            <button className="btn gray" disabled>Started</button>
           ) : (
-            <button className="btn gray" disabled>
-              Ended
-            </button>
+            <button className="btn gray" disabled>Ended</button>
           )}
 
           {isOngoing && !isVirtual && !scannerOpen && (
-            <button className="btn" onClick={openScanner}>
-              Open scanner
-            </button>
+            <button className="btn" onClick={openScanner}>Open scanner</button>
           )}
           {!isVirtual && scannerOpen && (
-            <button className="btn gray" onClick={closeScanner}>
-              Hide scanner
-            </button>
+            <button className="btn gray" onClick={closeScanner}>Hide scanner</button>
           )}
 
-          <button className="btn" onClick={() => resetEvent(true)}>
-            Reset (keep attendance)
-          </button>
-          <button className="btn danger" onClick={() => resetEvent(false)}>
-            Reset (delete attendance)
-          </button>
-          <button className="btn" onClick={endEvent}>
-            End event
-          </button>
+          <button className="btn" onClick={() => resetEvent(true)}>Reset (keep attendance)</button>
+          <button className="btn danger" onClick={() => resetEvent(false)}>Reset (delete attendance)</button>
+          <button className="btn" onClick={endEvent}>End event</button>
         </div>
       </div>
 
@@ -732,8 +697,11 @@ export default function PMJobDetails({ jobId }) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Applicants</div>
 
-        <div style={headerRow}>
+        <div style={applHeaderRow}>
           <div>Email</div>
+          <div>Name</div>
+          <div>Phone</div>
+          <div>Discord</div>
           <div>Transport</div>
           <div>Status</div>
           <div>L&amp;U</div>
@@ -744,27 +712,28 @@ export default function PMJobDetails({ jobId }) {
           <div style={{ padding: 12, color: "#6b7280" }}>No applicants yet.</div>
         ) : (
           applicants.map((a) => (
-            <div key={a.userId} style={bodyRow}>
+            <div key={a.userId} style={applBodyRow}>
               <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
+              <div>{a.name || a.fullName || a.displayName || "-"}</div>
+              <div>{a.phone || a.phoneNumber || "-"}</div>
+              <div>{a.discord || a.discordHandle || a.username || "-"}</div>
               <div>{a.transport || "-"}</div>
               <div style={{ textTransform: "capitalize" }}>{a.status}</div>
               <div>
                 {a.luApplied ? (
                   <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <input type="checkbox" checked={a.luConfirmed} onChange={(e) => toggleLU(a.userId, e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={a.luConfirmed}
+                      onChange={(e) => toggleLU(a.userId, e.target.checked)}
+                    />
                     <span>Confirmed</span>
                   </label>
-                ) : (
-                  "—"
-                )}
+                ) : ("—")}
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <button className="btn green" onClick={() => setApproval(a.userId, true)}>
-                  Approve
-                </button>
-                <button className="btn danger" onClick={() => setApproval(a.userId, false)}>
-                  Reject
-                </button>
+                <button className="btn green" onClick={() => setApproval(a.userId, true)}>Approve</button>
+                <button className="btn danger" onClick={() => setApproval(a.userId, false)}>Reject</button>
               </div>
             </div>
           ))
@@ -775,13 +744,13 @@ export default function PMJobDetails({ jobId }) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
 
-        {/* Virtual mode controls */}
+        {/* Virtual mode controls (kept simple) */}
         {isVirtual && (
           <div className="card" style={{ padding: 12, marginBottom: 8, border: "1px dashed #e5e7eb" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Virtual attendance</div>
             <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 6 }}>
               Tick <b>Present</b> to include a person for base hours. Overtime is computed automatically when you click{" "}
-              <b>End event</b> using: <i>actual end time − scheduled end time</i> (rounded by 30-min rule).
+              <b>End event</b>.
             </div>
             <div style={{ overflowX: "auto" }}>
               <table width="100%" cellPadding="8" style={{ borderCollapse: "collapse" }}>
@@ -794,9 +763,7 @@ export default function PMJobDetails({ jobId }) {
                 <tbody>
                   {(job.approved || []).length === 0 ? (
                     <tr>
-                      <td colSpan={2} style={{ color: "#6b7280" }}>
-                        No approved users yet.
-                      </td>
+                      <td colSpan={2} style={{ color: "#6b7280" }}>No approved users yet.</td>
                     </tr>
                   ) : (
                     (job.approved || []).map((uid) => {
@@ -807,7 +774,11 @@ export default function PMJobDetails({ jobId }) {
                         <tr key={uid} style={{ borderBottom: "1px solid #f0f0f0" }}>
                           <td>{app?.email || uid}</td>
                           <td align="center">
-                            <input type="checkbox" checked={present} onChange={(e) => markVirtualPresent(uid, e.target.checked)} />
+                            <input
+                              type="checkbox"
+                              checked={present}
+                              onChange={(e) => markVirtualPresent(uid, e.target.checked)}
+                            />
                           </td>
                         </tr>
                       );
@@ -819,37 +790,65 @@ export default function PMJobDetails({ jobId }) {
           </div>
         )}
 
-        {/* Physical compact shared view */}
+        {/* Physical compact shared view (with Name/Phone/Discord; aligned In/Out; no Late) */}
         {!isVirtual && (
           <>
             <table className="table">
               <thead>
                 <tr>
                   <th>Email</th>
-                  <th style={{ width: 120 }}>In</th>
-                  <th style={{ width: 120 }}>Out</th>
-                  <th style={{ width: 120 }}>Late (min)</th>
+                  <th style={{ width: 180 }}>Name</th>
+                  <th style={{ width: 130 }}>Phone</th>
+                  <th style={{ width: 160 }}>Discord</th>
+                  <th style={{ width: 120, textAlign: "center" }}>In</th>
+                  <th style={{ width: 120, textAlign: "center" }}>Out</th>
                 </tr>
               </thead>
             </table>
             <div
-              style={{ maxHeight: 340, overflow: "auto", border: "1px solid var(--border)", borderTop: 0, borderRadius: "0 0 8px 8px" }}
+              style={{
+                maxHeight: 340,
+                overflow: "auto",
+                border: "1px solid var(--border)",
+                borderTop: 0,
+                borderRadius: "0 0 8px 8px",
+              }}
             >
               <table className="table" style={{ border: "none", margin: 0 }}>
                 <tbody>
                   {approvedRows.length === 0 ? (
                     <tr>
-                      <td colSpan={4} style={{ color: "#6b7280" }}>
-                        No approved users yet.
-                      </td>
+                      <td colSpan={6} style={{ color: "#6b7280" }}>No approved users yet.</td>
                     </tr>
                   ) : (
                     approvedRows.map((r) => (
                       <tr key={r.email}>
                         <td>{r.email}</td>
-                        <td>{fmtTime(r.in)}</td>
-                        <td>{fmtTime(r.out)}</td>
-                        <td>{r.late === "" ? "" : r.late}</td>
+                        <td>{r.name || "-"}</td>
+                        <td>{r.phone || "-"}</td>
+                        <td>{r.discord || "-"}</td>
+                        <td
+                          style={{
+                            width: 120,
+                            textAlign: "center",
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {fmtTime(r.in)}
+                        </td>
+                        <td
+                          style={{
+                            width: 120,
+                            textAlign: "center",
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {fmtTime(r.out)}
+                        </td>
                       </tr>
                     ))
                   )}
@@ -885,9 +884,7 @@ export default function PMJobDetails({ jobId }) {
                     {camSupported ? (qrSupported ? "Use camera (auto-scan)" : "QR not supported") : "Camera not available"}
                   </button>
                 ) : (
-                  <button className="btn gray" onClick={stopCamera}>
-                    Stop camera
-                  </button>
+                  <button className="btn gray" onClick={stopCamera}>Stop camera</button>
                 )}
               </div>
               <video
@@ -909,21 +906,13 @@ export default function PMJobDetails({ jobId }) {
               <label style={{ fontWeight: 700 }}>Token (from QR)</label>
               <div style={{ display: "flex", gap: 8 }}>
                 <input value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste decoded QR token here…" />
-                <button className="btn" type="button" onClick={pasteFromClipboard}>
-                  Paste
-                </button>
+                <button className="btn" type="button" onClick={pasteFromClipboard}>Paste</button>
               </div>
               <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10 }}>
-                {loc ? (
-                  <>
-                    Scanner location: {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)} (heartbeat active)
-                  </>
-                ) : (
-                  <>Waiting for location… allow permission.</>
-                )}
+                {loc ? <>Scanner location: {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)} (heartbeat active)</>
+                     : <>Waiting for location… allow permission.</>}
               </div>
 
-              {/* Single, non-duplicated precheck box */}
               {precheck && (
                 <div
                   style={{
@@ -951,9 +940,7 @@ export default function PMJobDetails({ jobId }) {
                 </div>
               )}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-                <button className="btn" onClick={closeScanner}>
-                  Hide
-                </button>
+                <button className="btn" onClick={closeScanner}>Hide</button>
                 <button className="btn primary" disabled={scanBusy || !token} onClick={doScan}>
                   {scanBusy ? "Scanning…" : "Scan"}
                 </button>
