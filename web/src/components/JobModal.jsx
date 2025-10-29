@@ -504,8 +504,17 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
     String(editing ? tr.lead?.threeD2N ?? tr.lead?.specificPayment ?? defaults3d2n.lead : gSess?.threeD2N?.lead ?? defaults3d2n.lead)
   );
 
-  // Optional hourly add-on for session variants (no global toggle, keep as-is)
+  // Optional hourly add-on for session variants
   const [hourlyAddon, setHourlyAddon] = useState(!!(job?.session?.hourlyEnabled || job?.physicalHourlyEnabled));
+
+  /* ---- Early Call & Loading/Unloading (physical only) ---- */
+  const [ecEnabled, setEcEnabled] = useState(!!job?.earlyCall?.enabled);
+  const [ecAmount, setEcAmount] = useState(String(job?.earlyCall?.amount ?? 0));
+  const [ecThreshold, setEcThreshold] = useState(String(job?.earlyCall?.thresholdHours ?? 0));
+
+  const [luEnabled, setLuEnabled] = useState(!!job?.loadingUnload?.enabled);
+  const [luPrice, setLuPrice] = useState(String(job?.loadingUnload?.price ?? 0));
+  const [luQuota, setLuQuota] = useState(String(job?.loadingUnload?.quota ?? 0));
 
   function buildTierRates() {
     const kind = sessionMode === "virtual" ? "virtual" : physicalType;
@@ -611,6 +620,15 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
       ? { enabled: true, amount: N(parkingAmount, 0) }
       : { enabled: false, amount: 0 };
 
+    // Early Call & Loading/Unloading (only if physical; disabled otherwise)
+    const earlyCall = isPhysical
+      ? { enabled: !!ecEnabled, amount: N(ecAmount, 0), thresholdHours: N(ecThreshold, 0) }
+      : { enabled: false, amount: 0, thresholdHours: 0 };
+
+    const loadingUnload = isPhysical
+      ? { enabled: !!luEnabled, price: N(luPrice, 0), quota: N(luQuota, 0) }
+      : { enabled: false, price: 0, quota: 0 };
+
     setBusy(true);
     try {
       const payload = {
@@ -624,7 +642,7 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
         session: {
           mode: sessionMode,
           physicalType: isPhysical ? physicalType : null,
-          hourlyEnabled: isPhysical && ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? true : false,
+          hourlyEnabled: isPhysical && ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? !!hourlyAddon : false,
         },
 
         // mirrors
@@ -633,7 +651,7 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
         sessionKind: kind,
         physicalType: isPhysical ? physicalType : null,
         physicalSubtype: isPhysical ? physicalType : null,
-        physicalHourlyEnabled: isPhysical && ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? true : false,
+        physicalHourlyEnabled: isPhysical && ["half_day", "full_day", "2d1n", "3d2n"].includes(physicalType) ? !!hourlyAddon : false,
 
         transportOptions,
 
@@ -652,6 +670,10 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
         },
 
         allowances: { ...job?.allowances, parking },
+
+        // NEW blocks
+        earlyCall,
+        loadingUnload,
       };
 
       if (editing) {
@@ -695,7 +717,7 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
               </div>
             </div>
 
-            {/* Session FIRST (moved above Transport) */}
+            {/* Session FIRST */}
             <div className="card" style={{ padding: 12 }}>
               <div style={{ display: "grid", gridTemplateColumns: sessionMode === "physical" ? "1fr 1fr" : "1fr", gap: 12 }}>
                 <div>
@@ -818,6 +840,69 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
               hourlyAddon={hourlyAddon}
               setHourlyAddon={setHourlyAddon}
             />
+
+            {/* NEW: Early Call & Loading/Unloading (AFTER Session payment) */}
+            {sessionMode === "physical" && (
+              <div className="card" style={{ padding: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Event extras (Physical)</div>
+
+                {/* Early Call */}
+                <div className="card" style={{ padding: 12, marginBottom: 10 }}>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={ecEnabled}
+                      onChange={(e) => setEcEnabled(e.target.checked)}
+                    />
+                    <span style={{ fontWeight: 600 }}>Enable Early Call</span>
+                  </label>
+
+                  {ecEnabled && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>Early Call Amount (RM)</div>
+                        <input value={ecAmount} onChange={(e) => setEcAmount(e.target.value)} inputMode="decimal" />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>Threshold (hours)</div>
+                        <input value={ecThreshold} onChange={(e) => setEcThreshold(e.target.value)} inputMode="numeric" />
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                    Paid if call/report time is earlier than scheduled by at least the threshold.
+                  </div>
+                </div>
+
+                {/* Loading & Unloading */}
+                <div className="card" style={{ padding: 12 }}>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={luEnabled}
+                      onChange={(e) => setLuEnabled(e.target.checked)}
+                    />
+                    <span style={{ fontWeight: 600 }}>Enable Loading &amp; Unloading</span>
+                  </label>
+
+                  {luEnabled && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>Helper Pay (RM)</div>
+                        <input value={luPrice} onChange={(e) => setLuPrice(e.target.value)} inputMode="decimal" />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 600 }}>Quota (pax)</div>
+                        <input value={luQuota} onChange={(e) => setLuQuota(e.target.value)} inputMode="numeric" />
+                      </div>
+                      <div style={{ alignSelf: "end", fontSize: 12, color: "#6b7280" }}>
+                        PM confirms who actually helped during check-out.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="modal-footer">
