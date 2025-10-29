@@ -67,6 +67,9 @@ const MAX_DISTANCE_METERS = Number(
     500
 );
 
+// One-shot decision policy (approve/reject cannot be changed once set)
+const ONE_SHOT_DECISIONS = true;
+
 const toRad = (deg) => (deg * Math.PI) / 180;
 function isValidCoord(lat, lng) {
   return (
@@ -225,9 +228,12 @@ function jobPublicView(job) {
     roleCounts,
   } = job;
   const lu = job.loadingUnload || {
+    enabled: false,
     quota: 0,
+    price: Number(db.config.rates.loadingUnloading.amount),
     applicants: [],
     participants: [],
+    closed: false,
   };
 
   const appliedCount = Array.isArray(job.applications)
@@ -248,8 +254,13 @@ function jobPublicView(job) {
     status: computeStatus(job),
     transportOptions: transportOptions || { bus: true, own: true },
     loadingUnload: {
-      quota: lu.quota || 0,
+      enabled: !!lu.enabled,
+      quota: Number(lu.quota || 0),
       applicants: lu.applicants?.length || 0,
+      closed: !!lu.closed,
+      // (optionally) participants count for UI badges
+      participants: (lu.participants || []).length,
+      price: Number(lu.price || db.config.rates.loadingUnloading.amount),
     },
     roleCounts: roleCounts || { junior: 0, senior: 0, lead: 0 },
     appliedCount,
@@ -409,27 +420,50 @@ for (const u of db.users) {
     delete u.resetToken;
     mutated = true;
   }
+  // backfill optional fields
+  if (u.phone === undefined) { u.phone = ""; mutated = true; }
+  if (u.discord === undefined) { u.discord = ""; mutated = true; }
 }
 if (mutated) await saveDB(db);
 
-/* ---------- Ensure adjustments exists on all jobs (boot migration) ---------- */
+/* ---------- Ensure adjustments + L&U shape exists on all jobs (boot migration) ---------- */
 db.jobs = db.jobs || [];
-let adjMutated = false;
+let bootMutated = false;
 for (const j of db.jobs) {
+  // adjustments normalize
   if (!j.adjustments || typeof j.adjustments !== "object") {
     j.adjustments = {};
-    adjMutated = true;
+    bootMutated = true;
   } else {
     const norm = normalizeAdjustments(j.adjustments);
     const before = JSON.stringify(j.adjustments);
     const after = JSON.stringify(norm);
     if (before !== after) {
       j.adjustments = norm;
-      adjMutated = true;
+      bootMutated = true;
     }
   }
+  // L&U normalize
+  j.loadingUnload = j.loadingUnload || {
+    enabled: false,
+    quota: 0,
+    price: Number(db.config.rates.loadingUnloading.amount),
+    applicants: [],
+    participants: [],
+    closed: false,
+  };
+  // de-dupe arrays
+  const apps = Array.isArray(j.loadingUnload.applicants) ? Array.from(new Set(j.loadingUnload.applicants)) : [];
+  const parts = Array.isArray(j.loadingUnload.participants) ? Array.from(new Set(j.loadingUnload.participants)) : [];
+  j.loadingUnload.applicants = apps;
+  j.loadingUnload.participants = parts;
+  if (j.loadingUnload.closed === undefined) j.loadingUnload.closed = false;
+  // if already at/over quota, close
+  if (Number(j.loadingUnload.quota || 0) > 0 && parts.length >= Number(j.loadingUnload.quota)) {
+    j.loadingUnload.closed = true;
+  }
 }
-if (adjMutated) await saveDB(db);
+if (bootMutated) await saveDB(db);
 
 /* ---------------- Notifications (feed + web push) ---------------- */
 const NOTIF_CAP = 200;
@@ -516,7 +550,7 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/register", async (req, res) => {
-  const { email, username, name, password, role } = req.body || {};
+  const { email, username, name, password, role, phone, discord } = req.body || {};
   if (!email || !password)
     return res
       .status(400)
@@ -555,6 +589,8 @@ app.post("/register", async (req, res) => {
     role: pickedRole,
     grade: "junior",
     passwordHash,
+    phone: String(phone || ""),
+    discord: String(discord || ""),
   };
   db.users.push(newUser);
   await saveDB(db);
@@ -640,6 +676,8 @@ app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
     name: u.name,
     role: u.role,
     grade: u.grade || "junior",
+    phone: u.phone || "",
+    discord: u.discord || "",
   }));
   res.json(list);
 });
@@ -800,6 +838,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
       price: Number(lduBody.price ?? db.config.rates.loadingUnloading.amount),
       applicants: [],
       participants: [],
+      closed: false,
     },
     applications: [],
     approved: [],
@@ -885,6 +924,7 @@ app.patch(
 
     const lduBody = ldu || loadingUnload;
     if (lduBody) {
+      const prevClosed = !!job.loadingUnload?.closed;
       job.loadingUnload = {
         enabled:
           lduBody.enabled !== undefined
@@ -897,12 +937,24 @@ app.patch(
             db.config.rates.loadingUnloading.amount
         ),
         applicants: Array.isArray(job.loadingUnload?.applicants)
-          ? job.loadingUnload.applicants
+          ? Array.from(new Set(job.loadingUnload.applicants))
           : [],
         participants: Array.isArray(job.loadingUnload?.participants)
-          ? job.loadingUnload.participants
+          ? Array.from(new Set(job.loadingUnload.participants))
           : [],
+        closed: prevClosed, // remain closed unless explicitly reopened below
       };
+      // Auto-close if participants meet/exceed new quota; otherwise keep previous closed state
+      if (job.loadingUnload.quota > 0 && job.loadingUnload.participants.length >= job.loadingUnload.quota) {
+        job.loadingUnload.closed = true;
+      }
+      // Allow manual reopen only if explicitly provided
+      if (lduBody.closed === false) {
+        job.loadingUnload.closed = false;
+      }
+      if (lduBody.closed === true) {
+        job.loadingUnload.closed = true;
+      }
     }
 
     if (roleCounts && typeof roleCounts === "object") {
@@ -956,6 +1008,7 @@ app.post(
       earlyCallAmount,
       earlyCallThresholdHours,
       roleRates,
+      // optional: closed handled in /jobs/:id patch
     } = req.body || {};
 
     job.rate = job.rate || {};
@@ -977,9 +1030,11 @@ app.post(
       price: Number(db.config.rates.loadingUnloading.amount),
       applicants: [],
       participants: [],
+      closed: false,
     };
     if (lduEnabled !== undefined) job.loadingUnload.enabled = !!lduEnabled;
     if (lduPrice !== undefined) job.loadingUnload.price = Number(lduPrice);
+    // keep .closed as-is here
 
     job.earlyCall = job.earlyCall || {
       enabled: false,
@@ -1079,13 +1134,14 @@ app.post(
     )
       return res.status(400).json({ error: "transport_not_allowed" });
 
-    const lu =
-      job.loadingUnload || {
-        enabled: false,
-        quota: 0,
-        applicants: [],
-        participants: [],
-      };
+    const lu = job.loadingUnload || {
+      enabled: false,
+      quota: 0,
+      price: Number(db.config.rates.loadingUnloading.amount),
+      applicants: [],
+      participants: [],
+      closed: false,
+    };
     const luEnabled = lu.enabled ?? lu.quota > 0;
 
     let exists = job.applications.find((a) => a.userId === req.user.id);
@@ -1100,12 +1156,11 @@ app.post(
         job.rejected = job.rejected.filter((u) => u !== req.user.id);
         job.approved = job.approved.filter((u) => u !== req.user.id);
         if (wantsLU === true) {
-          if (!luEnabled) return res.status(400).json({ error: "lu_disabled" });
-          job.loadingUnload = lu;
-          const a = job.loadingUnload.applicants;
-          if (job.loadingUnload.quota > 0) {
-            if (a.length >= job.loadingUnload.quota)
-              return res.status(400).json({ error: "lu_quota_full" });
+          if (!luEnabled || lu.closed === true) {
+            // silently ignore when closed
+          } else {
+            job.loadingUnload = lu;
+            const a = job.loadingUnload.applicants;
             if (!a.includes(req.user.id)) a.push(req.user.id);
           }
         } else if (wantsLU === false && job.loadingUnload?.applicants) {
@@ -1128,12 +1183,11 @@ app.post(
         return res.json({ ok: true, reapply: true });
       }
       if (wantsLU === true) {
-        if (!luEnabled) return res.status(400).json({ error: "lu_disabled" });
-        job.loadingUnload = lu;
-        const a = job.loadingUnload.applicants;
-        if (job.loadingUnload.quota > 0) {
-          if (a.length >= job.loadingUnload.quota && !a.includes(req.user.id))
-            return res.status(400).json({ error: "lu_quota_full" });
+        if (!luEnabled || lu.closed === true) {
+          // ignore when closed
+        } else {
+          job.loadingUnload = lu;
+          const a = job.loadingUnload.applicants;
           if (!a.includes(req.user.id)) a.push(req.user.id);
         }
         await saveDB(db);
@@ -1159,12 +1213,11 @@ app.post(
     });
 
     if (wantsLU === true) {
-      if (!luEnabled) return res.status(400).json({ error: "lu_disabled" });
-      job.loadingUnload = lu;
-      const a = job.loadingUnload.applicants;
-      if (job.loadingUnload.quota > 0) {
-        if (a.length >= job.loadingUnload.quota)
-          return res.status(400).json({ error: "lu_quota_full" });
+      if (!luEnabled || lu.closed === true) {
+        // ignore when closed
+      } else {
+        job.loadingUnload = lu;
+        const a = job.loadingUnload.applicants;
         if (!a.includes(req.user.id)) a.push(req.user.id);
       }
     }
@@ -1238,12 +1291,17 @@ app.get(
       const luConfirmed = !!(job.loadingUnload?.participants || []).includes(
         a.userId
       );
+      const u = db.users.find((x) => x.id === a.userId);
       return {
         ...a,
         status: state,
         userId: a.userId,
         luApplied,
         luConfirmed,
+        // enrich for PM view
+        name: u?.name || "",
+        phone: u?.phone || "",
+        discord: u?.discord || "",
       };
     });
     res.json(list);
@@ -1260,16 +1318,59 @@ app.post(
     if (!userId || typeof approve !== "boolean")
       return res.status(400).json({ error: "bad_request" });
 
+    // one-shot decision lock
+    const alreadyApproved = job.approved.includes(userId);
+    const alreadyRejected = job.rejected.includes(userId);
+    if (ONE_SHOT_DECISIONS && (alreadyApproved || alreadyRejected)) {
+      return res.status(409).json({ error: "decision_locked" });
+    }
+
     if (approve && (job.approved?.length || 0) >= Number(job.headcount || 0)) {
       return res.status(409).json({ error: "job_full" });
     }
 
     const applied = job.applications.find((a) => a.userId === userId);
     if (!applied) return res.status(400).json({ error: "user_not_applied" });
+
+    // clear previous state (idempotent-ish)
     job.approved = job.approved.filter((u) => u !== userId);
     job.rejected = job.rejected.filter((u) => u !== userId);
-    if (approve) job.approved.push(userId);
-    else job.rejected.push(userId);
+
+    if (approve) {
+      job.approved.push(userId);
+
+      // L&U assignment on APPROVE (first N win)
+      job.loadingUnload = job.loadingUnload || {
+        enabled: false,
+        quota: 0,
+        price: Number(db.config.rates.loadingUnloading.amount),
+        applicants: [],
+        participants: [],
+        closed: false,
+      };
+
+      const wantsLU = (job.loadingUnload.applicants || []).includes(userId);
+      const partsSet = new Set(job.loadingUnload.participants || []);
+      const quota = Number(job.loadingUnload.quota || 0);
+
+      if (wantsLU && !job.loadingUnload.closed && quota > 0) {
+        if (partsSet.size < quota) {
+          partsSet.add(userId);
+          job.loadingUnload.participants = Array.from(partsSet);
+        }
+        // If now full, close and auto-cancel everyone else
+        if (partsSet.size >= quota) {
+          job.loadingUnload.closed = true;
+          const keep = new Set(job.loadingUnload.participants || []);
+          job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(uid => keep.has(uid));
+        }
+      }
+    } else {
+      job.rejected.push(userId);
+      // Rejecting someone who never got a slot doesn't change L&U participants
+      // If you want to free a slot when rejecting AFTER approved, you'd need to lift one-shot or add a special route.
+    }
+
     await saveDB(db);
     exportJobCSV(job);
     addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
@@ -1304,6 +1405,7 @@ app.get(
         quota: 0,
         applicants: [],
         participants: [],
+        closed: false,
       };
     const details = (ids) =>
       ids.map((uid) => {
@@ -1311,12 +1413,13 @@ app.get(
           email: "unknown",
           id: uid,
         };
-        return { userId: uid, email: u.email };
+        return { userId: uid, email: u.email, name: u.name || "" };
       });
     res.json({
       enabled: !!l.enabled,
       price: Number(l.price || 0),
       quota: l.quota || 0,
+      closed: !!l.closed,
       applicants: details(l.applicants || []),
       participants: details(l.participants || []),
     });
@@ -1338,9 +1441,14 @@ app.post(
       price: db.config.rates.loadingUnloading.amount,
       applicants: [],
       participants: [],
+      closed: false,
     };
     const p = new Set(job.loadingUnload.participants || []);
     if (present) {
+      // Respect closure; only allow if already participant
+      if (job.loadingUnload.closed && !p.has(userId)) {
+        return res.status(409).json({ error: "lu_closed" });
+      }
       if (!p.has(userId)) {
         if ((p.size || 0) >= Number(job.loadingUnload.quota || 0)) {
           return res.status(409).json({ error: "lu_quota_full" });
@@ -1349,12 +1457,19 @@ app.post(
       }
     } else {
       p.delete(userId);
+      // optional: reopening is manual; keep closed as-is
     }
     job.loadingUnload.participants = [...p];
+    // auto-close if hit quota
+    if (job.loadingUnload.quota > 0 && p.size >= job.loadingUnload.quota) {
+      job.loadingUnload.closed = true;
+      const keep = new Set(job.loadingUnload.participants);
+      job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(uid => keep.has(uid));
+    }
     await saveDB(db);
     exportJobCSV(job);
     addAudit("lu_mark", { jobId: job.id, userId, present }, req);
-    res.json({ ok: true, participants: job.loadingUnload.participants });
+    res.json({ ok: true, participants: job.loadingUnload.participants, closed: job.loadingUnload.closed });
   }
 );
 
