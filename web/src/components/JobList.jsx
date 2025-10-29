@@ -235,7 +235,7 @@ export default function JobList({
                     <div>
                       <div style={{ fontWeight: 600 }}>Early Call</div>
                       <div style={{ color: "#374151" }}>
-                        {ec?.enabled ? `Yes · RM${Number(ec.amount || 0)} (≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
+                        {ec?.enabled ? `Yes · RM${Number(ec.amount || 0)}` : "No"}
                       </div>
                     </div>
                     <div>
