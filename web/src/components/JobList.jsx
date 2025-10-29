@@ -41,20 +41,20 @@ function deriveViewerRank(user) {
   return "junior";
 }
 function deriveKind(job) {
-  const kindCandidate =
+  const kind =
     job?.rate?.sessionKind ||
     job?.sessionKind ||
     job?.physicalSubtype ||
     job?.session?.physicalType ||
     (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kindCandidate === "virtual" ? "virtual" : "physical");
-  const isVirtual = mode === "virtual" || kindCandidate === "virtual";
+  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
+  const isVirtual = mode === "virtual" || kind === "virtual";
 
   const resolvedKind = isVirtual
     ? "virtual"
-    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kindCandidate)
-      ? kindCandidate
+    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
+      ? kind
       : "half_day";
 
   const label =
@@ -165,7 +165,7 @@ export default function JobList({
         const applied = Number(j.appliedCount || 0);
         const total = Number(j.headcount || 0);
 
-        const { label, kind, isVirtual } = deriveKind(j);
+        const { isVirtual, kind, label } = deriveKind(j);
         const isPhysical = !isVirtual;
 
         // Allowances (for physical transport)
@@ -212,47 +212,39 @@ export default function JobList({
                 <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
               </div>
 
-              {/* Session (its own line) — appears BEFORE transport/options by request */}
+              {/* Session (its own line) */}
               <div style={{ marginTop: 6 }}>
                 <strong>Session</strong>
                 <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
               </div>
 
-              {/* === Physical-only options === */}
+              {/* === Physical-only options (ALWAYS visible when physical) === */}
               {isPhysical && (
                 <>
-                  {/* Transport */}
                   <div style={{ marginTop: 6 }}>
                     <strong>Transport</strong>
                     <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
-                    {pa != null && (
+                    {pa != null && j?.transportOptions?.bus && (
                       <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
                         ATAG Bus allowance: RM{pa} per person (if selected)
                       </div>
                     )}
                   </div>
 
-                  {/* Early Call & Loading — show ONLY if enabled */}
-                  {(ec?.enabled || lu?.enabled) && (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
-                      {ec?.enabled && (
-                        <div>
-                          <div style={{ fontWeight: 600 }}>Early Call</div>
-                          <div style={{ color: "#374151" }}>
-                            Yes · RM{Number(ec.amount || 0)} (≥ {Number(ec.thresholdHours || 0)}h)
-                          </div>
-                        </div>
-                      )}
-                      {lu?.enabled && (
-                        <div>
-                          <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
-                          <div style={{ color: "#374151" }}>
-                            Yes · RM{Number(lu.price || 0)} / helper · Quota {Number(lu.quota || 0)}
-                          </div>
-                        </div>
-                      )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Early Call</div>
+                      <div style={{ color: "#374151" }}>
+                        {ec?.enabled ? `Yes · RM${Number(ec.amount || 0)} (≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
+                      </div>
                     </div>
-                  )}
+                    <div>
+                      <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
+                      <div style={{ color: "#374151" }}>
+                        {lu?.enabled ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(lu.quota || 0)}` : "No"}
+                      </div>
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -293,7 +285,6 @@ export default function JobList({
 
             {/* Actions */}
             <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              {/* Keep Approved + View + Discord in one line, compact, within the card */}
               <div
                 style={{
                   display: "inline-flex",
@@ -323,7 +314,6 @@ export default function JobList({
                 )}
               </div>
 
-              {/* Manager controls can wrap to a new line if needed */}
               {canManage && (
                 <>
                   <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
