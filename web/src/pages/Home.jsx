@@ -1,13 +1,11 @@
 // web/src/pages/Home.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { apiGet, apiPost, apiDelete } from "../api";
 import JobList from "../components/JobList";
 import JobModal from "../components/JobModal";
+import ApplyModal from "../components/ApplyModal";
 
-/* ------------------------------
-   Helpers shared with Apply flow
------------------------------- */
+/* Optional: kind derivation if you need to branch UI later */
 function deriveKind(job) {
   const kind =
     job?.rate?.sessionKind ||
@@ -16,146 +14,22 @@ function deriveKind(job) {
     job?.session?.physicalType ||
     (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
-  const isVirtual = mode === "virtual" || kind === "virtual";
+  const mode =
+    job?.session?.mode ||
+    job?.sessionMode ||
+    job?.mode ||
+    (kind === "virtual" ? "virtual" : "physical");
 
+  const isVirtual = mode === "virtual" || kind === "virtual";
   const resolvedKind = isVirtual
     ? "virtual"
     : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
-      ? kind
-      : "half_day";
+    ? kind
+    : "half_day";
 
   return { isVirtual, kind: resolvedKind };
 }
 
-/* ------------------------------
-   Inline Apply Modal (with L&U opt-in)
------------------------------- */
-function ApplyModal({ open, job, onClose, onSubmit }) {
-  if (!open || !job) return null;
-  const { isVirtual } = deriveKind(job);
-  const isPhysical = !isVirtual;
-
-  // Transport choices only for physical
-  const allow = isPhysical ? (job.transportOptions || { bus: true, own: true }) : { bus: false, own: false };
-  const choices = !isPhysical ? [] : [
-    ...(allow.bus ? [{ key: "ATAG Bus", label: "ATAG Bus" }] : []),
-    ...(allow.own ? [{ key: "Own Transport", label: "Own Transport" }] : []),
-  ];
-  const [selected, setSelected] = useState(choices.length ? choices[0].key : "");
-
-  // Loading & Unloading opt-in (only if physical AND enabled AND quota remaining)
-  const luEnabled = isPhysical && !!job.loadingUnload?.enabled;
-  const luQuota = Number(luEnabled ? job.loadingUnload?.quota || 0 : 0);
-  const luApplicants = Number(
-    luEnabled
-      ? Array.isArray(job.loadingUnload?.applicants)
-        ? job.loadingUnload.applicants.length
-        : job.loadingUnload?.applicants || 0
-      : 0
-  );
-  const luRemaining = luEnabled && luQuota > 0 ? Math.max(0, luQuota - luApplicants) : 0;
-  const showLU = luEnabled && luRemaining > 0;
-  const [wantsLU, setWantsLU] = useState(false);
-
-  useEffect(() => {
-    if (isPhysical) {
-      const first =
-        (job.transportOptions?.bus && "ATAG Bus") ||
-        (job.transportOptions?.own && "Own Transport") ||
-        "";
-      setSelected(first);
-    } else {
-      setSelected(""); // not required for virtual
-    }
-    setWantsLU(false);
-  }, [job?.id, isPhysical]);
-
-  return createPortal(
-    <>
-      <div className="modal-backdrop" onClick={onClose} />
-      <div className="modal" role="dialog" aria-modal="true">
-        <div className="modal-card modal-sm">
-          <div className="modal-header">Apply for: {job.title}</div>
-
-          <div className="modal-body" style={{ display: "grid", gap: 12 }}>
-            {/* Transport (PHYSICAL ONLY) */}
-            {isPhysical && (
-              <div className="card">
-                <label style={{ fontWeight: 600 }}>Choose Transport</label>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: 16,
-                    alignItems: "center",
-                    marginTop: 8,
-                  }}
-                >
-                  {choices.map((c) => (
-                    <label key={c.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        type="radio"
-                        name="transport"
-                        value={c.key}
-                        checked={selected === c.key}
-                        onChange={() => setSelected(c.key)}
-                      />
-                      {c.label}
-                    </label>
-                  ))}
-                  {!choices.length && (
-                    <div style={{ gridColumn: "span 2", color: "#b91c1c" }}>
-                      No transport option available for this job.
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Loading & Unloading opt-in (PHYSICAL ONLY + ENABLED) */}
-            {showLU && (
-              <div className="card">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                  <label style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
-                    <input
-                      type="checkbox"
-                      checked={wantsLU}
-                      onChange={(e) => setWantsLU(e.target.checked)}
-                    />
-                    I can help with <strong>Loading &amp; Unloading</strong>
-                  </label>
-                  <div style={{ fontSize: 12, color: "#667085" }}>
-                    Helpers needed: {luRemaining} remaining
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: "#667085", marginTop: 6 }}>
-                  PM will confirm who actually helped during the event.
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="modal-footer">
-            <button className="btn" onClick={onClose}>Cancel</button>
-            <button
-              className="btn primary"
-              onClick={() => onSubmit(isPhysical ? selected : null, showLU ? wantsLU : false)}
-              disabled={isPhysical && !selected}
-            >
-              Apply
-            </button>
-          </div>
-        </div>
-      </div>
-    </>,
-    document.body
-  );
-}
-
-/* ------------------------------
-   Home = Jobs Management
------------------------------- */
 export default function Home({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -181,7 +55,7 @@ export default function Home({ navigate, user }) {
     setLoading(true);
     try {
       const list = await apiGet("/jobs");
-      // HYDRATE each list item with full details so pay display is consistent with JobDetails
+      // Hydrate each to ensure pay details / role rates are consistent with details page
       const full = await Promise.all(
         (list || []).map(async (j) => {
           try {
@@ -203,7 +77,9 @@ export default function Home({ navigate, user }) {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   useEffect(() => {
     if (user?.role === "part-timer") {
@@ -233,17 +109,19 @@ export default function Home({ navigate, user }) {
 
   async function handleSubmitApply(transport, wantsLU) {
     try {
-      // For virtual sessions, transport may be null — backend should ignore.
-      const payload = { ...(transport ? { transport } : {}), ...(wantsLU ? { wantsLU: true } : { wantsLU: false }) };
-      await apiPost(`/jobs/${applyJob.id}/apply`, payload);
+      // Server requires a valid transport string even for virtual jobs.
+      const tx = transport || "Own Transport";
+      await apiPost(`/jobs/${applyJob.id}/apply`, { transport: tx, wantsLU: !!wantsLU });
+
       const list = await apiGet("/me/jobs");
       const map = {};
       for (const it of list || []) map[it.id] = it.myStatus;
       setMyStatuses(map);
+
       setApplyOpen(false);
       setApplyJob(null);
       window.alert("Applied!");
-      load(); // refresh counters (L&U remaining etc.)
+      load(); // refresh counters (including L&U remaining)
     } catch (e) {
       try {
         const j = JSON.parse(String(e));
@@ -257,7 +135,7 @@ export default function Home({ navigate, user }) {
   // ---- Edit/Delete
   async function handleEdit(job) {
     try {
-      const full = await apiGet(`/jobs/${job.id}`); // ensure full fields (rolePlan, tierRates, etc.)
+      const full = await apiGet(`/jobs/${job.id}`);
       setEditJob(full);
     } catch (e) {
       alert("Failed to load job: " + e);
@@ -277,7 +155,14 @@ export default function Home({ navigate, user }) {
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       {/* Top bar */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 10,
+        }}
+      >
         <div style={{ fontSize: 22, fontWeight: 800 }}>Jobs Management</div>
         {canManage && (
           <button className="btn primary" onClick={() => setShowCreate(true)}>
@@ -300,7 +185,7 @@ export default function Home({ navigate, user }) {
         onEdit={handleEdit}
         onDelete={handleDelete}
         showFullDetails
-        viewerUser={user}   // role-based display
+        viewerUser={user} // role-based display
       />
 
       {/* Create Job Modal */}
