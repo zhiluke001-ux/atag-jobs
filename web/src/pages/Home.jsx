@@ -6,36 +6,70 @@ import JobList from "../components/JobList";
 import JobModal from "../components/JobModal";
 
 /* ------------------------------
+   Helpers shared with Apply flow
+------------------------------ */
+function deriveKind(job) {
+  const kind =
+    job?.rate?.sessionKind ||
+    job?.sessionKind ||
+    job?.physicalSubtype ||
+    job?.session?.physicalType ||
+    (job?.session?.mode === "virtual" ? "virtual" : null);
+
+  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
+  const isVirtual = mode === "virtual" || kind === "virtual";
+
+  const resolvedKind = isVirtual
+    ? "virtual"
+    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
+      ? kind
+      : "half_day";
+
+  return { isVirtual, kind: resolvedKind };
+}
+
+/* ------------------------------
    Inline Apply Modal (with L&U opt-in)
 ------------------------------ */
 function ApplyModal({ open, job, onClose, onSubmit }) {
   if (!open || !job) return null;
+  const { isVirtual } = deriveKind(job);
+  const isPhysical = !isVirtual;
 
-  const allow = job.transportOptions || { bus: true, own: true };
-  const choices = [
+  // Transport choices only for physical
+  const allow = isPhysical ? (job.transportOptions || { bus: true, own: true }) : { bus: false, own: false };
+  const choices = !isPhysical ? [] : [
     ...(allow.bus ? [{ key: "ATAG Bus", label: "ATAG Bus" }] : []),
     ...(allow.own ? [{ key: "Own Transport", label: "Own Transport" }] : []),
   ];
   const [selected, setSelected] = useState(choices.length ? choices[0].key : "");
 
-  // Loading & Unloading opt-in (shown only if quota > 0)
-  const luQuota = Number(job.loadingUnload?.quota || 0);
+  // Loading & Unloading opt-in (only if physical AND enabled AND quota remaining)
+  const luEnabled = isPhysical && !!job.loadingUnload?.enabled;
+  const luQuota = Number(luEnabled ? job.loadingUnload?.quota || 0 : 0);
   const luApplicants = Number(
-    Array.isArray(job.loadingUnload?.applicants)
-      ? job.loadingUnload.applicants.length
-      : job.loadingUnload?.applicants || 0
+    luEnabled
+      ? Array.isArray(job.loadingUnload?.applicants)
+        ? job.loadingUnload.applicants.length
+        : job.loadingUnload?.applicants || 0
+      : 0
   );
-  const luRemaining = luQuota > 0 ? Math.max(0, luQuota - luApplicants) : 0;
+  const luRemaining = luEnabled && luQuota > 0 ? Math.max(0, luQuota - luApplicants) : 0;
+  const showLU = luEnabled && luRemaining > 0;
   const [wantsLU, setWantsLU] = useState(false);
 
   useEffect(() => {
-    const first =
-      (job.transportOptions?.bus && "ATAG Bus") ||
-      (job.transportOptions?.own && "Own Transport") ||
-      "";
-    setSelected(first);
+    if (isPhysical) {
+      const first =
+        (job.transportOptions?.bus && "ATAG Bus") ||
+        (job.transportOptions?.own && "Own Transport") ||
+        "";
+      setSelected(first);
+    } else {
+      setSelected(""); // not required for virtual
+    }
     setWantsLU(false);
-  }, [job?.id]);
+  }, [job?.id, isPhysical]);
 
   return createPortal(
     <>
@@ -45,40 +79,42 @@ function ApplyModal({ open, job, onClose, onSubmit }) {
           <div className="modal-header">Apply for: {job.title}</div>
 
           <div className="modal-body" style={{ display: "grid", gap: 12 }}>
-            {/* Transport */}
-            <div className="card">
-              <label style={{ fontWeight: 600 }}>Choose Transport</label>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 16,
-                  alignItems: "center",
-                  marginTop: 8,
-                }}
-              >
-                {choices.map((c) => (
-                  <label key={c.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <input
-                      type="radio"
-                      name="transport"
-                      value={c.key}
-                      checked={selected === c.key}
-                      onChange={() => setSelected(c.key)}
-                    />
-                    {c.label}
-                  </label>
-                ))}
-                {!choices.length && (
-                  <div style={{ gridColumn: "span 2", color: "#b91c1c" }}>
-                    No transport option available for this job.
-                  </div>
-                )}
+            {/* Transport (PHYSICAL ONLY) */}
+            {isPhysical && (
+              <div className="card">
+                <label style={{ fontWeight: 600 }}>Choose Transport</label>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 16,
+                    alignItems: "center",
+                    marginTop: 8,
+                  }}
+                >
+                  {choices.map((c) => (
+                    <label key={c.key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="radio"
+                        name="transport"
+                        value={c.key}
+                        checked={selected === c.key}
+                        onChange={() => setSelected(c.key)}
+                      />
+                      {c.label}
+                    </label>
+                  ))}
+                  {!choices.length && (
+                    <div style={{ gridColumn: "span 2", color: "#b91c1c" }}>
+                      No transport option available for this job.
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Loading & Unloading opt-in */}
-            {luQuota > 0 && (
+            {/* Loading & Unloading opt-in (PHYSICAL ONLY + ENABLED) */}
+            {showLU && (
               <div className="card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
@@ -104,8 +140,8 @@ function ApplyModal({ open, job, onClose, onSubmit }) {
             <button className="btn" onClick={onClose}>Cancel</button>
             <button
               className="btn primary"
-              onClick={() => selected && onSubmit(selected, wantsLU)}
-              disabled={!selected}
+              onClick={() => onSubmit(isPhysical ? selected : null, showLU ? wantsLU : false)}
+              disabled={isPhysical && !selected}
             >
               Apply
             </button>
@@ -150,7 +186,6 @@ export default function Home({ navigate, user }) {
         (list || []).map(async (j) => {
           try {
             const fj = await apiGet(`/jobs/${j.id}`);
-            // keep headcount/counters from list if present
             return {
               ...j,
               ...fj,
@@ -198,7 +233,9 @@ export default function Home({ navigate, user }) {
 
   async function handleSubmitApply(transport, wantsLU) {
     try {
-      await apiPost(`/jobs/${applyJob.id}/apply`, { transport, wantsLU });
+      // For virtual sessions, transport may be null — backend should ignore.
+      const payload = { ...(transport ? { transport } : {}), ...(wantsLU ? { wantsLU: true } : { wantsLU: false }) };
+      await apiPost(`/jobs/${applyJob.id}/apply`, payload);
       const list = await apiGet("/me/jobs");
       const map = {};
       for (const it of list || []) map[it.id] = it.myStatus;
