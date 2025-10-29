@@ -33,7 +33,7 @@ export default function Login({ navigate, setUser }) {
         <input
           value={identifier}
           onChange={(e) => setIdentifier(e.target.value)}
-          placeholder="alice@example.com or alice"
+          placeholder="Email or Username"
           style={{ width: "100%", marginTop: 6 }}
           required
         />
@@ -58,22 +58,6 @@ export default function Login({ navigate, setUser }) {
           </button>
         </div>
 
-        {/* Demo helpers */}
-        <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-          <div>Demo users (password: <code>password</code>):</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
-            {["alice", "pm", "admin"].map((x) => (
-              <button
-                key={x}
-                type="button"
-                className="btn"
-                onClick={() => setIdentifier(x)}
-              >
-                {x}
-              </button>
-            ))}
-          </div>
-        </div>
 
         <div style={{ marginTop: 10, fontSize: 12 }}>
           <a href="#/forgot">Forgot password?</a> &nbsp;•&nbsp;{" "}
