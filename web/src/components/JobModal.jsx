@@ -510,7 +510,6 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
   /* ---- Early Call & Loading/Unloading (physical only) ---- */
   const [ecEnabled, setEcEnabled] = useState(!!job?.earlyCall?.enabled);
   const [ecAmount, setEcAmount] = useState(String(job?.earlyCall?.amount ?? 0));
-  const [ecThreshold, setEcThreshold] = useState(String(job?.earlyCall?.thresholdHours ?? 0));
 
   const [luEnabled, setLuEnabled] = useState(!!job?.loadingUnload?.enabled);
   const [luPrice, setLuPrice] = useState(String(job?.loadingUnload?.price ?? 0));
@@ -620,10 +619,10 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
       ? { enabled: true, amount: N(parkingAmount, 0) }
       : { enabled: false, amount: 0 };
 
-    // Early Call & Loading/Unloading (only if physical; disabled otherwise)
+    // Early Call & Loading/Unloading (only if physical)
     const earlyCall = isPhysical
-      ? { enabled: !!ecEnabled, amount: N(ecAmount, 0), thresholdHours: N(ecThreshold, 0) }
-      : { enabled: false, amount: 0, thresholdHours: 0 };
+      ? { enabled: !!ecEnabled, amount: N(ecAmount, 0) }
+      : { enabled: false, amount: 0 };
 
     const loadingUnload = isPhysical
       ? { enabled: !!luEnabled, price: N(luPrice, 0), quota: N(luQuota, 0) }
@@ -841,12 +840,12 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
               setHourlyAddon={setHourlyAddon}
             />
 
-            {/* NEW: Early Call & Loading/Unloading (AFTER Session payment) */}
+            {/* Event extras (AFTER Session payment) */}
             {sessionMode === "physical" && (
               <div className="card" style={{ padding: 12 }}>
                 <div style={{ fontWeight: 700, marginBottom: 8 }}>Event extras (Physical)</div>
 
-                {/* Early Call */}
+                {/* Early Call – amount only */}
                 <div className="card" style={{ padding: 12, marginBottom: 10 }}>
                   <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
                     <input
@@ -858,19 +857,15 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
                   </label>
 
                   {ecEnabled && (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12, marginTop: 10 }}>
                       <div>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>Early Call Amount (RM)</div>
                         <input value={ecAmount} onChange={(e) => setEcAmount(e.target.value)} inputMode="decimal" />
                       </div>
-                      <div>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>Threshold (hours)</div>
-                        <input value={ecThreshold} onChange={(e) => setEcThreshold(e.target.value)} inputMode="numeric" />
-                      </div>
                     </div>
                   )}
                   <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-                    Paid if call/report time is earlier than scheduled by at least the threshold.
+                    Flat stipend paid for earlier reporting time (amount per person).
                   </div>
                 </div>
 
