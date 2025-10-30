@@ -26,7 +26,7 @@ function fmtRange(start, end) {
   } catch { return ""; }
 }
 
-/* ------- shared pay/session helpers (IDENTICAL to JobList/JobDetails) ------- */
+/* ------- shared pay/session helpers ------- */
 const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
 const money = (v) => {
   const n = num(v);
@@ -206,7 +206,7 @@ export default function MyJobs({ navigate, user }) {
           ts: Date.now(),
         }),
       () => setLocMsg("Please allow location to generate QR and show distance."),
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 2_000, timeout: 10_000 }
     );
     return () => {
       try { navigator.geolocation.clearWatch(id); } catch {}
@@ -364,7 +364,7 @@ export default function MyJobs({ navigate, user }) {
                         </div>
                       </div>
 
-                      {/* Pay — viewer specific (identical logic across pages) */}
+                      {/* Pay — viewer specific */}
                       <div>
                         <strong>Pay</strong>
                         <div style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace", fontSize: 13, lineHeight: 1.5 }}>
