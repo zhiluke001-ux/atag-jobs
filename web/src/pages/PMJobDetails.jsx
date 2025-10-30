@@ -219,24 +219,21 @@ export default function PMJobDetails({ jobId }) {
   useEffect(() => {
     setCamSupported(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
     (async () => {
+      let hasDetector = false;
       if ("BarcodeDetector" in window) {
         try {
           const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
-          if (fmts.includes("qr_code")) {
-            setQrSupported(true);
-            return;
+          if (fmts.includes("qr_code") || fmts.includes("qr")) {
+            hasDetector = true;
           }
         } catch {}
       }
-      try {
-        await loadJsQR();
-        usingJsQRRef.current = true;
-        setQrSupported(true);
-      } catch {
-        setQrSupported(false);
-      }
+      // We still mark qrSupported true because we have jsQR fallback
+      setQrSupported(true);
+      usingJsQRRef.current = !hasDetector; // prefer native if available
     })();
   }, []);
+
   function loadJsQR() {
     return new Promise((resolve, reject) => {
       if (window.jsQR) return resolve();
@@ -392,7 +389,22 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* ------- Camera + QR decoding ------- */
+  /* ------- Camera + QR decoding (improved) ------- */
+  function ensureCanvasSizedToVideo() {
+    const v = videoRef.current, cv = canvasRef.current;
+    if (!v || !cv) return false;
+    const vw = v.videoWidth, vh = v.videoHeight;
+    if (!vw || !vh) return false;
+    if (cv.width !== vw || cv.height !== vh) {
+      cv.width = vw;
+      cv.height = vh;
+    }
+    if (!canvasCtxRef.current) {
+      canvasCtxRef.current = cv.getContext("2d", { willReadFrequently: true });
+    }
+    return true;
+  }
+
   async function startCamera() {
     if (isVirtual) {
       setScanMsg("Virtual job — scanner disabled.");
@@ -403,17 +415,21 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
     try {
-      if (!("BarcodeDetector" in window)) {
-        await loadJsQR();
-        usingJsQRRef.current = true;
-      } else {
+      // Prepare detector preference
+      let preferNative = false;
+      if ("BarcodeDetector" in window) {
         try {
-          detRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
-          usingJsQRRef.current = false;
-        } catch {
-          await loadJsQR();
-          usingJsQRRef.current = true;
-        }
+          const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
+          if (fmts.includes("qr_code") || fmts.includes("qr")) {
+            detRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
+            preferNative = true;
+          }
+        } catch { /* fall back */ }
+      }
+      usingJsQRRef.current = !preferNative;
+
+      if (usingJsQRRef.current) {
+        await loadJsQR();
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -424,22 +440,25 @@ export default function PMJobDetails({ jobId }) {
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        // Wait for dimensions
+        await new Promise((resolve) => {
+          const v = videoRef.current;
+          const handler = () => resolve();
+          if (v.readyState >= 2) resolve();
+          else v.onloadedmetadata = handler;
+        });
         await videoRef.current.play();
       }
-      if (usingJsQRRef.current && videoRef.current) {
-        const cv = canvasRef.current;
-        const vw = videoRef.current.videoWidth || 640;
-        const vh = videoRef.current.videoHeight || 480;
-        cv.width = vw;
-        cv.height = vh;
-        canvasCtxRef.current = cv.getContext("2d", { willReadFrequently: true });
-      }
+
+      // Ensure canvas matches actual video size
+      ensureCanvasSizedToVideo();
 
       setCamActive(true);
       setScanMsg("Camera ready — scanning…");
-      loopDetect();
-    } catch {
+      loopDetect(performance.now());
+    } catch (err) {
       setScanMsg("Could not open camera. Please allow permission or paste the token.");
+      console.error(err);
     }
   }
 
@@ -460,31 +479,60 @@ export default function PMJobDetails({ jobId }) {
 
   useEffect(() => () => stopCamera(), []);
 
-  async function loopDetect() {
-    if (!videoRef.current) return;
-    try {
-      if (!camActive) return;
+  // Throttle decode to ~10fps to save CPU
+  let lastDecodeTsRef = 0;
+  const DECODE_INTERVAL_MS = 100;
 
-      if (!usingJsQRRef.current && detRef.current) {
-        const codes = await detRef.current.detect(videoRef.current);
-        if (codes && codes[0]?.rawValue) {
-          setToken(codes[0].rawValue);
+  async function decodeWithBarcodeDetector() {
+    try {
+      // Draw current frame to canvas and detect on canvas (more reliable across browsers)
+      if (!ensureCanvasSizedToVideo()) return null;
+      const cv = canvasRef.current;
+      const res = await detRef.current.detect(cv);
+      if (res && res.length > 0 && res[0].rawValue) return res[0].rawValue;
+    } catch {}
+    return null;
+  }
+
+  function decodeWithJsQR() {
+    if (!window.jsQR) return null;
+    if (!ensureCanvasSizedToVideo()) return null;
+    const v = videoRef.current;
+    const cv = canvasRef.current;
+    const ctx = canvasCtxRef.current;
+    if (!v || !cv || !ctx) return null;
+
+    ctx.drawImage(v, 0, 0, cv.width, cv.height);
+    const img = ctx.getImageData(0, 0, cv.width, cv.height);
+    const result = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+    if (result && result.data) return result.data;
+    return null;
+  }
+
+  async function loopDetect(ts) {
+    if (!videoRef.current || !camActive) return;
+    if (!lastDecodeTsRef || ts - lastDecodeTsRef > DECODE_INTERVAL_MS) {
+      lastDecodeTsRef = ts;
+      try {
+        let found = null;
+
+        // Try native first if present
+        if (detRef.current) {
+          found = await decodeWithBarcodeDetector();
+        }
+        // Fallback or double-check using jsQR as well (improves reliability)
+        if (!found && window.jsQR) {
+          found = decodeWithJsQR();
+        }
+
+        if (found) {
+          setToken(found);
           setScanMsg("QR detected — ready to Scan.");
         }
-      } else if (usingJsQRRef.current && window.jsQR && canvasCtxRef.current) {
-        const v = videoRef.current;
-        const w = v.videoWidth, h = v.videoHeight;
-        if (w && h) {
-          canvasCtxRef.current.drawImage(v, 0, 0, w, h);
-          const img = canvasCtxRef.current.getImageData(0, 0, w, h);
-          const result = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
-          if (result && result.data) {
-            setToken(result.data);
-            setScanMsg("QR detected — ready to Scan.");
-          }
-        }
+      } catch (e) {
+        // ignore per-frame errors
       }
-    } catch {}
+    }
     rafRef.current = requestAnimationFrame(loopDetect);
   }
 
@@ -744,7 +792,7 @@ export default function PMJobDetails({ jobId }) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
 
-        {/* Virtual mode controls (kept simple) */}
+        {/* Virtual mode controls */}
         {isVirtual && (
           <div className="card" style={{ padding: 12, marginBottom: 8, border: "1px dashed #e5e7eb" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Virtual attendance</div>
@@ -790,7 +838,7 @@ export default function PMJobDetails({ jobId }) {
           </div>
         )}
 
-        {/* Physical compact shared view (with Name/Phone/Discord; aligned In/Out; no Late) */}
+        {/* Physical compact shared view */}
         {!isVirtual && (
           <>
             <table className="table">
