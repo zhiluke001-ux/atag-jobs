@@ -1123,16 +1123,29 @@ app.post(
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    const { transport, wantsLU } = req.body || {};
-    if (!["ATAG Bus", "Own Transport"].includes(transport))
-      return res.status(400).json({ error: "invalid_transport" });
-
+    // Accept virtual jobs (or jobs with both transport options disabled)
+    let { transport, wantsLU } = req.body || {};
     const opts = job.transportOptions || { bus: true, own: true };
-    if (
-      (transport === "ATAG Bus" && !opts.bus) ||
-      (transport === "Own Transport" && !opts.own)
-    )
-      return res.status(400).json({ error: "transport_not_allowed" });
+    const bothDisabled = !opts.bus && !opts.own;
+
+    // Coerce a valid transport for downstream logic
+    if (!transport || !["ATAG Bus", "Own Transport"].includes(transport)) {
+      transport = "Own Transport";
+    }
+
+    // Enforce transport validity only when at least one option is enabled
+    if (!bothDisabled) {
+      if (!["ATAG Bus", "Own Transport"].includes(transport)) {
+        return res.status(400).json({ error: "invalid_transport" });
+      }
+      if (
+        (transport === "ATAG Bus" && !opts.bus) ||
+        (transport === "Own Transport" && !opts.own)
+      ) {
+        return res.status(400).json({ error: "transport_not_allowed" });
+      }
+    }
+    // If both disabled, we treat like a virtual/transport-agnostic job and continue.
 
     const lu = job.loadingUnload || {
       enabled: false,
@@ -1144,6 +1157,7 @@ app.post(
     };
     const luEnabled = lu.enabled ?? lu.quota > 0;
 
+    // Existing application?
     let exists = job.applications.find((a) => a.userId === req.user.id);
     if (exists) {
       const wasRejected = job.rejected.includes(req.user.id);
@@ -1155,45 +1169,49 @@ app.post(
         exists.appliedAt = dayjs().toISOString();
         job.rejected = job.rejected.filter((u) => u !== req.user.id);
         job.approved = job.approved.filter((u) => u !== req.user.id);
+
         if (wantsLU === true) {
           if (!luEnabled || lu.closed === true) {
-            // silently ignore when closed
+            // silently ignore when closed/disabled
           } else {
             job.loadingUnload = lu;
-            const a = job.loadingUnload.applicants;
+            const a = job.loadingUnload.applicants || [];
             if (!a.includes(req.user.id)) a.push(req.user.id);
+            job.loadingUnload.applicants = a;
           }
         } else if (wantsLU === false && job.loadingUnload?.applicants) {
           job.loadingUnload.applicants = job.loadingUnload.applicants.filter(
             (u) => u !== req.user.id
           );
         }
+
         await saveDB(db);
         exportJobCSV(job);
         addAudit(
           "reapply",
-          {
-            jobId: job.id,
-            userId: req.user.id,
-            transport,
-            wantsLU: !!wantsLU,
-          },
+          { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU },
           req
         );
         return res.json({ ok: true, reapply: true });
       }
+
+      // Normal update to existing application
+      exists.transport = transport;
+
       if (wantsLU === true) {
         if (!luEnabled || lu.closed === true) {
-          // ignore when closed
+          // ignore when closed/disabled
         } else {
           job.loadingUnload = lu;
-          const a = job.loadingUnload.applicants;
+          const a = job.loadingUnload.applicants || [];
           if (!a.includes(req.user.id)) a.push(req.user.id);
+          job.loadingUnload.applicants = a;
         }
         await saveDB(db);
         exportJobCSV(job);
         return res.json({ ok: true, updated: true });
       }
+
       if (wantsLU === false && job.loadingUnload?.applicants) {
         job.loadingUnload.applicants = job.loadingUnload.applicants.filter(
           (u) => u !== req.user.id
@@ -1202,23 +1220,26 @@ app.post(
         exportJobCSV(job);
         return res.json({ ok: true, updated: true });
       }
+
       return res.json({ message: "already_applied" });
     }
 
+    // First-time apply
     job.applications.push({
       userId: req.user.id,
       email: req.user.email,
-      transport,
+      transport, // coerced value if virtual/both disabled
       appliedAt: dayjs().toISOString(),
     });
 
     if (wantsLU === true) {
       if (!luEnabled || lu.closed === true) {
-        // ignore when closed
+        // ignore when closed/disabled
       } else {
         job.loadingUnload = lu;
-        const a = job.loadingUnload.applicants;
+        const a = job.loadingUnload.applicants || [];
         if (!a.includes(req.user.id)) a.push(req.user.id);
+        job.loadingUnload.applicants = a;
       }
     }
 
