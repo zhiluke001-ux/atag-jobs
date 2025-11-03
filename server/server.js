@@ -1598,16 +1598,14 @@ app.get(
         participants: [],
         closed: false
       };
+
     const details = (ids) =>
-      ids.map((uid) => {
-        const u =
-          db.users.find((x) => x.id === uid) ||
-          ({
-            email: "unknown",
-            id: uid
-          } as any);
-        return { userId: uid, email: u.email, name: u.name || "" };
+       ids.map((uid) => {
+         const u =
+          db.users.find((x) => x.id === uid) || { email: "unknown", id: uid };
+         return { userId: uid, email: u.email, name: u.name || "" };
       });
+
     res.json({
       enabled: !!l.enabled,
       price: Number(l.price || 0),
