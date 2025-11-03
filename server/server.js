@@ -1400,3 +1400,44 @@ app.get("/__routes", (_req, res) => {
 setTimeout(() => {
   console.log("Registered routes:\n" + listRoutes(app).join("\n"));
 }, 100);
+
+
+// --- MAIL DIAGNOSTICS ---
+app.get("/__mail/verify", async (_req, res) => {
+  try {
+    if (!mailer) return res.status(200).json({ ok: false, reason: "mailer_not_configured" });
+    await mailer.verify();
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(200).json({
+      ok: false,
+      code: e?.code,
+      command: e?.command,
+      response: e?.response,
+      message: e?.message
+    });
+  }
+});
+
+app.post("/__mail/test", async (req, res) => {
+  try {
+    if (!mailer) return res.status(200).json({ ok: false, reason: "mailer_not_configured" });
+    const to = req.body?.to || process.env.SMTP_USER;
+    const info = await mailer.sendMail({
+      from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+      to,
+      subject: "ATAG mail test",
+      text: "Mail test from ATAG server.",
+    });
+    return res.json({ ok: true, messageId: info?.messageId, accepted: info?.accepted, rejected: info?.rejected });
+  } catch (e) {
+    return res.status(200).json({
+      ok: false,
+      code: e?.code,
+      command: e?.command,
+      response: e?.response,
+      message: e?.message
+    });
+  }
+});
+
