@@ -3,7 +3,7 @@ import { forgotPassword } from "../auth";
 
 export default function Forgot() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(null); // { ok, resetLink?, token? }
+  const [sent, setSent] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -11,9 +11,8 @@ export default function Forgot() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    setSent(null);
     try {
-      const res = await forgotPassword(email.trim());
+      const res = await forgotPassword(email);
       setSent(res || { ok: true });
     } catch (e) {
       setError(e?.message || "Request failed");
@@ -34,12 +33,14 @@ export default function Forgot() {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="you@example.com"
-          type="email"
           style={{ width: "100%", marginTop: 6 }}
+          type="email"
           required
         />
 
-        {error && <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>}
+        {error && (
+          <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>
+        )}
 
         <div style={{ marginTop: 10 }}>
           <button className="btn primary" type="submit" disabled={busy}>
@@ -49,7 +50,19 @@ export default function Forgot() {
 
         {sent && (
           <div className="notice" style={{ marginTop: 12, fontSize: 13 }}>
-            If that email exists, we’ve sent a reset link. Please check your inbox (and spam).
+            If that email exists, we’ve sent a reset link.
+            <div style={{ marginTop: 8, opacity: 0.8 }}>
+              <div>
+                <b>Dev token:</b>{" "}
+                <code>{sent.token || "(hidden in production)"}</code>
+              </div>
+              {sent.resetLink && (
+                <div>
+                  <b>Dev link:</b>{" "}
+                  <a href={sent.resetLink}>{sent.resetLink}</a>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
