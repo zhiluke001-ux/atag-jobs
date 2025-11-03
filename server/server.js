@@ -28,6 +28,7 @@ const SMTP_SECURE = String(process.env.SMTP_SECURE || "true") === "true"; // tru
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
 const FROM_EMAIL = process.env.FROM_EMAIL || "ATAG Jobs <no-reply@atag.local>";
+const APP_ORIGIN = (process.env.APP_ORIGIN || "").replace(/\/$/, "");
 
 let mailer = null;
 if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
@@ -42,6 +43,8 @@ if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
     () => console.log("[mail] SMTP ready"),
     (err) => console.log("[mail] SMTP verify failed:", err?.message || err)
   );
+} else {
+  console.log("[mail] SMTP not configured (set SMTP_HOST/USER/PASS)");
 }
 
 async function sendEmail({ to, subject, html, text }) {
@@ -447,8 +450,9 @@ for (const j of db.jobs) {
 if (adjMutated) saveDB();
 
 /* -------------- auth --------------- */
+/* Refactor into handlers so we can alias /auth/* paths easily */
 
-app.post("/login", (req, res) => {
+async function loginHandler(req, res) {
   const { identifier, email, username, password } = req.body || {};
   const id = identifier || email || username;
   if (!id || !password) return res.status(400).json({ error: "missing_credentials" });
@@ -471,9 +475,9 @@ app.post("/login", (req, res) => {
     token,
     user: { id: user.id, email: user.email, role: user.role, name: user.name },
   });
-});
+}
 
-app.post("/register", (req, res) => {
+async function registerHandler(req, res) {
   const { email, username, name, password, role } = req.body || {};
   if (!email || !password)
     return res.status(400).json({ error: "email_and_password_required" });
@@ -512,10 +516,17 @@ app.post("/register", (req, res) => {
     token,
     user: { id, email, role: newUser.role, name: newUser.name },
   });
-});
+}
+
+function meHandler(req, res) {
+  const user = db.users.find((u) => u.id === req.user.id);
+  res.json({
+    user: { id: user.id, email: user.email, role: user.role, name: user.name },
+  });
+}
 
 /* ============ Forgot / Reset Password (with email) ============ */
-app.post("/forgot-password", async (req, res) => {
+async function forgotHandler(req, res) {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: "email_required" });
 
@@ -533,7 +544,7 @@ app.post("/forgot-password", async (req, res) => {
 
   // Build link using APP_ORIGIN (preferred) or request Origin header
   const base =
-    (process.env.APP_ORIGIN && process.env.APP_ORIGIN.replace(/\/$/, "")) ||
+    (APP_ORIGIN && APP_ORIGIN) ||
     (req.headers?.origin && String(req.headers.origin).replace(/\/$/, "")) ||
     "http://localhost:5173";
   const resetLink = `${base}/#/reset?token=${token}`;
@@ -574,9 +585,9 @@ If you didn’t request this, you can ignore this email.`;
     payload.resetLink = resetLink;
   }
   res.json(payload);
-});
+}
 
-app.post("/reset-password", (req, res) => {
+function resetHandler(req, res) {
   const { token, password } = req.body || {};
   if (!token || !password)
     return res.status(400).json({ error: "missing_token_or_password" });
@@ -595,33 +606,16 @@ app.post("/reset-password", (req, res) => {
   saveDB();
   addAudit("reset_password", { userId: user.id }, { user });
   res.json({ ok: true });
-});
+}
 
-app.get("/me", authMiddleware, (req, res) => {
-  const user = db.users.find((u) => u.id === req.user.id);
-  res.json({
-    user: { id: user.id, email: user.email, role: user.role, name: user.name },
-  });
-});
+/* ---- Register auth endpoints + /auth/* aliases ---- */
+app.post(["/login", "/auth/login"], loginHandler);
+app.post(["/register", "/auth/register"], registerHandler);
+app.get (["/me", "/auth/me"], authMiddleware, meHandler);
 
-/* -------- Config (Admin) -------- */
-app.get("/config/rates", authMiddleware, requireRole("admin"), (req, res) => {
-  res.json({ ...db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults });
-});
-app.post("/config/rates", authMiddleware, requireRole("admin"), (req, res) => {
-  const body = req.body || {};
-  db.config.rates = Object.keys(body).length ? { ...db.config.rates, ...body } : db.config.rates;
-  if (body.roleRatesDefaults && typeof body.roleRatesDefaults === "object") {
-    db.config.roleRatesDefaults = { ...db.config.roleRatesDefaults, ...body.roleRatesDefaults };
-  }
-  saveDB();
-  addAudit(
-    "update_rates_default",
-    { rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults },
-    req
-  );
-  res.json({ ok: true, rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults });
-});
+/* ---- Forgot/Reset with aliases to match your SPA ---- */
+app.post(["/forgot-password", "/auth/forgot", "/auth/forgot-password", "/forgot"], forgotHandler);
+app.post(["/reset-password", "/auth/reset", "/auth/password/reset", "/reset"], resetHandler);
 
 /* -------------- jobs --------------- */
 app.get("/jobs", (req, res) => {
@@ -1401,8 +1395,7 @@ setTimeout(() => {
   console.log("Registered routes:\n" + listRoutes(app).join("\n"));
 }, 100);
 
-
-// --- MAIL DIAGNOSTICS ---
+/* --- MAIL DIAGNOSTICS --- */
 app.get("/__mail/verify", async (_req, res) => {
   try {
     if (!mailer) return res.status(200).json({ ok: false, reason: "mailer_not_configured" });
@@ -1440,4 +1433,3 @@ app.post("/__mail/test", async (req, res) => {
     });
   }
 });
-
