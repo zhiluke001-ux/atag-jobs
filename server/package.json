@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
+  "engines": { "node": "20.x" },
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
@@ -17,6 +18,7 @@
     "morgan": "^1.10.0",
     "pg": "^8.16.3",
     "uuid": "^9.0.1",
-    "web-push": "^3.6.6"
+    "web-push": "^3.6.6",
+    "nodemailer": "^6.9.14"
   }
 }
