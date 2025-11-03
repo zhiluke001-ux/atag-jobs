@@ -1,16 +1,16 @@
 // web/src/pages/Reset.jsx
 import React, { useEffect, useState } from "react";
-import { exchangeResetCode, updatePassword } from "../auth";
+import { getResetTokenFromLocation, resetPassword } from "../auth";
 
 /**
- * This page is opened by the email link:  https://YOUR_DOMAIN/reset?code=...
+ * This page is opened by the email link:  https://YOUR_DOMAIN/#/reset?token=...
  * Flow:
- *  1) Read ?code from URL
- *  2) exchangeResetCode(code)  -> creates a session
- *  3) Show form to set new password, then updatePassword(newPass)
+ *  1) Read token from URL (?token=... or legacy ?code=...)
+ *  2) Show form to set new password
+ *  3) Call resetPassword(token, newPass)
  */
 export default function Reset() {
-  const [code, setCode] = useState("");
+  const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState("init"); // init | ready | done | error
   const [err, setErr] = useState("");
@@ -18,34 +18,17 @@ export default function Reset() {
   const [pw1, setPw1] = useState("");
   const [pw2, setPw2] = useState("");
 
-  // Grab ?code on first render
+  // Grab token on first render
   useEffect(() => {
-    try {
-      const u = new URL(window.location.href);
-      const c = u.searchParams.get("code");
-      setCode(c || "");
-      if (!c) {
-        setStage("error");
-        setErr("Missing or invalid reset link.");
-        return;
-      }
-      (async () => {
-        setBusy(true);
-        setErr("");
-        try {
-          await exchangeResetCode(c);
-          setStage("ready");
-        } catch (e) {
-          setStage("error");
-          setErr(e?.message || "Invalid or expired reset link. Please request a new one.");
-        } finally {
-          setBusy(false);
-        }
-      })();
-    } catch {
+    const t = getResetTokenFromLocation();
+    setToken(t);
+    if (!t) {
       setStage("error");
-      setErr("Invalid URL.");
+      setErr("Missing or invalid reset link.");
+      return;
     }
+    // No exchange step needed with our backend; token is validated on submit
+    setStage("ready");
   }, []);
 
   async function onSubmit(e) {
@@ -57,10 +40,10 @@ export default function Reset() {
     setBusy(true);
     setErr("");
     try {
-      await updatePassword(pw1);
+      await resetPassword(token, pw1);
       setStage("done");
     } catch (e) {
-      setErr(e?.message || "Failed to update password.");
+      setErr(e?.message || "Failed to update password. Your link may be expired—request a new one.");
     } finally {
       setBusy(false);
     }
@@ -95,7 +78,7 @@ export default function Reset() {
               onChange={(e) => setPw1(e.target.value)}
               placeholder="Enter new password"
               style={{ width: "100%", marginTop: 6 }}
-              minLength={6}
+              minLength={8}
               required
               autoComplete="new-password"
             />
@@ -107,7 +90,7 @@ export default function Reset() {
               onChange={(e) => setPw2(e.target.value)}
               placeholder="Re-enter new password"
               style={{ width: "100%", marginTop: 6 }}
-              minLength={6}
+              minLength={8}
               required
               autoComplete="new-password"
             />
