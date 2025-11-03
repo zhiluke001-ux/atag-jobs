@@ -723,6 +723,21 @@ app.post("/reset-password", async (req, res) => {
   res.json({ ok: true });
 });
 
+// --- AUTH COMPAT ALIASES FOR FRONTEND EXPECTING /auth/... ---
+app.post("/auth/forgot", (req, res, next) => {
+  // forward to /forgot-password handler
+  req.url = "/forgot-password";
+  app._router.handle(req, res, next);
+});
+
+app.post("/auth/reset", (req, res, next) => {
+  // forward to /reset-password handler
+  req.url = "/reset-password";
+  app._router.handle(req, res, next);
+});
+
+
+                                   
 app.get("/me", authMiddleware, (req, res) => {
   const user = db.users.find((u) => u.id === req.user.id);
   res.json({
