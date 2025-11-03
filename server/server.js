@@ -12,7 +12,6 @@ import { createWriteStream } from "fs";
 import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
 import webpush from "web-push";
-import nodemailer from "nodemailer";
 import { loadDB, saveDB } from "./storage.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -534,38 +533,17 @@ async function notifyUsers(userIds, { title, body, link, type = "info" }) {
   await saveDB(db);
 }
 
-/* ------------ EMAIL HELPER ------------- */
-function sendResetEmail(to, link) {
-  // fire-and-forget, don't await in handler
-  (async () => {
-    // SMTP
-    if (process.env.SMTP_URL || process.env.SMTP_HOST) {
-      let transporter;
-      if (process.env.SMTP_URL) {
-        transporter = nodemailer.createTransport(process.env.SMTP_URL);
-      } else {
-        transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: Number(process.env.SMTP_PORT || 587),
-          secure: process.env.SMTP_SECURE === "true",
-          auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS
-          }
-        });
-      }
-      await transporter.sendMail({
-        from: process.env.FROM_EMAIL,
-        to,
-        subject: "Reset your ATAG Jobs password",
-        text: `Click this link to reset your password: ${link}`,
-        html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`
-      });
-      return;
-    }
+/* ------------ EMAIL HELPER (Resend-only) ------------- */
+async function sendResetEmail(to, link) {
+  // prefer FROM_EMAIL if you set it in Render
+  const from =
+    process.env.FROM_EMAIL ||
+    process.env.MAIL_FROM ||
+    "ATAG Jobs <onboarding@resend.dev>";
 
-    // Resend fallback (Node 20 has fetch)
-    if (process.env.RESEND_API_KEY) {
+  // Resend HTTP API only
+  if (process.env.RESEND_API_KEY) {
+    try {
       const resp = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
@@ -573,22 +551,24 @@ function sendResetEmail(to, link) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          from: process.env.MAIL_FROM || "ATAG Jobs <onboarding@resend.dev>",
+          from,
           to: [to],
           subject: "Reset your ATAG Jobs password",
           html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`
         })
       });
       if (!resp.ok) {
-        console.error("[sendResetEmail] Resend error", await resp.text());
+        console.error("[sendResetEmail] Resend error:", await resp.text());
       }
       return;
+    } catch (err) {
+      console.error("[sendResetEmail] Resend throw:", err);
+      return;
     }
+  }
 
-    console.log("[sendResetEmail] no mail provider configured, link:", link);
-  })().catch((err) => {
-    console.error("[sendResetEmail] error", err);
-  });
+  // fallback: log
+  console.log("[sendResetEmail] no RESEND_API_KEY configured, link:", link);
 }
 
 /* -------------- auth --------------- */
@@ -716,7 +696,7 @@ app.post("/forgot-password", async (req, res) => {
   const base = (
     process.env.PUBLIC_APP_URL ||
     process.env.FRONTEND_URL ||
-    process.env.APP_ORIGIN ||  
+    process.env.APP_ORIGIN ||
     req.headers?.origin ||
     ""
   ).replace(/\/$/, "");
@@ -724,8 +704,12 @@ app.post("/forgot-password", async (req, res) => {
 
   addAudit("forgot_password", { email }, { user });
 
-  // fire and forget
-  sendResetEmail(user.email, resetLink);
+  try {
+    await sendResetEmail(user.email, resetLink);
+  } catch (err) {
+    // even if sending fails, we respond ok
+    console.error("sendResetEmail error (outer):", err);
+  }
 
   // keep dev info
   res.json({ ok: true, token, resetLink });
@@ -810,7 +794,6 @@ app.patch(
     const { role, grade } = req.body || {};
     const before = { role: target.role, grade: target.grade || "junior" };
 
-    // prevent unmaking last admin
     if (role && clampRole(role) !== "admin" && target.role === "admin") {
       const adminCount = (db.users || []).filter(
         (u) => u.role === "admin"
@@ -1010,7 +993,6 @@ app.post(
     await saveDB(db);
     addAudit("create_job", { jobId: id, title }, req);
 
-    // notify all users (non-blocking)
     try {
       const recipients = (db.users || []).map((u) => u.id);
       notifyUsers(recipients, {
@@ -1394,7 +1376,6 @@ app.post(
       return res.json({ message: "already_applied" });
     }
 
-    // first-time apply
     job.applications.push({
       userId: req.user.id,
       email: req.user.email,
@@ -1601,10 +1582,10 @@ app.get(
       };
 
     const details = (ids) =>
-       ids.map((uid) => {
-         const u =
+      ids.map((uid) => {
+        const u =
           db.users.find((x) => x.id === uid) || { email: "unknown", id: uid };
-         return { userId: uid, email: u.email, name: u.name || "" };
+        return { userId: uid, email: u.email, name: u.name || "" };
       });
 
     res.json({
