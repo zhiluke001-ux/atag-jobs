@@ -1,10 +1,9 @@
-// web/src/pages/Forgot.jsx
 import React, { useState } from "react";
 import { forgotPassword } from "../auth";
 
 export default function Forgot() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(null);
+  const [sent, setSent] = useState(null); // { ok, resetLink?, token? }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -14,8 +13,8 @@ export default function Forgot() {
     setError(null);
     setSent(null);
     try {
-      const res = await forgotPassword(email);
-      setSent(res); // { ok: true, redirectToUsed }
+      const res = await forgotPassword(email.trim());
+      setSent(res || { ok: true });
     } catch (e) {
       setError(e?.message || "Request failed");
     } finally {
@@ -35,15 +34,12 @@ export default function Forgot() {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="you@example.com"
+          type="email"
           style={{ width: "100%", marginTop: 6 }}
           required
-          type="email"
-          autoComplete="email"
         />
 
-        {error && (
-          <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>
-        )}
+        {error && <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>}
 
         <div style={{ marginTop: 10 }}>
           <button className="btn primary" type="submit" disabled={busy}>
@@ -51,16 +47,9 @@ export default function Forgot() {
           </button>
         </div>
 
-        {sent?.ok && (
+        {sent && (
           <div className="notice" style={{ marginTop: 12, fontSize: 13 }}>
-            If that email exists, we’ve sent a reset link. Check your inbox (and spam).
-            <div style={{ marginTop: 8, opacity: 0.8 }}>
-              {/* Supabase doesn't return dev token/link. We show the redirect base for verification. */}
-              <div>
-                <b>Redirect URL used:</b>{" "}
-                <code>{sent.redirectToUsed}</code>
-              </div>
-            </div>
+            If that email exists, we’ve sent a reset link. Please check your inbox (and spam).
           </div>
         )}
 
