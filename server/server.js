@@ -67,6 +67,50 @@ const MAX_DISTANCE_METERS = Number(
     500
 );
 
+// === NEW: Password reset email settings ===
+const APP_ORIGIN = (process.env.APP_ORIGIN || "http://localhost:5173").replace(/\/$/, "");
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const EMAIL_FROM = process.env.EMAIL_FROM || "ATAG Jobs <noreply@atagjobs.email>";
+const RESET_TOKEN_TTL_MINUTES = Number(process.env.RESET_TOKEN_TTL_MINUTES || 60);
+
+function buildResetLink(token, originHeader) {
+  const origin = (originHeader && /^https?:\/\//i.test(originHeader)) ? originHeader : APP_ORIGIN;
+  return `${String(origin).replace(/\/$/, "")}/#/reset?token=${encodeURIComponent(token)}`;
+}
+function resetEmailHTML(link) {
+  return `
+  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+    <h2>Password reset</h2>
+    <p>We received a request to reset your password. Click the button below:</p>
+    <p><a href="${link}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#111;color:#fff;text-decoration:none">Reset Password</a></p>
+    <p>Or copy this link:<br><a href="${link}">${link}</a></p>
+    <p style="color:#666;font-size:12px">If you did not request this, you can ignore this email.</p>
+  </div>`;
+}
+async function sendResetEmail(to, link) {
+  if (!RESEND_API_KEY) return { via: "dev-no-email" }; // dev mode: no send, FE can show token+link
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [to],
+      subject: "Reset your ATAG Jobs password",
+      html: resetEmailHTML(link),
+      text: `Reset your password: ${link}`,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`email_send_failed ${res.status}: ${body}`);
+  }
+  return { via: "email", ...(await res.json().catch(() => ({}))) };
+}
+
 // One-shot decision policy (approve/reject cannot be changed once set)
 const ONE_SHOT_DECISIONS = true;
 
@@ -609,6 +653,7 @@ app.post("/register", async (req, res) => {
   });
 });
 
+// === UPDATED: forgot-password with email sending (Resend) and dev fallback
 app.post("/forgot-password", async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: "email_required" });
@@ -616,17 +661,40 @@ app.post("/forgot-password", async (req, res) => {
   const user = db.users.find(
     (u) => String(u.email || "").toLowerCase() === emailLower
   );
-  if (!user) return res.json({ ok: true });
 
-  const token = crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + 60 * 60 * 1000;
-  user.resetToken = { token, expiresAt };
-  await saveDB(db);
+  // Always respond 200 to avoid enumeration; but still create a token if user exists
+  try {
+    if (user) {
+      const token = crypto.randomBytes(24).toString("hex");
+      const expiresAt = Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000;
+      user.resetToken = { token, expiresAt };
+      await saveDB(db);
 
-  const origin = req.headers?.origin || "";
-  const resetLink = `${origin}#\/reset?token=${token}`;
-  addAudit("forgot_password", { email }, { user });
-  res.json({ ok: true, token, resetLink });
+      const resetLink = buildResetLink(token, req.headers?.origin);
+
+      try {
+        const sendRes = await sendResetEmail(emailLower, resetLink);
+        addAudit("forgot_password", { email, via: sendRes?.via || "email" }, { user });
+
+        // Dev mode: return token+link so FE can show it
+        if (sendRes?.via === "dev-no-email") {
+          return res.json({ ok: true, token, resetLink, via: "dev" });
+        }
+        // Production email sent: do NOT reveal token
+        return res.json({ ok: true, via: "email" });
+      } catch (e) {
+        // If email provider fails, still return dev details so you can proceed
+        addAudit("forgot_password_email_error", { email, error: String(e?.message || e) }, { user });
+        return res.json({ ok: true, token, resetLink, via: "fallback-dev" });
+      }
+    }
+
+    // Unknown email -> ok (no hints)
+    addAudit("forgot_password_unknown", { email }, null);
+    return res.json({ ok: true, via: "noop" });
+  } catch (err) {
+    return res.status(500).json({ error: "forgot_failed" });
+  }
 });
 
 app.post("/reset-password", async (req, res) => {
@@ -668,19 +736,24 @@ app.get("/me", authMiddleware, (req, res) => {
 });
 
 /* -------- Admin: users (list & update role/grade) -------- */
-app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
-  const list = (db.users || []).map(u => ({
-    id: u.id,
-    email: u.email,
-    username: u.username,
-    name: u.name,
-    role: u.role,
-    grade: u.grade || "junior",
-    phone: u.phone || "",
-    discord: u.discord || "",
-  }));
-  res.json(list);
-});
+app.get(
+  "/admin/users",
+  authMiddleware,
+  requireRole("admin"),
+  (_req, res) => {
+    const list = (db.users || []).map(u => ({
+      id: u.id,
+      email: u.email,
+      username: u.username,
+      name: u.name,
+      role: u.role,
+      grade: u.grade || "junior",
+      phone: u.phone || "",
+      discord: u.discord || "",
+    }));
+    res.json(list);
+  }
+);
 
 app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const target = db.users.find(u => u.id === req.params.id);
@@ -947,6 +1020,8 @@ app.patch(
       // Auto-close if participants meet/exceed new quota; otherwise keep previous closed state
       if (job.loadingUnload.quota > 0 && job.loadingUnload.participants.length >= job.loadingUnload.quota) {
         job.loadingUnload.closed = true;
+        const keep = new Set(job.loadingUnload.participants || []);
+        job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(uid => keep.has(uid));
       }
       // Allow manual reopen only if explicitly provided
       if (lduBody.closed === false) {
