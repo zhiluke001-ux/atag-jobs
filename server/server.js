@@ -11,8 +11,8 @@ import { fileURLToPath } from "url";
 import { createWriteStream } from "fs";
 import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
-import webpush from "web-push";              // Web Push
-import nodemailer from "nodemailer";         // <-- added
+import webpush from "web-push";
+import nodemailer from "nodemailer";
 import { loadDB, saveDB } from "./storage.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,54 +24,69 @@ app.use(express.json());
 app.use(morgan("dev"));
 
 /* ---------------- DB + defaults ---------------- */
-// Load DB (Postgres if DATABASE_URL, else file)
 let db = await loadDB();
 
-// Seed config & defaults if missing
 db.config = db.config || {};
 db.config.jwtSecret = db.config.jwtSecret || "dev-secret";
 db.config.scanMaxDistanceMeters = db.config.scanMaxDistanceMeters || 500;
 
-// Legacy rates (kept for compatibility)
 const DEFAULT_RATES = {
   virtualHourly: { junior: 20, senior: 20, lead: 30 },
   physicalSession: {
     halfDay: { junior: 80, senior: 100, lead: 44 },
     fullDay: { junior: 150, senior: 180, lead: 88 },
     twoD1N: { junior: 230, senior: 270, lead: null },
-    threeD2n: { junior: 300, senior: 350, lead: null },
+    threeD2n: { junior: 300, senior: 350, lead: null }
   },
   physicalHourly: { junior: 20, senior: 30, lead: 30 },
   loadingUnloading: { amount: 30 },
-  earlyCall: { defaultAmount: 20 },
+  earlyCall: { defaultAmount: 20 }
 };
 db.config.rates = db.config.rates || DEFAULT_RATES;
 
-// Admin default role pay tables (never blank)
 db.config.roleRatesDefaults = db.config.roleRatesDefaults || {
-  junior: { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.junior ?? 20), specificPayment: null, otMultiplier: 0 },
-  senior: { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.senior ?? 30), specificPayment: null, otMultiplier: 0 },
-  lead:   { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.lead   ?? 30), specificPayment: null, otMultiplier: 0 },
+  junior: {
+    payMode: "hourly",
+    base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
+    specificPayment: null,
+    otMultiplier: 0
+  },
+  senior: {
+    payMode: "hourly",
+    base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
+    specificPayment: null,
+    otMultiplier: 0
+  },
+  lead: {
+    payMode: "hourly",
+    base: Number(db.config.rates?.physicalHourly?.lead ?? 30),
+    specificPayment: null,
+    otMultiplier: 0
+  }
 };
 
-// Notifications storage (per-user push subs + in-app feed)
-db.pushSubs = db.pushSubs || {};            // { [userId]: [PushSubscription] }
-db.notifications = db.notifications || {};  // { [userId]: [{id,time,title,body,link,read,type}] }
+db.pushSubs = db.pushSubs || {};
+db.notifications = db.notifications || {};
 
 await saveDB(db);
 
-/* ------------ auth / helpers ------------- */
+/* ------------ globals / helpers ------------- */
 const JWT_SECRET = db.config.jwtSecret;
 const MAX_DISTANCE_METERS = Number(
   process.env.SCAN_MAX_DISTANCE_METERS ||
     db.config.scanMaxDistanceMeters ||
     500
 );
-
-// One-shot decision policy (approve/reject cannot be changed once set)
 const ONE_SHOT_DECISIONS = true;
+const ROLES = ["part-timer", "pm", "admin"];
+const STAFF_ROLES = ["junior", "senior", "lead"];
 
 const toRad = (deg) => (deg * Math.PI) / 180;
+const clampRole = (r) =>
+  ROLES.includes(String(r)) ? String(r) : "part-timer";
+const clampGrade = (g) =>
+  STAFF_ROLES.includes(String(g)) ? String(g) : "junior";
+
 function isValidCoord(lat, lng) {
   return (
     typeof lat === "number" &&
@@ -110,10 +125,12 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ error: "invalid_token" });
   }
 }
-const requireRole = (...roles) => (req, res, next) =>
-  roles.includes(req.user.role)
-    ? next()
-    : res.status(403).json({ error: "forbidden" });
+const requireRole =
+  (...roles) =>
+  (req, res, next) =>
+    roles.includes(req.user.role)
+      ? next()
+      : res.status(403).json({ error: "forbidden" });
 
 function addAudit(action, details, req) {
   db.audit = db.audit || [];
@@ -123,10 +140,9 @@ function addAudit(action, details, req) {
     actor: req?.user?.email || "guest",
     role: req?.user?.role || "guest",
     action,
-    details,
+    details
   });
   if (db.audit.length > 1000) db.audit.length = 1000;
-  // No await saveDB here; handlers that mutate data already persist.
 }
 
 function computeStatus(job) {
@@ -140,7 +156,7 @@ function computeStatus(job) {
   return job.status || "upcoming";
 }
 
-// Password helpers
+// password helpers
 function hashPassword(password) {
   const iterations = 150000;
   const salt = crypto.randomBytes(16).toString("hex");
@@ -174,12 +190,7 @@ function findUserByIdentifier(id) {
   );
 }
 
-// Helpers
-const ROLES = ["part-timer", "pm", "admin"];
-const STAFF_ROLES = ["junior", "senior", "lead"];
-const clampRole  = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
-const clampGrade = (g) => (STAFF_ROLES.includes(String(g)) ? String(g) : "junior");
-
+/* ---- pay helper ---- */
 function paySummaryFromRate(rate = {}) {
   const pm = rate.payMode;
   const hr = Number(rate.base ?? rate.hourlyBase);
@@ -204,7 +215,7 @@ function paySummaryFromRate(rate = {}) {
   return "See details";
 }
 
-// ===== Scheduled hours helpers =====
+/* ===== time helpers ===== */
 function hoursBetweenISO(startISO, endISO) {
   if (!startISO || !endISO) return 0;
   const s = dayjs(startISO);
@@ -216,6 +227,7 @@ function scheduledHours(job) {
   return Number(hoursBetweenISO(job?.startTime, job?.endTime).toFixed(2));
 }
 
+/* ===== job public view ===== */
 function jobPublicView(job) {
   const {
     id,
@@ -226,7 +238,7 @@ function jobPublicView(job) {
     endTime,
     headcount,
     transportOptions,
-    roleCounts,
+    roleCounts
   } = job;
   const lu = job.loadingUnload || {
     enabled: false,
@@ -234,7 +246,7 @@ function jobPublicView(job) {
     price: Number(db.config.rates.loadingUnloading.amount),
     applicants: [],
     participants: [],
-    closed: false,
+    closed: false
   };
 
   const appliedCount = Array.isArray(job.applications)
@@ -260,12 +272,12 @@ function jobPublicView(job) {
       applicants: lu.applicants?.length || 0,
       closed: !!lu.closed,
       participants: (lu.participants || []).length,
-      price: Number(lu.price || db.config.rates.loadingUnloading.amount),
+      price: Number(lu.price || db.config.rates.loadingUnloading.amount)
     },
     roleCounts: roleCounts || { junior: 0, senior: 0, lead: 0 },
     appliedCount,
     approvedCount,
-    paySummary: paySummaryFromRate(job.rate || {}),
+    paySummary: paySummaryFromRate(job.rate || {})
   };
 }
 
@@ -282,10 +294,13 @@ function normalizeAdjustments(obj, actor) {
       ts: x?.ts ? new Date(x.ts).toISOString() : new Date().toISOString(),
       by:
         x?.by && typeof x.by === "object"
-          ? { id: x.by.id ?? actor?.id ?? null, email: x.by.email ?? actor?.email ?? null }
+          ? {
+              id: x.by.id ?? actor?.id ?? null,
+              email: x.by.email ?? actor?.email ?? null
+            }
           : actor
           ? { id: actor.id ?? null, email: actor.email ?? null }
-          : null,
+          : null
     }));
   }
   return out;
@@ -308,7 +323,8 @@ function generateJobCSV(job) {
     const luConfirmed = !!(job.loadingUnload?.participants || []).includes(
       u.userId
     );
-    const present = !!job.attendance?.[u.userId]?.in || !!job.attendance?.[u.userId]?.out;
+    const present =
+      !!job.attendance?.[u.userId]?.in || !!job.attendance?.[u.userId]?.out;
 
     rows.push({
       section: "applications",
@@ -330,14 +346,16 @@ function generateJobCSV(job) {
       eventStartedAt: evStart,
       eventEndedAt: evEnd,
       luApplied,
-      luConfirmed,
+      luConfirmed
     });
   }
 
   for (const [userId, rec] of Object.entries(job.attendance || {})) {
     const app = job.applications.find((a) => a.userId === userId);
     const luApplied = !!(job.loadingUnload?.applicants || []).includes(userId);
-    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(userId);
+    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(
+      userId
+    );
     const present = !!rec.in || !!rec.out;
 
     rows.push({
@@ -360,7 +378,7 @@ function generateJobCSV(job) {
       eventStartedAt: evStart,
       eventEndedAt: evEnd,
       luApplied,
-      luConfirmed,
+      luConfirmed
     });
   }
 
@@ -380,7 +398,7 @@ function generateJobCSV(job) {
     "eventStartedAt",
     "eventEndedAt",
     "luApplied",
-    "luConfirmed",
+    "luConfirmed"
   ];
   return { headers, rows };
 }
@@ -397,7 +415,7 @@ function exportJobCSV(job) {
   csv.end();
 }
 
-/* ---------- One-time user upgrade/seed for password auth ---------- */
+/* ---------- boot migrations ---------- */
 db.users = db.users || [];
 let mutated = false;
 for (const u of db.users) {
@@ -411,7 +429,6 @@ for (const u of db.users) {
     u.passwordHash = hashPassword("password");
     mutated = true;
   }
-  // Ensure staff grade exists
   if (!u.grade || !STAFF_ROLES.includes(u.grade)) {
     u.grade = "junior";
     mutated = true;
@@ -420,13 +437,17 @@ for (const u of db.users) {
     delete u.resetToken;
     mutated = true;
   }
-  // backfill optional fields
-  if (u.phone === undefined) { u.phone = ""; mutated = true; }
-  if (u.discord === undefined) { u.discord = ""; mutated = true; }
+  if (u.phone === undefined) {
+    u.phone = "";
+    mutated = true;
+  }
+  if (u.discord === undefined) {
+    u.discord = "";
+    mutated = true;
+  }
 }
 if (mutated) await saveDB(db);
 
-/* ---------- Ensure adjustments + L&U shape exists on all jobs (boot migration) ---------- */
 db.jobs = db.jobs || [];
 let bootMutated = false;
 for (const j of db.jobs) {
@@ -435,9 +456,7 @@ for (const j of db.jobs) {
     bootMutated = true;
   } else {
     const norm = normalizeAdjustments(j.adjustments);
-    const before = JSON.stringify(j.adjustments);
-    const after = JSON.stringify(norm);
-    if (before !== after) {
+    if (JSON.stringify(j.adjustments) !== JSON.stringify(norm)) {
       j.adjustments = norm;
       bootMutated = true;
     }
@@ -448,14 +467,21 @@ for (const j of db.jobs) {
     price: Number(db.config.rates.loadingUnloading.amount),
     applicants: [],
     participants: [],
-    closed: false,
+    closed: false
   };
-  const apps = Array.isArray(j.loadingUnload.applicants) ? Array.from(new Set(j.loadingUnload.applicants)) : [];
-  const parts = Array.isArray(j.loadingUnload.participants) ? Array.from(new Set(j.loadingUnload.participants)) : [];
+  const apps = Array.isArray(j.loadingUnload.applicants)
+    ? Array.from(new Set(j.loadingUnload.applicants))
+    : [];
+  const parts = Array.isArray(j.loadingUnload.participants)
+    ? Array.from(new Set(j.loadingUnload.participants))
+    : [];
   j.loadingUnload.applicants = apps;
   j.loadingUnload.participants = parts;
   if (j.loadingUnload.closed === undefined) j.loadingUnload.closed = false;
-  if (Number(j.loadingUnload.quota || 0) > 0 && parts.length >= Number(j.loadingUnload.quota)) {
+  if (
+    Number(j.loadingUnload.quota || 0) > 0 &&
+    parts.length >= Number(j.loadingUnload.quota)
+  ) {
     j.loadingUnload.closed = true;
   }
 }
@@ -508,58 +534,61 @@ async function notifyUsers(userIds, { title, body, link, type = "info" }) {
   await saveDB(db);
 }
 
-/* ------------ EMAIL HELPER (added) ------------- */
-async function sendResetEmail(to, link) {
-  // First: SMTP (Render typical)
-  if (process.env.SMTP_URL || process.env.SMTP_HOST) {
-    let transporter;
-    if (process.env.SMTP_URL) {
-      transporter = nodemailer.createTransport(process.env.SMTP_URL);
-    } else {
-      transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: Number(process.env.SMTP_PORT || 587),
-        secure: process.env.SMTP_SECURE === "true",
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-      });
-    }
-
-    await transporter.sendMail({
-      from: process.env.MAIL_FROM || "ATAG Jobs <no-reply@atag.local>",
-      to,
-      subject: "Reset your ATAG Jobs password",
-      text: `Click this link to reset your password: ${link}`,
-      html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`,
-    });
-    return;
-  }
-
-  // Second: Resend
-  if (process.env.RESEND_API_KEY) {
-    const resp = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: process.env.MAIL_FROM || "ATAG Jobs <onboarding@resend.dev>",
-        to: [to],
+/* ------------ EMAIL HELPER ------------- */
+function sendResetEmail(to, link) {
+  // fire-and-forget, don't await in handler
+  (async () => {
+    // SMTP
+    if (process.env.SMTP_URL || process.env.SMTP_HOST) {
+      let transporter;
+      if (process.env.SMTP_URL) {
+        transporter = nodemailer.createTransport(process.env.SMTP_URL);
+      } else {
+        transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: Number(process.env.SMTP_PORT || 587),
+          secure: process.env.SMTP_SECURE === "true",
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS
+          }
+        });
+      }
+      await transporter.sendMail({
+        from: process.env.MAIL_FROM || "ATAG Jobs <no-reply@atag.local>",
+        to,
         subject: "Reset your ATAG Jobs password",
-        html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`,
-      }),
-    });
-    if (!resp.ok) {
-      console.error("Resend error", await resp.text());
+        text: `Click this link to reset your password: ${link}`,
+        html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`
+      });
+      return;
     }
-    return;
-  }
 
-  // Fallback: log only
-  console.log("[forgot-password] no mail provider configured, link:", link);
+    // Resend fallback (Node 20 has fetch)
+    if (process.env.RESEND_API_KEY) {
+      const resp = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          from: process.env.MAIL_FROM || "ATAG Jobs <onboarding@resend.dev>",
+          to: [to],
+          subject: "Reset your ATAG Jobs password",
+          html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`
+        })
+      });
+      if (!resp.ok) {
+        console.error("[sendResetEmail] Resend error", await resp.text());
+      }
+      return;
+    }
+
+    console.log("[sendResetEmail] no mail provider configured, link:", link);
+  })().catch((err) => {
+    console.error("[sendResetEmail] error", err);
+  });
 }
 
 /* -------------- auth --------------- */
@@ -582,7 +611,7 @@ app.post("/login", async (req, res) => {
     email: user.email,
     role: user.role,
     name: user.name,
-    grade: user.grade || "junior",
+    grade: user.grade || "junior"
   });
   addAudit("login", { identifier: id }, { user });
   res.json({
@@ -592,13 +621,14 @@ app.post("/login", async (req, res) => {
       email: user.email,
       role: user.role,
       name: user.name,
-      grade: user.grade || "junior",
-    },
+      grade: user.grade || "junior"
+    }
   });
 });
 
 app.post("/register", async (req, res) => {
-  const { email, username, name, password, role, phone, discord } = req.body || {};
+  const { email, username, name, password, role, phone, discord } =
+    req.body || {};
   if (!email || !password)
     return res
       .status(400)
@@ -638,7 +668,7 @@ app.post("/register", async (req, res) => {
     grade: "junior",
     passwordHash,
     phone: String(phone || ""),
-    discord: String(discord || ""),
+    discord: String(discord || "")
   };
   db.users.push(newUser);
   await saveDB(db);
@@ -649,15 +679,21 @@ app.post("/register", async (req, res) => {
     email,
     role: newUser.role,
     name: newUser.name,
-    grade: newUser.grade,
+    grade: newUser.grade
   });
   res.json({
     token,
-    user: { id, email, role: newUser.role, name: newUser.name, grade: newUser.grade },
+    user: {
+      id,
+      email,
+      role: newUser.role,
+      name: newUser.name,
+      grade: newUser.grade
+    }
   });
 });
 
-/* ---- UPDATED FORGOT PASSWORD ---- */
+/* ---- forgot + reset password ---- */
 app.post("/forgot-password", async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: "email_required" });
@@ -667,7 +703,7 @@ app.post("/forgot-password", async (req, res) => {
     (u) => String(u.email || "").toLowerCase() === emailLower
   );
 
-  // Always return ok even if user not found
+  // Always return ok
   if (!user) {
     return res.json({ ok: true });
   }
@@ -677,24 +713,20 @@ app.post("/forgot-password", async (req, res) => {
   user.resetToken = { token, expiresAt };
   await saveDB(db);
 
-  // IMPORTANT: use configured frontend URL (Cloudflare) not request origin
-  const base =
-    (process.env.PUBLIC_APP_URL ||
-      process.env.FRONTEND_URL ||
-      req.headers?.origin ||
-      "").replace(/\/$/, "");
+  const base = (
+    process.env.PUBLIC_APP_URL ||
+    process.env.FRONTEND_URL ||
+    req.headers?.origin ||
+    ""
+  ).replace(/\/$/, "");
   const resetLink = `${base}/#/reset?token=${token}`;
 
   addAudit("forgot_password", { email }, { user });
 
-  try {
-    await sendResetEmail(user.email, resetLink);
-  } catch (err) {
-    console.error("sendResetEmail error:", err);
-    // we still return ok
-  }
+  // fire and forget
+  sendResetEmail(user.email, resetLink);
 
-  // for dev UI
+  // keep dev info
   res.json({ ok: true, token, resetLink });
 });
 
@@ -723,21 +755,16 @@ app.post("/reset-password", async (req, res) => {
   res.json({ ok: true });
 });
 
-// --- AUTH COMPAT ALIASES FOR FRONTEND EXPECTING /auth/... ---
+/* ---- legacy paths for old frontend ---- */
 app.post("/auth/forgot", (req, res, next) => {
-  // forward to /forgot-password handler
   req.url = "/forgot-password";
   app._router.handle(req, res, next);
 });
-
 app.post("/auth/reset", (req, res, next) => {
-  // forward to /reset-password handler
   req.url = "/reset-password";
   app._router.handle(req, res, next);
 });
 
-
-                                   
 app.get("/me", authMiddleware, (req, res) => {
   const user = db.users.find((u) => u.id === req.user.id);
   res.json({
@@ -746,68 +773,87 @@ app.get("/me", authMiddleware, (req, res) => {
       email: user.email,
       role: user.role,
       name: user.name,
-      grade: user.grade || "junior",
-    },
+      grade: user.grade || "junior"
+    }
   });
 });
 
-/* -------- Admin: users (list & update role/grade) -------- */
-app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
-  const list = (db.users || []).map(u => ({
-    id: u.id,
-    email: u.email,
-    username: u.username,
-    name: u.name,
-    role: u.role,
-    grade: u.grade || "junior",
-    phone: u.phone || "",
-    discord: u.discord || "",
-  }));
-  res.json(list);
-});
-
-app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
-  const target = db.users.find(u => u.id === req.params.id);
-  if (!target) return res.status(404).json({ error: "user_not_found" });
-
-  const { role, grade } = req.body || {};
-  const before = { role: target.role, grade: target.grade || "junior" };
-
-  if (role && clampRole(role) !== "admin" && target.role === "admin") {
-    const adminCount = (db.users || []).filter(u => u.role === "admin").length;
-    if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
+/* -------- Admin: users -------- */
+app.get(
+  "/admin/users",
+  authMiddleware,
+  requireRole("admin"),
+  (_req, res) => {
+    const list = (db.users || []).map((u) => ({
+      id: u.id,
+      email: u.email,
+      username: u.username,
+      name: u.name,
+      role: u.role,
+      grade: u.grade || "junior",
+      phone: u.phone || "",
+      discord: u.discord || ""
+    }));
+    res.json(list);
   }
+);
 
-  if (role !== undefined)  target.role  = clampRole(role);
-  if (grade !== undefined) target.grade = clampGrade(grade);
+app.patch(
+  "/admin/users/:id",
+  authMiddleware,
+  requireRole("admin"),
+  async (req, res) => {
+    const target = db.users.find((u) => u.id === req.params.id);
+    if (!target) return res.status(404).json({ error: "user_not_found" });
 
-  await saveDB(db);
-  addAudit("admin_update_user_role_grade",
-    { userId: target.id, before, after: { role: target.role, grade: target.grade } },
-    req
-  );
+    const { role, grade } = req.body || {};
+    const before = { role: target.role, grade: target.grade || "junior" };
 
-  try {
-    await notifyUsers([target.id], {
-      title: "Your account was updated",
-      body: `Role: ${target.role} • Grade: ${target.grade || "junior"}`,
-      link: "/#/",
-      type: "account_update",
+    // prevent unmaking last admin
+    if (role && clampRole(role) !== "admin" && target.role === "admin") {
+      const adminCount = (db.users || []).filter(
+        (u) => u.role === "admin"
+      ).length;
+      if (adminCount <= 1)
+        return res.status(400).json({ error: "last_admin" });
+    }
+
+    if (role !== undefined) target.role = clampRole(role);
+    if (grade !== undefined) target.grade = clampGrade(grade);
+
+    await saveDB(db);
+    addAudit(
+      "admin_update_user_role_grade",
+      {
+        userId: target.id,
+        before,
+        after: { role: target.role, grade: target.grade }
+      },
+      req
+    );
+
+    try {
+      await notifyUsers([target.id], {
+        title: "Your account was updated",
+        body: `Role: ${target.role} • Grade: ${target.grade || "junior"}`,
+        link: "/#/",
+        type: "account_update"
+      });
+    } catch {}
+
+    res.json({
+      ok: true,
+      user: {
+        id: target.id,
+        email: target.email,
+        username: target.username,
+        name: target.name,
+        role: target.role,
+        grade: target.grade || "junior"
+      }
     });
-  } catch {}
-
-  res.json({
-    ok: true,
-    user: {
-      id: target.id,
-      email: target.email,
-      username: target.username,
-      name: target.name,
-      role: target.role,
-      grade: target.grade || "junior",
-    },
-  });
-});
+  }
+);
 
 /* -------- Config (Admin) -------- */
 app.get(
@@ -817,7 +863,7 @@ app.get(
   (_req, res) => {
     res.json({
       ...db.config.rates,
-      roleRatesDefaults: db.config.roleRatesDefaults,
+      roleRatesDefaults: db.config.roleRatesDefaults
     });
   }
 );
@@ -830,15 +876,29 @@ app.post(
     db.config.rates = Object.keys(body).length
       ? { ...db.config.rates, ...body }
       : db.config.rates;
-    if (body.roleRatesDefaults && typeof body.roleRatesDefaults === "object") {
+    if (
+      body.roleRatesDefaults &&
+      typeof body.roleRatesDefaults === "object"
+    ) {
       db.config.roleRatesDefaults = {
         ...db.config.roleRatesDefaults,
-        ...body.roleRatesDefaults,
+        ...body.roleRatesDefaults
       };
     }
     await saveDB(db);
-    addAudit("update_rates_default", { rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults }, req);
-    res.json({ ok: true, rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults });
+    addAudit(
+      "update_rates_default",
+      {
+        rates: db.config.rates,
+        roleRatesDefaults: db.config.roleRatesDefaults
+      },
+      req
+    );
+    res.json({
+      ok: true,
+      rates: db.config.rates,
+      roleRatesDefaults: db.config.roleRatesDefaults
+    });
   }
 );
 
@@ -856,97 +916,113 @@ app.get("/jobs/:id", (req, res) => {
   res.json({ ...job, status: computeStatus(job) });
 });
 
-app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const {
-    title,
-    venue,
-    description,
-    startTime,
-    endTime,
-    headcount,
-    transportOptions,
-    rate,
-    earlyCall,
-    loadingUnload,
-    ldu,
-    roleCounts,
-    roleRates,
-  } = req.body || {};
-  if (!title || !venue || !startTime || !endTime)
-    return res.status(400).json({ error: "missing_fields" });
+app.post(
+  "/jobs",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    const {
+      title,
+      venue,
+      description,
+      startTime,
+      endTime,
+      headcount,
+      transportOptions,
+      rate,
+      earlyCall,
+      loadingUnload,
+      ldu,
+      roleCounts,
+      roleRates
+    } = req.body || {};
+    if (!title || !venue || !startTime || !endTime)
+      return res.status(400).json({ error: "missing_fields" });
 
-  const id = "j" + Math.random().toString(36).slice(2, 8);
-  const lduBody = ldu || loadingUnload || {};
+    const id = "j" + Math.random().toString(36).slice(2, 8);
+    const lduBody = ldu || loadingUnload || {};
 
-  const counts = {
-    junior: Number(roleCounts?.junior ?? 0),
-    senior: Number(roleCounts?.senior ?? 0),
-    lead:   Number(roleCounts?.lead   ?? 0),
-  };
-  const countsSum = counts.junior + counts.senior + counts.lead;
-
-  const rrDef = db.config.roleRatesDefaults || {};
-  const roleRatesMerged = {};
-  for (const r of STAFF_ROLES) {
-    roleRatesMerged[r] = {
-      payMode: roleRates?.[r]?.payMode ?? rrDef?.[r]?.payMode ?? "hourly",
-      base: Number(roleRates?.[r]?.base ?? rrDef?.[r]?.base ?? 0),
-      specificPayment: roleRates?.[r]?.specificPayment ?? rrDef?.[r]?.specificPayment ?? null,
-      otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? rrDef?.[r]?.otMultiplier ?? 0),
+    const counts = {
+      junior: Number(roleCounts?.junior ?? 0),
+      senior: Number(roleCounts?.senior ?? 0),
+      lead: Number(roleCounts?.lead ?? 0)
     };
+    const countsSum = counts.junior + counts.senior + counts.lead;
+
+    const rrDef = db.config.roleRatesDefaults || {};
+    const roleRatesMerged = {};
+    for (const r of STAFF_ROLES) {
+      roleRatesMerged[r] = {
+        payMode: roleRates?.[r]?.payMode ?? rrDef?.[r]?.payMode ?? "hourly",
+        base: Number(roleRates?.[r]?.base ?? rrDef?.[r]?.base ?? 0),
+        specificPayment:
+          roleRates?.[r]?.specificPayment ?? rrDef?.[r]?.specificPayment ?? null,
+        otMultiplier: Number(
+          roleRates?.[r]?.otMultiplier ?? rrDef?.[r]?.otMultiplier ?? 0
+        )
+      };
+    }
+
+    const job = {
+      id,
+      title,
+      venue,
+      description: description || "",
+      startTime,
+      endTime,
+      status: "upcoming",
+      headcount: Number(headcount || countsSum || 5),
+      transportOptions: transportOptions || { bus: true, own: true },
+      rate: rate
+        ? { ...db.config.rates, ...rate }
+        : JSON.parse(JSON.stringify(db.config.rates)),
+      roleCounts: counts,
+      roleRates: roleRatesMerged,
+      earlyCall: {
+        enabled: !!earlyCall?.enabled,
+        amount: Number(
+          earlyCall?.amount ??
+            db.config.rates.earlyCall?.defaultAmount ??
+            20
+        ),
+        thresholdHours: Number(earlyCall?.thresholdHours ?? 3)
+      },
+      loadingUnload: {
+        enabled: !!lduBody.enabled,
+        quota: Number(lduBody.quota ?? 0),
+        price: Number(
+          lduBody.price ?? db.config.rates.loadingUnloading.amount
+        ),
+        applicants: [],
+        participants: [],
+        closed: false
+      },
+      applications: [],
+      approved: [],
+      rejected: [],
+      attendance: {},
+      events: { startedAt: null, endedAt: null, scanner: null },
+      adjustments: {}
+    };
+
+    db.jobs.push(job);
+    await saveDB(db);
+    addAudit("create_job", { jobId: id, title }, req);
+
+    // notify all users (non-blocking)
+    try {
+      const recipients = (db.users || []).map((u) => u.id);
+      notifyUsers(recipients, {
+        title: `New job: ${title}`,
+        body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
+        link: `/#/jobs/${id}`,
+        type: "job_new"
+      }).catch(() => {});
+    } catch {}
+
+    res.json(job);
   }
-
-  const job = {
-    id,
-    title,
-    venue,
-    description: description || "",
-    startTime,
-    endTime,
-    status: "upcoming",
-    headcount: Number(headcount || countsSum || 5),
-    transportOptions: transportOptions || { bus: true, own: true },
-    rate: rate ? { ...db.config.rates, ...rate } : JSON.parse(JSON.stringify(db.config.rates)),
-    roleCounts: counts,
-    roleRates: roleRatesMerged,
-    earlyCall: {
-      enabled: !!earlyCall?.enabled,
-      amount: Number(earlyCall?.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20),
-      thresholdHours: Number(earlyCall?.thresholdHours ?? 3),
-    },
-    loadingUnload: {
-      enabled: !!lduBody.enabled,
-      quota: Number(lduBody.quota ?? 0),
-      price: Number(lduBody.price ?? db.config.rates.loadingUnloading.amount),
-      applicants: [],
-      participants: [],
-      closed: false,
-    },
-    applications: [],
-    approved: [],
-    rejected: [],
-    attendance: {},
-    events: { startedAt: null, endedAt: null, scanner: null },
-    adjustments: {},
-  };
-
-  db.jobs.push(job);
-  await saveDB(db);
-  addAudit("create_job", { jobId: id, title }, req);
-
-  try {
-    const recipients = (db.users || [])
-      .map(u => u.id);
-    notifyUsers(recipients, {
-      title: `New job: ${title}`,
-      body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
-      link: `/#/jobs/${id}`,
-      type: "job_new",
-    }).catch(() => {});
-  } catch {}
-
-  res.json(job);
-});
+);
 
 app.patch(
   "/jobs/:id",
@@ -969,7 +1045,7 @@ app.patch(
       loadingUnload,
       ldu,
       roleCounts,
-      roleRates,
+      roleRates
     } = req.body || {};
 
     if (title !== undefined) job.title = title;
@@ -981,7 +1057,7 @@ app.patch(
     if (transportOptions)
       job.transportOptions = {
         bus: !!transportOptions.bus,
-        own: !!transportOptions.own,
+        own: !!transportOptions.own
       };
 
     if (rate && typeof rate === "object") {
@@ -999,7 +1075,7 @@ app.patch(
         ),
         thresholdHours: Number(
           earlyCall.thresholdHours ?? job.earlyCall?.thresholdHours ?? 3
-        ),
+        )
       };
     }
 
@@ -1023,26 +1099,28 @@ app.patch(
         participants: Array.isArray(job.loadingUnload?.participants)
           ? Array.from(new Set(job.loadingUnload.participants))
           : [],
-        closed: prevClosed,
+        closed: prevClosed
       };
-      if (job.loadingUnload.quota > 0 && job.loadingUnload.participants.length >= job.loadingUnload.quota) {
+      if (
+        job.loadingUnload.quota > 0 &&
+        job.loadingUnload.participants.length >= job.loadingUnload.quota
+      ) {
         job.loadingUnload.closed = true;
       }
-      if (lduBody.closed === false) {
-        job.loadingUnload.closed = false;
-      }
-      if (lduBody.closed === true) {
-        job.loadingUnload.closed = true;
-      }
+      if (lduBody.closed === false) job.loadingUnload.closed = false;
+      if (lduBody.closed === true) job.loadingUnload.closed = true;
     }
 
     if (roleCounts && typeof roleCounts === "object") {
       job.roleCounts = {
         junior: Number(roleCounts.junior ?? job.roleCounts?.junior ?? 0),
         senior: Number(roleCounts.senior ?? job.roleCounts?.senior ?? 0),
-        lead:   Number(roleCounts.lead   ?? job.roleCounts?.lead   ?? 0),
+        lead: Number(roleCounts.lead ?? job.roleCounts?.lead ?? 0)
       };
-      const sum = job.roleCounts.junior + job.roleCounts.senior + job.roleCounts.lead;
+      const sum =
+        job.roleCounts.junior +
+        job.roleCounts.senior +
+        job.roleCounts.lead;
       if (!headcount) job.headcount = Number(job.headcount || sum || 5);
     }
     if (roleRates && typeof roleRates === "object") {
@@ -1050,9 +1128,14 @@ app.patch(
       for (const r of STAFF_ROLES) {
         job.roleRates[r] = {
           payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(roleRates?.[r]?.base     ?? job.roleRates?.[r]?.base     ?? 0),
-          specificPayment: roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
-          otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
+          base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+          specificPayment:
+            roleRates?.[r]?.specificPayment ??
+            job.roleRates?.[r]?.specificPayment ??
+            null,
+          otMultiplier: Number(
+            roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0
+          )
         };
       }
     }
@@ -1086,7 +1169,7 @@ app.post(
       lduEnabled,
       earlyCallAmount,
       earlyCallThresholdHours,
-      roleRates,
+      roleRates
     } = req.body || {};
 
     job.rate = job.rate || {};
@@ -1108,7 +1191,7 @@ app.post(
       price: Number(db.config.rates.loadingUnloading.amount),
       applicants: [],
       participants: [],
-      closed: false,
+      closed: false
     };
     if (lduEnabled !== undefined) job.loadingUnload.enabled = !!lduEnabled;
     if (lduPrice !== undefined) job.loadingUnload.price = Number(lduPrice);
@@ -1116,7 +1199,7 @@ app.post(
     job.earlyCall = job.earlyCall || {
       enabled: false,
       amount: Number(db.config.rates.earlyCall?.defaultAmount ?? 20),
-      thresholdHours: 3,
+      thresholdHours: 3
     };
     if (earlyCallAmount !== undefined)
       job.earlyCall.amount = Number(earlyCallAmount);
@@ -1128,9 +1211,14 @@ app.post(
       for (const r of STAFF_ROLES) {
         job.roleRates[r] = {
           payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(roleRates?.[r]?.base     ?? job.roleRates?.[r]?.base     ?? 0),
-          specificPayment: roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
-          otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
+          base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+          specificPayment:
+            roleRates?.[r]?.specificPayment ??
+            job.roleRates?.[r]?.specificPayment ??
+            null,
+          otMultiplier: Number(
+            roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0
+          )
         };
       }
     }
@@ -1142,12 +1230,12 @@ app.post(
       rate: job.rate,
       earlyCall: job.earlyCall,
       loadingUnload: job.loadingUnload,
-      roleRates: job.roleRates,
+      roleRates: job.roleRates
     });
   }
 );
 
-/* ---- persist adjustments via dedicated endpoint ---- */
+/* ---- adjustments endpoint ---- */
 app.post(
   "/jobs/:id/adjustments",
   authMiddleware,
@@ -1167,12 +1255,15 @@ app.post(
         entries: Object.values(job.adjustments).reduce(
           (s, a) => s + (Array.isArray(a) ? a.length : 0),
           0
-        ),
+        )
       },
       req
     );
 
-    return res.json({ ok: true, job: { ...job, status: computeStatus(job) } });
+    return res.json({
+      ok: true,
+      job: { ...job, status: computeStatus(job) }
+    });
   }
 );
 
@@ -1191,7 +1282,7 @@ app.delete(
   }
 );
 
-/* ---- apply (transport + optional L&U) ---- */
+/* ---- apply ---- */
 app.post(
   "/jobs/:id/apply",
   authMiddleware,
@@ -1226,7 +1317,7 @@ app.post(
       price: Number(db.config.rates.loadingUnloading.amount),
       applicants: [],
       participants: [],
-      closed: false,
+      closed: false
     };
     const luEnabled = lu.enabled ?? lu.quota > 0;
 
@@ -1244,6 +1335,7 @@ app.post(
 
         if (wantsLU === true) {
           if (!luEnabled || lu.closed === true) {
+            // ignore
           } else {
             job.loadingUnload = lu;
             const a = job.loadingUnload.applicants || [];
@@ -1251,16 +1343,22 @@ app.post(
             job.loadingUnload.applicants = a;
           }
         } else if (wantsLU === false && job.loadingUnload?.applicants) {
-          job.loadingUnload.applicants = job.loadingUnload.applicants.filter(
-            (u) => u !== req.user.id
-          );
+          job.loadingUnload.applicants =
+            job.loadingUnload.applicants.filter(
+              (u) => u !== req.user.id
+            );
         }
 
         await saveDB(db);
         exportJobCSV(job);
         addAudit(
           "reapply",
-          { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU },
+          {
+            jobId: job.id,
+            userId: req.user.id,
+            transport,
+            wantsLU: !!wantsLU
+          },
           req
         );
         return res.json({ ok: true, reapply: true });
@@ -1270,6 +1368,7 @@ app.post(
 
       if (wantsLU === true) {
         if (!luEnabled || lu.closed === true) {
+          // ignore
         } else {
           job.loadingUnload = lu;
           const a = job.loadingUnload.applicants || [];
@@ -1282,9 +1381,10 @@ app.post(
       }
 
       if (wantsLU === false && job.loadingUnload?.applicants) {
-        job.loadingUnload.applicants = job.loadingUnload.applicants.filter(
-          (u) => u !== req.user.id
-        );
+        job.loadingUnload.applicants =
+          job.loadingUnload.applicants.filter(
+            (u) => u !== req.user.id
+          );
         await saveDB(db);
         exportJobCSV(job);
         return res.json({ ok: true, updated: true });
@@ -1293,15 +1393,17 @@ app.post(
       return res.json({ message: "already_applied" });
     }
 
+    // first-time apply
     job.applications.push({
       userId: req.user.id,
       email: req.user.email,
       transport,
-      appliedAt: dayjs().toISOString(),
+      appliedAt: dayjs().toISOString()
     });
 
     if (wantsLU === true) {
       if (!luEnabled || lu.closed === true) {
+        // ignore
       } else {
         job.loadingUnload = lu;
         const a = job.loadingUnload.applicants || [];
@@ -1318,7 +1420,7 @@ app.post(
         jobId: job.id,
         userId: req.user.id,
         transport,
-        wantsLU: !!wantsLU,
+        wantsLU: !!wantsLU
       },
       req
     );
@@ -1341,8 +1443,12 @@ app.get(
           : j.rejected.includes(req.user.id)
           ? "rejected"
           : "applied";
-        const luApplied = !!(j.loadingUnload?.applicants || []).includes(req.user.id);
-        const luConfirmed = !!(j.loadingUnload?.participants || []).includes(req.user.id);
+        const luApplied = !!(j.loadingUnload?.applicants || []).includes(
+          req.user.id
+        );
+        const luConfirmed = !!(j.loadingUnload?.participants || []).includes(
+          req.user.id
+        );
         result.push({
           id: j.id,
           title: j.title,
@@ -1352,7 +1458,7 @@ app.get(
           status: computeStatus(j),
           myStatus: state,
           luApplied,
-          luConfirmed,
+          luConfirmed
         });
       }
     }
@@ -1388,13 +1494,12 @@ app.get(
         luConfirmed,
         name: u?.name || "",
         phone: u?.phone || "",
-        discord: u?.discord || "",
+        discord: u?.discord || ""
       };
     });
     res.json(list);
   }
 );
-
 app.post(
   "/jobs/:id/approve",
   authMiddleware,
@@ -1412,7 +1517,10 @@ app.post(
       return res.status(409).json({ error: "decision_locked" });
     }
 
-    if (approve && (job.approved?.length || 0) >= Number(job.headcount || 0)) {
+    if (
+      approve &&
+      (job.approved?.length || 0) >= Number(job.headcount || 0)
+    ) {
       return res.status(409).json({ error: "job_full" });
     }
 
@@ -1431,7 +1539,7 @@ app.post(
         price: Number(db.config.rates.loadingUnloading.amount),
         applicants: [],
         participants: [],
-        closed: false,
+        closed: false
       };
 
       const wantsLU = (job.loadingUnload.applicants || []).includes(userId);
@@ -1446,7 +1554,9 @@ app.post(
         if (partsSet.size >= quota) {
           job.loadingUnload.closed = true;
           const keep = new Set(job.loadingUnload.participants || []);
-          job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(uid => keep.has(uid));
+          job.loadingUnload.applicants = (
+            job.loadingUnload.applicants || []
+          ).filter((uid) => keep.has(uid));
         }
       }
     } else {
@@ -1463,7 +1573,7 @@ app.post(
         title: `Your application ${msg}`,
         body: job.title,
         link: `/#/jobs/${job.id}`,
-        type: approve ? "app_approved" : "app_rejected",
+        type: approve ? "app_approved" : "app_rejected"
       }).catch(() => {});
     } catch {}
 
@@ -1471,7 +1581,7 @@ app.post(
   }
 );
 
-/* ---- PM: L&U manage ---- */
+/* ---- L&U manage ---- */
 app.get(
   "/jobs/:id/loading",
   authMiddleware,
@@ -1486,14 +1596,16 @@ app.get(
         quota: 0,
         applicants: [],
         participants: [],
-        closed: false,
+        closed: false
       };
     const details = (ids) =>
       ids.map((uid) => {
-        const u = db.users.find((x) => x.id === uid) || {
-          email: "unknown",
-          id: uid,
-        };
+        const u =
+          db.users.find((x) => x.id === uid) ||
+          ({
+            email: "unknown",
+            id: uid
+          } as any);
         return { userId: uid, email: u.email, name: u.name || "" };
       });
     res.json({
@@ -1502,11 +1614,10 @@ app.get(
       quota: l.quota || 0,
       closed: !!l.closed,
       applicants: details(l.applicants || []),
-      participants: details(l.participants || []),
+      participants: details(l.participants || [])
     });
   }
 );
-
 app.post(
   "/jobs/:id/loading/mark",
   authMiddleware,
@@ -1523,7 +1634,7 @@ app.post(
       price: db.config.rates.loadingUnloading.amount,
       applicants: [],
       participants: [],
-      closed: false,
+      closed: false
     };
     const p = new Set(job.loadingUnload.participants || []);
     if (present) {
@@ -1543,16 +1654,22 @@ app.post(
     if (job.loadingUnload.quota > 0 && p.size >= job.loadingUnload.quota) {
       job.loadingUnload.closed = true;
       const keep = new Set(job.loadingUnload.participants);
-      job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(uid => keep.has(uid));
+      job.loadingUnload.applicants = (
+        job.loadingUnload.applicants || []
+      ).filter((uid) => keep.has(uid));
     }
     await saveDB(db);
     exportJobCSV(job);
     addAudit("lu_mark", { jobId: job.id, userId, present }, req);
-    res.json({ ok: true, participants: job.loadingUnload.participants, closed: job.loadingUnload.closed });
+    res.json({
+      ok: true,
+      participants: job.loadingUnload.participants,
+      closed: job.loadingUnload.closed
+    });
   }
 );
 
-/* ---- NEW: Virtual / Manual attendance mark (for PM/Admin) ---- */
+/* ---- Manual attendance ---- */
 app.post(
   "/jobs/:id/attendance/mark",
   authMiddleware,
@@ -1574,7 +1691,11 @@ app.post(
       return res.json({ ok: true, record: null });
     }
 
-    const rec = job.attendance[userId] || { in: null, out: null, lateMinutes: 0 };
+    const rec = job.attendance[userId] || {
+      in: null,
+      out: null,
+      lateMinutes: 0
+    };
 
     if (inAt !== undefined && inAt !== null) {
       const d = dayjs(inAt);
@@ -1585,7 +1706,8 @@ app.post(
 
     if (outAt !== undefined && outAt !== null) {
       const d2 = dayjs(outAt);
-      if (!d2.isValid()) return res.status(400).json({ error: "invalid_outAt" });
+      if (!d2.isValid())
+        return res.status(400).json({ error: "invalid_outAt" });
       rec.out = d2.toISOString();
     }
 
@@ -1598,7 +1720,7 @@ app.post(
       ok: true,
       record: rec,
       jobId: job.id,
-      status: computeStatus(job),
+      status: computeStatus(job)
     });
   }
 );
@@ -1615,7 +1737,7 @@ app.post(
     if (job.events.startedAt)
       return res.json({
         message: "already_started",
-        startedAt: job.events.startedAt,
+        startedAt: job.events.startedAt
       });
     job.events.startedAt = dayjs().toISOString();
     await saveDB(db);
@@ -1653,10 +1775,20 @@ async function handleReset(req, res) {
   const status = computeStatus(job);
   res.json({ ok: true, job: { ...job, status } });
 }
-app.post("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleReset);
-app.patch("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleReset);
+app.post(
+  "/jobs/:id/reset",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  handleReset
+);
+app.patch(
+  "/jobs/:id/reset",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  handleReset
+);
 
-/* ---- QR + scan (location bound) ---- */
+/* ---- QR + scan ---- */
 app.post(
   "/jobs/:id/qr",
   authMiddleware,
@@ -1670,7 +1802,8 @@ app.post(
       : job.rejected.includes(req.user.id)
       ? "rejected"
       : "applied";
-    if (state !== "approved") return res.status(400).json({ error: "not_approved" });
+    if (state !== "approved")
+      return res.status(400).json({ error: "not_approved" });
     if (!job.events?.startedAt)
       return res.status(400).json({ error: "event_not_started" });
 
@@ -1693,7 +1826,7 @@ app.post(
       lat: encLat,
       lng: encLng,
       iat: Math.floor(Date.now() / 1000),
-      nonce: uuidv4(),
+      nonce: uuidv4()
     };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "60s" });
     addAudit(
@@ -1703,7 +1836,7 @@ app.post(
         dir: direction,
         userId: req.user.id,
         lat: encLat,
-        lng: encLng,
+        lng: encLng
       },
       req
     );
@@ -1711,82 +1844,87 @@ app.post(
   }
 );
 
-app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const { token, scannerLat, scannerLng } = req.body || {};
-  if (!token) return res.status(400).json({ error: "missing_token" });
+app.post(
+  "/scan",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    const { token, scannerLat, scannerLng } = req.body || {};
+    if (!token) return res.status(400).json({ error: "missing_token" });
 
-  let payload;
-  try {
-    payload = jwt.verify(token, JWT_SECRET);
-  } catch {
-    addAudit("scan_error", { reason: "jwt_error" }, req);
-    return res.status(400).json({ error: "jwt_error" });
-  }
-  if (payload.typ !== "scan")
-    return res.status(400).json({ error: "bad_token_type" });
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch {
+      addAudit("scan_error", { reason: "jwt_error" }, req);
+      return res.status(400).json({ error: "jwt_error" });
+    }
+    if (payload.typ !== "scan")
+      return res.status(400).json({ error: "bad_token_type" });
 
-  const job = db.jobs.find((j) => j.id === payload.j);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  if (!job.events?.startedAt)
-    return res.status(400).json({ error: "event_not_started" });
+    const job = db.jobs.find((j) => j.id === payload.j);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+    if (!job.events?.startedAt)
+      return res.status(400).json({ error: "event_not_started" });
 
-  const sLat = Number(scannerLat),
-    sLng = Number(scannerLng);
-  if (!isValidCoord(payload.lat, payload.lng))
-    return res.status(400).json({ error: "token_missing_location" });
-  if (!isValidCoord(sLat, sLng))
-    return res.status(400).json({ error: "scanner_location_required" });
+    const sLat = Number(scannerLat),
+      sLng = Number(scannerLng);
+    if (!isValidCoord(payload.lat, payload.lng))
+      return res.status(400).json({ error: "token_missing_location" });
+    if (!isValidCoord(sLat, sLng))
+      return res.status(400).json({ error: "scanner_location_required" });
 
-  const dist = haversineMeters(payload.lat, payload.lng, sLat, sLng);
-  if (dist > MAX_DISTANCE_METERS) {
+    const dist = haversineMeters(payload.lat, payload.lng, sLat, sLng);
+    if (dist > MAX_DISTANCE_METERS) {
+      addAudit(
+        "scan_rejected_distance",
+        { jobId: job.id, userId: payload.u, dist },
+        req
+      );
+      return res.status(400).json({
+        error: "too_far",
+        distanceMeters: Math.round(dist),
+        maxDistanceMeters: MAX_DISTANCE_METERS
+      });
+    }
+
+    job.attendance = job.attendance || {};
+    const now = dayjs();
+    job.attendance[payload.u] = job.attendance[payload.u] || {
+      in: null,
+      out: null,
+      lateMinutes: 0
+    };
+    if (payload.dir === "in") {
+      job.attendance[payload.u].in = now.toISOString();
+      job.attendance[payload.u].lateMinutes = Math.max(
+        0,
+        now.diff(dayjs(job.startTime), "minute")
+      );
+    } else {
+      job.attendance[payload.u].out = now.toISOString();
+    }
+    await saveDB(db);
+    exportJobCSV(job);
     addAudit(
-      "scan_rejected_distance",
-      { jobId: job.id, userId: payload.u, dist },
+      "scan_" + payload.dir,
+      {
+        jobId: job.id,
+        userId: payload.u,
+        distanceMeters: Math.round(dist)
+      },
       req
     );
-    return res.status(400).json({
-      error: "too_far",
-      distanceMeters: Math.round(dist),
-      maxDistanceMeters: MAX_DISTANCE_METERS,
-    });
-  }
-
-  job.attendance = job.attendance || {};
-  const now = dayjs();
-  job.attendance[payload.u] = job.attendance[payload.u] || {
-    in: null,
-    out: null,
-    lateMinutes: 0,
-  };
-  if (payload.dir === "in") {
-    job.attendance[payload.u].in = now.toISOString();
-    job.attendance[payload.u].lateMinutes = Math.max(
-      0,
-      now.diff(dayjs(job.startTime), "minute")
-    );
-  } else {
-    job.attendance[payload.u].out = now.toISOString();
-  }
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit(
-    "scan_" + payload.dir,
-    {
+    res.json({
+      ok: true,
       jobId: job.id,
       userId: payload.u,
-      distanceMeters: Math.round(dist),
-    },
-    req
-  );
-  res.json({
-    ok: true,
-    jobId: job.id,
-    userId: payload.u,
-    direction: payload.dir,
-    time: now.toISOString(),
-    record: job.attendance[payload.u],
-  });
-});
+      direction: payload.dir,
+      time: now.toISOString(),
+      record: job.attendance[payload.u]
+    });
+  }
+);
 
 /* ---- CSV download ---- */
 app.get(
@@ -1833,10 +1971,11 @@ app.get("/push/public-key", (_req, res) => {
 
 app.post("/push/subscribe", authMiddleware, async (req, res) => {
   const sub = req.body?.subscription;
-  if (!sub || !sub.endpoint) return res.status(400).json({ error: "bad_subscription" });
+  if (!sub || !sub.endpoint)
+    return res.status(400).json({ error: "bad_subscription" });
   const uid = req.user.id;
   const list = db.pushSubs[uid] || [];
-  const exists = new Set(list.map(s => s && s.endpoint));
+  const exists = new Set(list.map((s) => s && s.endpoint));
   if (!exists.has(sub.endpoint)) list.push(sub);
   db.pushSubs[uid] = list;
   await saveDB(db);
@@ -1848,7 +1987,9 @@ app.post("/push/unsubscribe", authMiddleware, async (req, res) => {
   const ep = req.body?.endpoint;
   const uid = req.user.id;
   if (!ep) return res.status(400).json({ error: "endpoint_required" });
-  db.pushSubs[uid] = (db.pushSubs[uid] || []).filter(s => (s && s.endpoint) !== ep);
+  db.pushSubs[uid] = (db.pushSubs[uid] || []).filter(
+    (s) => (s && s.endpoint) !== ep
+  );
   await saveDB(db);
   addAudit("push_unsubscribe", { userId: uid }, req);
   res.json({ ok: true });
@@ -1858,13 +1999,13 @@ app.get("/notifications", authMiddleware, (req, res) => {
   const limit = Number(req.query.limit || 100);
   const onlyUnread = String(req.query.unread || "") === "1";
   let items = (db.notifications[req.user.id] || []).slice(0, limit);
-  if (onlyUnread) items = items.filter(n => !n.read);
+  if (onlyUnread) items = items.filter((n) => !n.read);
   res.json(items);
 });
 app.post("/notifications/:id/read", authMiddleware, async (req, res) => {
   const uid = req.user.id;
   const list = db.notifications[uid] || [];
-  const n = list.find(x => x.id === req.params.id);
+  const n = list.find((x) => x.id === req.params.id);
   if (!n) return res.status(404).json({ error: "not_found" });
   n.read = true;
   await saveDB(db);
@@ -1872,26 +2013,38 @@ app.post("/notifications/:id/read", authMiddleware, async (req, res) => {
 });
 
 app.get("/me/notifications", authMiddleware, (req, res) => {
-  const items = (db.notifications[req.user.id] || []).slice(0, Number(req.query.limit || 50));
+  const items = (db.notifications[req.user.id] || []).slice(
+    0,
+    Number(req.query.limit || 50)
+  );
   res.json({ items });
 });
-app.post("/me/notifications/read-all", authMiddleware, async (req, res) => {
-  const uid = req.user.id;
-  const list = db.notifications[uid] || [];
-  for (const it of list) it.read = true;
-  await saveDB(db);
-  res.json({ ok: true });
-});
+app.post(
+  "/me/notifications/read-all",
+  authMiddleware,
+  async (req, res) => {
+    const uid = req.user.id;
+    const list = db.notifications[uid] || [];
+    for (const it of list) it.read = true;
+    await saveDB(db);
+    res.json({ ok: true });
+  }
+);
 
-app.post("/push/test", authMiddleware, requireRole("admin"), async (req, res) => {
-  await notifyUsers([req.user.id], {
-    title: "Test notification",
-    body: "Push is working ✅",
-    link: "/#/ ",
-    type: "test",
-  });
-  res.json({ ok: true });
-});
+app.post(
+  "/push/test",
+  authMiddleware,
+  requireRole("admin"),
+  async (req, res) => {
+    await notifyUsers([req.user.id], {
+      title: "Test notification",
+      body: "Push is working ✅",
+      link: "/#/",
+      type: "test"
+    });
+    res.json({ ok: true });
+  }
+);
 
 /* ---- reset + health ---- */
 app.post("/__reset", async (_req, res) => {
@@ -1900,7 +2053,7 @@ app.post("/__reset", async (_req, res) => {
 });
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-/* ---- scanner location heartbeat/endpoints ---- */
+/* ---- scanner location heartbeat ---- */
 function setScannerLocation(job, lat, lng) {
   job.events = job.events || {};
   job.events.scanner = { lat, lng, updatedAt: dayjs().toISOString() };
@@ -1921,11 +2074,7 @@ app.post(
       return res.status(400).json({ error: "scanner_location_required" });
     setScannerLocation(job, latN, lngN);
     await saveDB(db);
-    addAudit(
-      "scanner_heartbeat",
-      { jobId: job.id, lat: latN, lng: lngN },
-      req
-    );
+    addAudit("scanner_heartbeat", { jobId: job.id, lat: latN, lng: lngN }, req);
     res.json({ ok: true, updatedAt: job.events.scanner.updatedAt });
   }
 );
@@ -1939,28 +2088,27 @@ app.get("/jobs/:id/scanner", authMiddleware, (req, res) => {
   res.json({ lat: s.lat, lng: s.lng, updatedAt: s.updatedAt });
 });
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () =>
-  console.log("ATAG server running on http://localhost:" + PORT)
-);
-
-console.log("Booting server from:", new URL(import.meta.url).pathname);
-
+/* ---- routes listing ---- */
 function listRoutes(app) {
   const out = [];
   app._router?.stack?.forEach((m) => {
     if (m.route?.path) {
-      const methods = Object.keys(m.route.methods).map(s=>s.toUpperCase());
+      const methods = Object.keys(m.route.methods).map((s) => s.toUpperCase());
       out.push(`${methods.join(",")} ${m.route.path}`);
     }
   });
   return out.sort();
 }
-
 app.get("/__routes", (_req, res) => {
   res.json({ routes: listRoutes(app) });
 });
 
+/* ---- start ---- */
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => {
+  console.log("ATAG server running on http://localhost:" + PORT);
+  console.log("Booting server from:", new URL(import.meta.url).pathname);
+});
 setTimeout(() => {
   console.log("Registered routes:\n" + listRoutes(app).join("\n"));
 }, 100);
