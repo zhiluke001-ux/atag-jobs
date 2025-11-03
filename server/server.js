@@ -11,27 +11,38 @@ import { fileURLToPath } from "url";
 import { createWriteStream } from "fs";
 import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
-import webpush from "web-push";              // Web Push
+import webpush from "web-push";
 import { loadDB, saveDB } from "./storage.js";
 
+/* ========== optional nodemailer (only if SMTP env present) ========== */
+let nodemailer = null;
+async function lazyLoadNodemailer() {
+  if (nodemailer) return nodemailer;
+  try {
+    nodemailer = await import("nodemailer");
+    return nodemailer;
+  } catch {
+    return null;
+  }
+}
+
+/* ---------------- Boot ---------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set("trust proxy", 1); // Render/Cloudflare
 app.use(cors());
 app.use(express.json());
 app.use(morgan("dev"));
 
 /* ---------------- DB + defaults ---------------- */
-// Load DB (Postgres if DATABASE_URL, else file)
 let db = await loadDB();
 
-// Seed config & defaults if missing
 db.config = db.config || {};
 db.config.jwtSecret = db.config.jwtSecret || "dev-secret";
 db.config.scanMaxDistanceMeters = db.config.scanMaxDistanceMeters || 500;
 
-// Legacy rates (kept for compatibility)
 const DEFAULT_RATES = {
   virtualHourly: { junior: 20, senior: 20, lead: 30 },
   physicalSession: {
@@ -46,72 +57,23 @@ const DEFAULT_RATES = {
 };
 db.config.rates = db.config.rates || DEFAULT_RATES;
 
-// Admin default role pay tables (never blank)
 db.config.roleRatesDefaults = db.config.roleRatesDefaults || {
   junior: { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.junior ?? 20), specificPayment: null, otMultiplier: 0 },
   senior: { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.senior ?? 30), specificPayment: null, otMultiplier: 0 },
   lead:   { payMode: "hourly", base: Number(db.config.rates?.physicalHourly?.lead   ?? 30), specificPayment: null, otMultiplier: 0 },
 };
 
-// Notifications storage (per-user push subs + in-app feed)
-db.pushSubs = db.pushSubs || {};            // { [userId]: [PushSubscription] }
-db.notifications = db.notifications || {};  // { [userId]: [{id,time,title,body,link,read,type}] }
-
+db.pushSubs = db.pushSubs || {};
+db.notifications = db.notifications || {};
 await saveDB(db);
 
 /* ------------ auth / helpers ------------- */
 const JWT_SECRET = db.config.jwtSecret;
 const MAX_DISTANCE_METERS = Number(
   process.env.SCAN_MAX_DISTANCE_METERS ||
-    db.config.scanMaxDistanceMeters ||
-    500
+  db.config.scanMaxDistanceMeters ||
+  500
 );
-
-// === NEW: Password reset email settings ===
-const APP_ORIGIN = (process.env.APP_ORIGIN || "http://localhost:5173").replace(/\/$/, "");
-const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
-const EMAIL_FROM = process.env.EMAIL_FROM || "ATAG Jobs <noreply@atagjobs.email>";
-const RESET_TOKEN_TTL_MINUTES = Number(process.env.RESET_TOKEN_TTL_MINUTES || 60);
-
-function buildResetLink(token, originHeader) {
-  const origin = (originHeader && /^https?:\/\//i.test(originHeader)) ? originHeader : APP_ORIGIN;
-  return `${String(origin).replace(/\/$/, "")}/#/reset?token=${encodeURIComponent(token)}`;
-}
-function resetEmailHTML(link) {
-  return `
-  <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif">
-    <h2>Password reset</h2>
-    <p>We received a request to reset your password. Click the button below:</p>
-    <p><a href="${link}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#111;color:#fff;text-decoration:none">Reset Password</a></p>
-    <p>Or copy this link:<br><a href="${link}">${link}</a></p>
-    <p style="color:#666;font-size:12px">If you did not request this, you can ignore this email.</p>
-  </div>`;
-}
-async function sendResetEmail(to, link) {
-  if (!RESEND_API_KEY) return { via: "dev-no-email" }; // dev mode: no send, FE can show token+link
-
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: EMAIL_FROM,
-      to: [to],
-      subject: "Reset your ATAG Jobs password",
-      html: resetEmailHTML(link),
-      text: `Reset your password: ${link}`,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`email_send_failed ${res.status}: ${body}`);
-  }
-  return { via: "email", ...(await res.json().catch(() => ({}))) };
-}
-
-// One-shot decision policy (approve/reject cannot be changed once set)
 const ONE_SHOT_DECISIONS = true;
 
 const toRad = (deg) => (deg * Math.PI) / 180;
@@ -133,24 +95,22 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
   const dLng = toRad(lng2 - lng1);
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLng / 2) ** 2;
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
 const signToken = (payload) =>
   jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 
-function authMiddleware(req, res, next) {
+function authMiddleware(req, _res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
-  if (!token) return res.status(401).json({ error: "no_token" });
+  if (!token) return _res.status(401).json({ error: "no_token" });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch {
-    return res.status(401).json({ error: "invalid_token" });
+    return _res.status(401).json({ error: "invalid_token" });
   }
 }
 const requireRole = (...roles) => (req, res, next) =>
@@ -169,7 +129,6 @@ function addAudit(action, details, req) {
     details,
   });
   if (db.audit.length > 1000) db.audit.length = 1000;
-  // No await saveDB here; handlers that mutate data already persist.
 }
 
 function computeStatus(job) {
@@ -183,7 +142,7 @@ function computeStatus(job) {
   return job.status || "upcoming";
 }
 
-// Password helpers
+/* ---------- Password helpers ---------- */
 function hashPassword(password) {
   const iterations = 150000;
   const salt = crypto.randomBytes(16).toString("hex");
@@ -217,7 +176,7 @@ function findUserByIdentifier(id) {
   );
 }
 
-// Helpers
+/* ---------- Roles & formatting ---------- */
 const ROLES = ["part-timer", "pm", "admin"];
 const STAFF_ROLES = ["junior", "senior", "lead"];
 const clampRole  = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
@@ -230,24 +189,18 @@ function paySummaryFromRate(rate = {}) {
   const otm = Number(rate.otMultiplier || 0);
   const otTag = otm > 0 ? ` (OT x${otm})` : "";
 
-  if (pm === "specific" && Number.isFinite(fix))
-    return `RM ${Math.round(fix)} / shift`;
-  if (
-    pm === "specific_plus_hourly" &&
-    Number.isFinite(fix) &&
-    Number.isFinite(hr)
-  )
+  if (pm === "specific" && Number.isFinite(fix)) return `RM ${Math.round(fix)} / shift`;
+  if (pm === "specific_plus_hourly" && Number.isFinite(fix) && Number.isFinite(hr))
     return `RM ${Math.round(fix)} + RM ${Math.round(hr)}/hr${otTag}`;
   if ((pm === "hourly" || pm == null) && Number.isFinite(hr))
     return `RM ${Math.round(hr)}/hr${otTag}`;
 
-  const legacyHr =
-    rate?.physicalHourly?.junior ?? rate?.virtualHourly?.junior;
+  const legacyHr = rate?.physicalHourly?.junior ?? rate?.virtualHourly?.junior;
   if (Number.isFinite(legacyHr)) return `From RM ${Math.round(legacyHr)}/hr`;
   return "See details";
 }
 
-// ===== Scheduled hours helpers =====
+/* ===== Scheduled hours helpers ===== */
 function hoursBetweenISO(startISO, endISO) {
   if (!startISO || !endISO) return 0;
   const s = dayjs(startISO);
@@ -302,7 +255,6 @@ function jobPublicView(job) {
       quota: Number(lu.quota || 0),
       applicants: lu.applicants?.length || 0,
       closed: !!lu.closed,
-      // (optionally) participants count for UI badges
       participants: (lu.participants || []).length,
       price: Number(lu.price || db.config.rates.loadingUnloading.amount),
     },
@@ -441,7 +393,7 @@ function exportJobCSV(job) {
   csv.end();
 }
 
-/* ---------- One-time user upgrade/seed for password auth ---------- */
+/* ---------- one-time user upgrade/seed ---------- */
 db.users = db.users || [];
 let mutated = false;
 for (const u of db.users) {
@@ -455,7 +407,6 @@ for (const u of db.users) {
     u.passwordHash = hashPassword("password");
     mutated = true;
   }
-  // Ensure staff grade exists
   if (!u.grade || !STAFF_ROLES.includes(u.grade)) {
     u.grade = "junior";
     mutated = true;
@@ -464,17 +415,15 @@ for (const u of db.users) {
     delete u.resetToken;
     mutated = true;
   }
-  // backfill optional fields
   if (u.phone === undefined) { u.phone = ""; mutated = true; }
   if (u.discord === undefined) { u.discord = ""; mutated = true; }
 }
 if (mutated) await saveDB(db);
 
-/* ---------- Ensure adjustments + L&U shape exists on all jobs (boot migration) ---------- */
+/* ---------- boot migration on jobs ---------- */
 db.jobs = db.jobs || [];
 let bootMutated = false;
 for (const j of db.jobs) {
-  // adjustments normalize
   if (!j.adjustments || typeof j.adjustments !== "object") {
     j.adjustments = {};
     bootMutated = true;
@@ -487,7 +436,6 @@ for (const j of db.jobs) {
       bootMutated = true;
     }
   }
-  // L&U normalize
   j.loadingUnload = j.loadingUnload || {
     enabled: false,
     quota: 0,
@@ -496,20 +444,18 @@ for (const j of db.jobs) {
     participants: [],
     closed: false,
   };
-  // de-dupe arrays
   const apps = Array.isArray(j.loadingUnload.applicants) ? Array.from(new Set(j.loadingUnload.applicants)) : [];
   const parts = Array.isArray(j.loadingUnload.participants) ? Array.from(new Set(j.loadingUnload.participants)) : [];
   j.loadingUnload.applicants = apps;
   j.loadingUnload.participants = parts;
   if (j.loadingUnload.closed === undefined) j.loadingUnload.closed = false;
-  // if already at/over quota, close
   if (Number(j.loadingUnload.quota || 0) > 0 && parts.length >= Number(j.loadingUnload.quota)) {
     j.loadingUnload.closed = true;
   }
 }
 if (bootMutated) await saveDB(db);
 
-/* ---------------- Notifications (feed + web push) ---------------- */
+/* ---------------- Notifications ---------------- */
 const NOTIF_CAP = 200;
 
 webpush.setVapidDetails(
@@ -523,7 +469,6 @@ async function sendPushToSub(sub, payload) {
     await webpush.sendNotification(sub, JSON.stringify(payload));
     return true;
   } catch (err) {
-    // Prune gone subscriptions
     if (err.statusCode === 404 || err.statusCode === 410) return false;
     return true;
   }
@@ -552,14 +497,80 @@ async function notifyUsers(userIds, { title, body, link, type = "info" }) {
   const item = { id, time: now, title, body, link, read: false, type };
   for (const uid of userIds) {
     addNotificationFor(uid, item);
-    // Fire-and-forget push
     sendPushToUser(uid, { title, body, url: link }).catch(() => {});
   }
   await saveDB(db);
 }
 
-/* -------------- auth --------------- */
+/* ---------------- Email helpers ---------------- */
+const MAIL_FROM = process.env.MAIL_FROM || "noreply@yourapp.local";
 
+function getBaseUrl(req) {
+  // Explicit override first
+  const cfg = process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL;
+  if (cfg) return cfg.replace(/\/+$/, "");
+
+  // Build from proxy headers
+  const proto = (req.headers["x-forwarded-proto"] || "https").toString();
+  const host = (req.headers["x-forwarded-host"] || req.headers.host || "").toString();
+  if (host) return `${proto}://${host}`;
+  return "http://localhost:5173";
+}
+
+// Prefer HashRouter link as per your UI ("#/login", etc.)
+function makeResetLink(req, token) {
+  const base = getBaseUrl(req);
+  // Hash-router link
+  return `${base}#/reset?token=${encodeURIComponent(token)}`;
+}
+
+// Try Resend first (no dep), then SMTP via Nodemailer, else console.log as fallback
+async function sendEmail({ to, subject, html }) {
+  // Resend
+  if (process.env.RESEND_API_KEY) {
+    try {
+      const r = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ from: MAIL_FROM, to, subject, html }),
+      });
+      if (r.ok) return true;
+      // fallthrough on failure
+    } catch {}
+  }
+
+  // SMTP via Nodemailer
+  if (process.env.SMTP_URL || process.env.SMTP_HOST) {
+    const nm = await lazyLoadNodemailer();
+    if (nm) {
+      const transport = process.env.SMTP_URL
+        ? nm.createTransport(process.env.SMTP_URL)
+        : nm.createTransport({
+            host: process.env.SMTP_HOST,
+            port: Number(process.env.SMTP_PORT || 587),
+            secure: String(process.env.SMTP_SECURE || "").toLowerCase() === "true",
+            auth: process.env.SMTP_USER
+              ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+              : undefined,
+          });
+      try {
+        await transport.sendMail({ from: MAIL_FROM, to, subject, html });
+        return true;
+      } catch {
+        // fallthrough
+      }
+    }
+  }
+
+  // Dev fallback
+  console.log("[DEV EMAIL]", { to, subject, html });
+  return false;
+}
+
+/* ---------------- Auth ---------------- */
 app.post("/login", async (req, res) => {
   const { identifier, email, username, password } = req.body || {};
   const id = identifier || email || username;
@@ -596,27 +607,17 @@ app.post("/login", async (req, res) => {
 app.post("/register", async (req, res) => {
   const { email, username, name, password, role, phone, discord } = req.body || {};
   if (!email || !password)
-    return res
-      .status(400)
-      .json({ error: "email_and_password_required" });
+    return res.status(400).json({ error: "email_and_password_required" });
 
   const pickedRole = clampRole(role || "part-timer");
 
   const emailLower = String(email).toLowerCase();
-  if (
-    db.users.find(
-      (u) => String(u.email || "").toLowerCase() === emailLower
-    )
-  ) {
+  if (db.users.find((u) => String(u.email || "").toLowerCase() === emailLower)) {
     return res.status(409).json({ error: "email_taken" });
   }
   if (username) {
     const userLower = String(username).toLowerCase();
-    if (
-      db.users.find(
-        (u) => String(u.username || "").toLowerCase() === userLower
-      )
-    ) {
+    if (db.users.find((u) => String(u.username || "").toLowerCase() === userLower)) {
       return res.status(409).json({ error: "username_taken" });
     }
   }
@@ -653,56 +654,60 @@ app.post("/register", async (req, res) => {
   });
 });
 
-// === UPDATED: forgot-password with email sending (Resend) and dev fallback
-app.post("/forgot-password", async (req, res) => {
+/* ---- Forgot/Reset (handlers) ---- */
+async function handleForgotPassword(req, res) {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: "email_required" });
+
   const emailLower = String(email).toLowerCase();
   const user = db.users.find(
     (u) => String(u.email || "").toLowerCase() === emailLower
   );
 
-  // Always respond 200 to avoid enumeration; but still create a token if user exists
-  try {
-    if (user) {
-      const token = crypto.randomBytes(24).toString("hex");
-      const expiresAt = Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000;
-      user.resetToken = { token, expiresAt };
-      await saveDB(db);
+  // Always return ok to avoid user enumeration
+  if (!user) return res.json({ ok: true });
 
-      const resetLink = buildResetLink(token, req.headers?.origin);
-
-      try {
-        const sendRes = await sendResetEmail(emailLower, resetLink);
-        addAudit("forgot_password", { email, via: sendRes?.via || "email" }, { user });
-
-        // Dev mode: return token+link so FE can show it
-        if (sendRes?.via === "dev-no-email") {
-          return res.json({ ok: true, token, resetLink, via: "dev" });
-        }
-        // Production email sent: do NOT reveal token
-        return res.json({ ok: true, via: "email" });
-      } catch (e) {
-        // If email provider fails, still return dev details so you can proceed
-        addAudit("forgot_password_email_error", { email, error: String(e?.message || e) }, { user });
-        return res.json({ ok: true, token, resetLink, via: "fallback-dev" });
-      }
-    }
-
-    // Unknown email -> ok (no hints)
-    addAudit("forgot_password_unknown", { email }, null);
-    return res.json({ ok: true, via: "noop" });
-  } catch (err) {
-    return res.status(500).json({ error: "forgot_failed" });
+  // Throttle per user (simple: at most once per 60 seconds)
+  const now = Date.now();
+  if (user.resetToken?.lastRequestAt && now - Number(user.resetToken.lastRequestAt) < 60_000) {
+    return res.json({ ok: true }); // silently ignore frequent requests
   }
-});
 
-app.post("/reset-password", async (req, res) => {
+  const token = crypto.randomBytes(24).toString("hex");
+  const expiresAt = now + 60 * 60 * 1000; // 1 hour
+  user.resetToken = { token, expiresAt, lastRequestAt: now };
+  await saveDB(db);
+
+  const resetLink = makeResetLink(req, token);
+
+  const subject = "Reset your ATAG password";
+  const html = `
+    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial">
+      <h2>Reset your password</h2>
+      <p>We received a request to reset your password.</p>
+      <p><a href="${resetLink}" style="display:inline-block;padding:10px 14px;border-radius:6px;background:#0d6efd;color:#fff;text-decoration:none">Reset Password</a></p>
+      <p>Or paste this link into your browser:</p>
+      <p><code>${resetLink}</code></p>
+      <p style="color:#666">This link expires in 1 hour. If you didn’t request this, you can ignore this email.</p>
+    </div>
+  `;
+
+  // Fire and forget; we still return ok
+  sendEmail({ to: email, subject, html }).catch(() => {});
+
+  addAudit("forgot_password", { email }, { user });
+
+  // In production do not leak token/link
+  if (process.env.NODE_ENV === "production") {
+    return res.json({ ok: true });
+  }
+  return res.json({ ok: true, token, resetLink });
+}
+
+async function handleResetPassword(req, res) {
   const { token, password } = req.body || {};
   if (!token || !password)
-    return res
-      .status(400)
-      .json({ error: "missing_token_or_password" });
+    return res.status(400).json({ error: "missing_token_or_password" });
 
   const user = db.users.find(
     (u) => u.resetToken && u.resetToken.token === token
@@ -720,7 +725,14 @@ app.post("/reset-password", async (req, res) => {
   await saveDB(db);
   addAudit("reset_password", { userId: user.id }, { user });
   res.json({ ok: true });
-});
+}
+
+/* ---- Routes: new + legacy ---- */
+app.post("/auth/forgot", handleForgotPassword);
+app.post("/auth/reset", handleResetPassword);
+
+app.post("/forgot-password", handleForgotPassword); // legacy
+app.post("/reset-password", handleResetPassword);   // legacy
 
 app.get("/me", authMiddleware, (req, res) => {
   const user = db.users.find((u) => u.id === req.user.id);
@@ -736,24 +748,19 @@ app.get("/me", authMiddleware, (req, res) => {
 });
 
 /* -------- Admin: users (list & update role/grade) -------- */
-app.get(
-  "/admin/users",
-  authMiddleware,
-  requireRole("admin"),
-  (_req, res) => {
-    const list = (db.users || []).map(u => ({
-      id: u.id,
-      email: u.email,
-      username: u.username,
-      name: u.name,
-      role: u.role,
-      grade: u.grade || "junior",
-      phone: u.phone || "",
-      discord: u.discord || "",
-    }));
-    res.json(list);
-  }
-);
+app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
+  const list = (db.users || []).map(u => ({
+    id: u.id,
+    email: u.email,
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    grade: u.grade || "junior",
+    phone: u.phone || "",
+    discord: u.discord || "",
+  }));
+  res.json(list);
+});
 
 app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const target = db.users.find(u => u.id === req.params.id);
@@ -762,7 +769,6 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
   const { role, grade } = req.body || {};
   const before = { role: target.role, grade: target.grade || "junior" };
 
-  // Prevent removing the last admin
   if (role && clampRole(role) !== "admin" && target.role === "admin") {
     const adminCount = (db.users || []).filter(u => u.role === "admin").length;
     if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
@@ -777,7 +783,6 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
     req
   );
 
-  // Notify the user about their account update
   try {
     await notifyUsers([target.id], {
       title: "Your account was updated",
@@ -925,10 +930,8 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   await saveDB(db);
   addAudit("create_job", { jobId: id, title }, req);
 
-  // Notify part-timers about a new job (doesn't block the response)
   try {
-    const recipients = (db.users || [])
-      .map(u => u.id);
+    const recipients = (db.users || []).map(u => u.id);
     notifyUsers(recipients, {
       title: `New job: ${title}`,
       body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
@@ -985,9 +988,9 @@ app.patch(
         enabled: !!earlyCall.enabled,
         amount: Number(
           earlyCall.amount ??
-            job.earlyCall?.amount ??
-            db.config.rates.earlyCall?.defaultAmount ??
-            20
+          job.earlyCall?.amount ??
+          db.config.rates.earlyCall?.defaultAmount ??
+          20
         ),
         thresholdHours: Number(
           earlyCall.thresholdHours ?? job.earlyCall?.thresholdHours ?? 3
@@ -1006,8 +1009,8 @@ app.patch(
         quota: Number(lduBody.quota ?? job.loadingUnload?.quota ?? 0),
         price: Number(
           lduBody.price ??
-            job.loadingUnload?.price ??
-            db.config.rates.loadingUnloading.amount
+          job.loadingUnload?.price ??
+          db.config.rates.loadingUnloading.amount
         ),
         applicants: Array.isArray(job.loadingUnload?.applicants)
           ? Array.from(new Set(job.loadingUnload.applicants))
@@ -1015,21 +1018,13 @@ app.patch(
         participants: Array.isArray(job.loadingUnload?.participants)
           ? Array.from(new Set(job.loadingUnload.participants))
           : [],
-        closed: prevClosed, // remain closed unless explicitly reopened below
+        closed: prevClosed,
       };
-      // Auto-close if participants meet/exceed new quota; otherwise keep previous closed state
       if (job.loadingUnload.quota > 0 && job.loadingUnload.participants.length >= job.loadingUnload.quota) {
         job.loadingUnload.closed = true;
-        const keep = new Set(job.loadingUnload.participants || []);
-        job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(uid => keep.has(uid));
       }
-      // Allow manual reopen only if explicitly provided
-      if (lduBody.closed === false) {
-        job.loadingUnload.closed = false;
-      }
-      if (lduBody.closed === true) {
-        job.loadingUnload.closed = true;
-      }
+      if (lduBody.closed === false) job.loadingUnload.closed = false;
+      if (lduBody.closed === true) job.loadingUnload.closed = true;
     }
 
     if (roleCounts && typeof roleCounts === "object") {
@@ -1063,89 +1058,7 @@ app.patch(
   }
 );
 
-app.post(
-  "/jobs/:id/rate",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const {
-      base,
-      transportBus,
-      ownTransport,
-      payMode,
-      specificPayment,
-      paymentPrice,
-      lduPrice,
-      lduEnabled,
-      earlyCallAmount,
-      earlyCallThresholdHours,
-      roleRates,
-      // optional: closed handled in /jobs/:id patch
-    } = req.body || {};
-
-    job.rate = job.rate || {};
-    if (base !== undefined) job.rate.base = Number(base);
-    if (transportBus !== undefined)
-      job.rate.transportBus = Number(transportBus);
-    if (ownTransport !== undefined)
-      job.rate.ownTransport = Number(ownTransport);
-    if (payMode !== undefined) job.rate.payMode = String(payMode);
-    if (specificPayment !== undefined)
-      job.rate.specificPayment = Number(specificPayment);
-    if (paymentPrice !== undefined)
-      job.rate.specificPayment = Number(paymentPrice);
-    if (lduPrice !== undefined) job.rate.lduPrice = Number(lduPrice);
-
-    job.loadingUnload = job.loadingUnload || {
-      enabled: false,
-      quota: 0,
-      price: Number(db.config.rates.loadingUnloading.amount),
-      applicants: [],
-      participants: [],
-      closed: false,
-    };
-    if (lduEnabled !== undefined) job.loadingUnload.enabled = !!lduEnabled;
-    if (lduPrice !== undefined) job.loadingUnload.price = Number(lduPrice);
-    // keep .closed as-is here
-
-    job.earlyCall = job.earlyCall || {
-      enabled: false,
-      amount: Number(db.config.rates.earlyCall?.defaultAmount ?? 20),
-      thresholdHours: 3,
-    };
-    if (earlyCallAmount !== undefined)
-      job.earlyCall.amount = Number(earlyCallAmount);
-    if (earlyCallThresholdHours !== undefined)
-      job.earlyCall.thresholdHours = Number(earlyCallThresholdHours);
-
-    if (roleRates && typeof roleRates === "object") {
-      job.roleRates = job.roleRates || {};
-      for (const r of STAFF_ROLES) {
-        job.roleRates[r] = {
-          payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(roleRates?.[r]?.base     ?? job.roleRates?.[r]?.base     ?? 0),
-          specificPayment: roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
-          otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
-        };
-      }
-    }
-
-    await saveDB(db);
-    addAudit("update_job_rate", { jobId: job.id }, req);
-    res.json({
-      ok: true,
-      rate: job.rate,
-      earlyCall: job.earlyCall,
-      loadingUnload: job.loadingUnload,
-      roleRates: job.roleRates,
-    });
-  }
-);
-
-/* ---- persist adjustments via dedicated endpoint ---- */
+/* ---- persist adjustments ---- */
 app.post(
   "/jobs/:id/adjustments",
   authMiddleware,
@@ -1189,7 +1102,7 @@ app.delete(
   }
 );
 
-/* ---- apply (transport + optional L&U) ---- */
+/* ---- apply ---- */
 app.post(
   "/jobs/:id/apply",
   authMiddleware,
@@ -1198,17 +1111,14 @@ app.post(
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    // Accept virtual jobs (or jobs with both transport options disabled)
     let { transport, wantsLU } = req.body || {};
     const opts = job.transportOptions || { bus: true, own: true };
     const bothDisabled = !opts.bus && !opts.own;
 
-    // Coerce a valid transport for downstream logic
     if (!transport || !["ATAG Bus", "Own Transport"].includes(transport)) {
       transport = "Own Transport";
     }
 
-    // Enforce transport validity only when at least one option is enabled
     if (!bothDisabled) {
       if (!["ATAG Bus", "Own Transport"].includes(transport)) {
         return res.status(400).json({ error: "invalid_transport" });
@@ -1220,7 +1130,6 @@ app.post(
         return res.status(400).json({ error: "transport_not_allowed" });
       }
     }
-    // If both disabled, we treat like a virtual/transport-agnostic job and continue.
 
     const lu = job.loadingUnload || {
       enabled: false,
@@ -1232,7 +1141,6 @@ app.post(
     };
     const luEnabled = lu.enabled ?? lu.quota > 0;
 
-    // Existing application?
     let exists = job.applications.find((a) => a.userId === req.user.id);
     if (exists) {
       const wasRejected = job.rejected.includes(req.user.id);
@@ -1247,7 +1155,7 @@ app.post(
 
         if (wantsLU === true) {
           if (!luEnabled || lu.closed === true) {
-            // silently ignore when closed/disabled
+            // ignore
           } else {
             job.loadingUnload = lu;
             const a = job.loadingUnload.applicants || [];
@@ -1262,20 +1170,15 @@ app.post(
 
         await saveDB(db);
         exportJobCSV(job);
-        addAudit(
-          "reapply",
-          { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU },
-          req
-        );
+        addAudit("reapply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
         return res.json({ ok: true, reapply: true });
       }
 
-      // Normal update to existing application
       exists.transport = transport;
 
       if (wantsLU === true) {
         if (!luEnabled || lu.closed === true) {
-          // ignore when closed/disabled
+          // ignore
         } else {
           job.loadingUnload = lu;
           const a = job.loadingUnload.applicants || [];
@@ -1299,17 +1202,16 @@ app.post(
       return res.json({ message: "already_applied" });
     }
 
-    // First-time apply
     job.applications.push({
       userId: req.user.id,
       email: req.user.email,
-      transport, // coerced value if virtual/both disabled
+      transport,
       appliedAt: dayjs().toISOString(),
     });
 
     if (wantsLU === true) {
       if (!luEnabled || lu.closed === true) {
-        // ignore when closed/disabled
+        // ignore
       } else {
         job.loadingUnload = lu;
         const a = job.loadingUnload.applicants || [];
@@ -1320,16 +1222,7 @@ app.post(
 
     await saveDB(db);
     exportJobCSV(job);
-    addAudit(
-      "apply",
-      {
-        jobId: job.id,
-        userId: req.user.id,
-        transport,
-        wantsLU: !!wantsLU,
-      },
-      req
-    );
+    addAudit("apply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
     res.json({ ok: true });
   }
 );
@@ -1369,7 +1262,7 @@ app.get(
   }
 );
 
-/* ---- PM: applicants list + approve ---- */
+/* ---- PM: applicants + approve ---- */
 app.get(
   "/jobs/:id/applicants",
   authMiddleware,
@@ -1394,7 +1287,6 @@ app.get(
         userId: a.userId,
         luApplied,
         luConfirmed,
-        // enrich for PM view
         name: u?.name || "",
         phone: u?.phone || "",
         discord: u?.discord || "",
@@ -1414,7 +1306,6 @@ app.post(
     if (!userId || typeof approve !== "boolean")
       return res.status(400).json({ error: "bad_request" });
 
-    // one-shot decision lock
     const alreadyApproved = job.approved.includes(userId);
     const alreadyRejected = job.rejected.includes(userId);
     if (ONE_SHOT_DECISIONS && (alreadyApproved || alreadyRejected)) {
@@ -1428,14 +1319,12 @@ app.post(
     const applied = job.applications.find((a) => a.userId === userId);
     if (!applied) return res.status(400).json({ error: "user_not_applied" });
 
-    // clear previous state (idempotent-ish)
     job.approved = job.approved.filter((u) => u !== userId);
     job.rejected = job.rejected.filter((u) => u !== userId);
 
     if (approve) {
       job.approved.push(userId);
 
-      // L&U assignment on APPROVE (first N win)
       job.loadingUnload = job.loadingUnload || {
         enabled: false,
         quota: 0,
@@ -1454,7 +1343,6 @@ app.post(
           partsSet.add(userId);
           job.loadingUnload.participants = Array.from(partsSet);
         }
-        // If now full, close and auto-cancel everyone else
         if (partsSet.size >= quota) {
           job.loadingUnload.closed = true;
           const keep = new Set(job.loadingUnload.participants || []);
@@ -1463,15 +1351,12 @@ app.post(
       }
     } else {
       job.rejected.push(userId);
-      // Rejecting someone who never got a slot doesn't change L&U participants
-      // If you want to free a slot when rejecting AFTER approved, you'd need to lift one-shot or add a special route.
     }
 
     await saveDB(db);
     exportJobCSV(job);
     addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
 
-    // Notify the affected user about decision
     try {
       const msg = approve ? "approved ✅" : "rejected ❌";
       notifyUsers([userId], {
@@ -1486,7 +1371,7 @@ app.post(
   }
 );
 
-/* ---- PM: L&U manage ---- */
+/* ---- L&U manage ---- */
 app.get(
   "/jobs/:id/loading",
   authMiddleware,
@@ -1541,7 +1426,6 @@ app.post(
     };
     const p = new Set(job.loadingUnload.participants || []);
     if (present) {
-      // Respect closure; only allow if already participant
       if (job.loadingUnload.closed && !p.has(userId)) {
         return res.status(409).json({ error: "lu_closed" });
       }
@@ -1553,10 +1437,8 @@ app.post(
       }
     } else {
       p.delete(userId);
-      // optional: reopening is manual; keep closed as-is
     }
     job.loadingUnload.participants = [...p];
-    // auto-close if hit quota
     if (job.loadingUnload.quota > 0 && p.size >= job.loadingUnload.quota) {
       job.loadingUnload.closed = true;
       const keep = new Set(job.loadingUnload.participants);
@@ -1569,7 +1451,7 @@ app.post(
   }
 );
 
-/* ---- NEW: Virtual / Manual attendance mark (for PM/Admin) ---- */
+/* ---- Virtual / Manual attendance mark ---- */
 app.post(
   "/jobs/:id/attendance/mark",
   authMiddleware,
@@ -1713,17 +1595,7 @@ app.post(
       nonce: uuidv4(),
     };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "60s" });
-    addAudit(
-      "gen_qr",
-      {
-        jobId: job.id,
-        dir: direction,
-        userId: req.user.id,
-        lat: encLat,
-        lng: encLng,
-      },
-      req
-    );
+    addAudit("gen_qr", { jobId: job.id, dir: direction, userId: req.user.id, lat: encLat, lng: encLng }, req);
     res.json({ token, maxDistanceMeters: MAX_DISTANCE_METERS });
   }
 );
@@ -1756,11 +1628,7 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
 
   const dist = haversineMeters(payload.lat, payload.lng, sLat, sLng);
   if (dist > MAX_DISTANCE_METERS) {
-    addAudit(
-      "scan_rejected_distance",
-      { jobId: job.id, userId: payload.u, dist },
-      req
-    );
+    addAudit("scan_rejected_distance", { jobId: job.id, userId: payload.u, dist }, req);
     return res.status(400).json({
       error: "too_far",
       distanceMeters: Math.round(dist),
@@ -1770,11 +1638,7 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
 
   job.attendance = job.attendance || {};
   const now = dayjs();
-  job.attendance[payload.u] = job.attendance[payload.u] || {
-    in: null,
-    out: null,
-    lateMinutes: 0,
-  };
+  job.attendance[payload.u] = job.attendance[payload.u] || { in: null, out: null, lateMinutes: 0 };
   if (payload.dir === "in") {
     job.attendance[payload.u].in = now.toISOString();
     job.attendance[payload.u].lateMinutes = Math.max(
@@ -1786,15 +1650,7 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   }
   await saveDB(db);
   exportJobCSV(job);
-  addAudit(
-    "scan_" + payload.dir,
-    {
-      jobId: job.id,
-      userId: payload.u,
-      distanceMeters: Math.round(dist),
-    },
-    req
-  );
+  addAudit("scan_" + payload.dir, { jobId: job.id, userId: payload.u, distanceMeters: Math.round(dist) }, req);
   res.json({
     ok: true,
     jobId: job.id,
@@ -1815,16 +1671,11 @@ app.get(
     if (!job) return res.status(404).json({ error: "job_not_found" });
     const { headers, rows } = generateJobCSV(job);
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="job-${job.id}.csv"`
-    );
+    res.setHeader("Content-Disposition", `attachment; filename="job-${job.id}.csv"`);
     res.write(headers.join(",") + "\n");
     for (const r of rows) {
       const line = headers
-        .map((h) =>
-          r[h] !== undefined ? String(r[h]).replace(/"/g, '""') : ""
-        )
+        .map((h) => (r[h] !== undefined ? String(r[h]).replace(/"/g, '""') : ""))
         .join(",");
       res.write(line + "\n");
     }
@@ -1833,15 +1684,10 @@ app.get(
 );
 
 /* ---- audit & misc ---- */
-app.get(
-  "/admin/audit",
-  authMiddleware,
-  requireRole("admin"),
-  (req, res) => {
-    const limit = Number(req.query.limit || 200);
-    res.json((db.audit || []).slice(0, limit));
-  }
-);
+app.get("/admin/audit", authMiddleware, requireRole("admin"), (req, res) => {
+  const limit = Number(req.query.limit || 200);
+  res.json((db.audit || []).slice(0, limit));
+});
 
 /* ---- Push + Notifications API ---- */
 app.get("/push/public-key", (_req, res) => {
@@ -1871,7 +1717,6 @@ app.post("/push/unsubscribe", authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
-/* In-app notifications (for the new bell UI) */
 app.get("/notifications", authMiddleware, (req, res) => {
   const limit = Number(req.query.limit || 100);
   const onlyUnread = String(req.query.unread || "") === "1";
@@ -1889,7 +1734,7 @@ app.post("/notifications/:id/read", authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
-/* Legacy endpoints (kept to avoid breaking older clients) */
+/* Legacy notifications for older clients */
 app.get("/me/notifications", authMiddleware, (req, res) => {
   const items = (db.notifications[req.user.id] || []).slice(0, Number(req.query.limit || 50));
   res.json({ items });
@@ -1919,7 +1764,7 @@ app.post("/__reset", async (_req, res) => {
 });
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-/* ---- scanner location heartbeat/endpoints ---- */
+/* ---- scanner location heartbeat ---- */
 function setScannerLocation(job, lat, lng) {
   job.events = job.events || {};
   job.events.scanner = { lat, lng, updatedAt: dayjs().toISOString() };
@@ -1940,11 +1785,7 @@ app.post(
       return res.status(400).json({ error: "scanner_location_required" });
     setScannerLocation(job, latN, lngN);
     await saveDB(db);
-    addAudit(
-      "scanner_heartbeat",
-      { jobId: job.id, lat: latN, lng: lngN },
-      req
-    );
+    addAudit("scanner_heartbeat", { jobId: job.id, lat: latN, lng: lngN }, req);
     res.json({ ok: true, updatedAt: job.events.scanner.updatedAt });
   }
 );
@@ -1958,13 +1799,7 @@ app.get("/jobs/:id/scanner", authMiddleware, (req, res) => {
   res.json({ lat: s.lat, lng: s.lng, updatedAt: s.updatedAt });
 });
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () =>
-  console.log("ATAG server running on http://localhost:" + PORT)
-);
-
-console.log("Booting server from:", new URL(import.meta.url).pathname);
-
+/* ---- routes listing ---- */
 function listRoutes(app) {
   const out = [];
   app._router?.stack?.forEach((m) => {
@@ -1975,11 +1810,16 @@ function listRoutes(app) {
   });
   return out.sort();
 }
-
 app.get("/__routes", (_req, res) => {
   res.json({ routes: listRoutes(app) });
 });
 
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () =>
+  console.log("ATAG server running on http://localhost:" + PORT)
+);
+
+console.log("Booting server from:", new URL(import.meta.url).pathname);
 setTimeout(() => {
   console.log("Registered routes:\n" + listRoutes(app).join("\n"));
 }, 100);
