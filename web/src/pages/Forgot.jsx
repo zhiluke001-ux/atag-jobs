@@ -3,7 +3,7 @@ import { forgotPassword } from "../auth";
 
 export default function Forgot() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(null);
+  const [sent, setSent] = useState(null); // will hold token+link in dev
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -13,7 +13,7 @@ export default function Forgot() {
     setError(null);
     try {
       const res = await forgotPassword(email);
-      setSent(res || { ok: true });
+      setSent(res);
     } catch (e) {
       setError(e?.message || "Request failed");
     } finally {
@@ -34,7 +34,6 @@ export default function Forgot() {
           onChange={(e) => setEmail(e.target.value)}
           placeholder="you@example.com"
           style={{ width: "100%", marginTop: 6 }}
-          type="email"
           required
         />
 
@@ -50,16 +49,14 @@ export default function Forgot() {
 
         {sent && (
           <div className="notice" style={{ marginTop: 12, fontSize: 13 }}>
-            If that email exists, we’ve sent a reset link.
+            If that email exists, we’ve sent a reset token.
             <div style={{ marginTop: 8, opacity: 0.8 }}>
               <div>
-                <b>Dev token:</b>{" "}
-                <code>{sent.token || "(hidden in production)"}</code>
+                <b>Dev token:</b> <code>{sent.token || "(hidden)"}</code>
               </div>
               {sent.resetLink && (
                 <div>
-                  <b>Dev link:</b>{" "}
-                  <a href={sent.resetLink}>{sent.resetLink}</a>
+                  <b>Dev link:</b> <a href={sent.resetLink}>{sent.resetLink}</a>
                 </div>
               )}
             </div>
