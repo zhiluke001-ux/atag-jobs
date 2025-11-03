@@ -555,7 +555,7 @@ function sendResetEmail(to, link) {
         });
       }
       await transporter.sendMail({
-        from: process.env.MAIL_FROM || "ATAG Jobs <no-reply@atag.local>",
+        from: process.env.FROM_EMAIL,
         to,
         subject: "Reset your ATAG Jobs password",
         text: `Click this link to reset your password: ${link}`,
@@ -716,6 +716,7 @@ app.post("/forgot-password", async (req, res) => {
   const base = (
     process.env.PUBLIC_APP_URL ||
     process.env.FRONTEND_URL ||
+    process.env.APP_ORIGIN ||  
     req.headers?.origin ||
     ""
   ).replace(/\/$/, "");
