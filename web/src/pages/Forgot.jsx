@@ -1,9 +1,10 @@
+// web/src/pages/Forgot.jsx
 import React, { useState } from "react";
 import { forgotPassword } from "../auth";
 
 export default function Forgot() {
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(null); // will hold token+link in dev
+  const [sent, setSent] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -11,9 +12,10 @@ export default function Forgot() {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setSent(null);
     try {
       const res = await forgotPassword(email);
-      setSent(res);
+      setSent(res); // { ok: true, redirectToUsed }
     } catch (e) {
       setError(e?.message || "Request failed");
     } finally {
@@ -35,6 +37,8 @@ export default function Forgot() {
           placeholder="you@example.com"
           style={{ width: "100%", marginTop: 6 }}
           required
+          type="email"
+          autoComplete="email"
         />
 
         {error && (
@@ -47,18 +51,15 @@ export default function Forgot() {
           </button>
         </div>
 
-        {sent && (
+        {sent?.ok && (
           <div className="notice" style={{ marginTop: 12, fontSize: 13 }}>
-            If that email exists, we’ve sent a reset token.
+            If that email exists, we’ve sent a reset link. Check your inbox (and spam).
             <div style={{ marginTop: 8, opacity: 0.8 }}>
+              {/* Supabase doesn't return dev token/link. We show the redirect base for verification. */}
               <div>
-                <b>Dev token:</b> <code>{sent.token || "(hidden)"}</code>
+                <b>Redirect URL used:</b>{" "}
+                <code>{sent.redirectToUsed}</code>
               </div>
-              {sent.resetLink && (
-                <div>
-                  <b>Dev link:</b> <a href={sent.resetLink}>{sent.resetLink}</a>
-                </div>
-              )}
             </div>
           </div>
         )}
