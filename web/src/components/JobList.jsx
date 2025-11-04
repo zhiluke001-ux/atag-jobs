@@ -123,7 +123,7 @@ function buildPayForViewer(job, user) {
 function TransportBadges({ job }) {
   const t = job?.transportOptions || {};
   const items = [
-    ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
+    ...(t.bus ? [{ text: "ATAG Transport", bg: "#eef2ff", color: "#3730a3" }] : []),
     ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
   ];
   if (!items.length) return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
@@ -226,7 +226,7 @@ export default function JobList({
                     <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
                     {pa != null && j?.transportOptions?.bus && (
                       <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                        ATAG Bus allowance: RM{pa} per person (if selected)
+                        ATAG Transport allowance: RM{pa} per person (if selected)
                       </div>
                     )}
                   </div>
