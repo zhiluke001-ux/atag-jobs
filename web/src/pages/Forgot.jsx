@@ -50,16 +50,19 @@ export default function Forgot() {
         {sent && (
           <div className="notice" style={{ marginTop: 12, fontSize: 13 }}>
             If that email exists, we’ve sent a reset token.
-            <div style={{ marginTop: 8, opacity: 0.8 }}>
-              <div>
-                <b>Dev token:</b> <code>{sent.token || "(hidden)"}</code>
-              </div>
-              {sent.resetLink && (
-                <div>
-                  <b>Dev link:</b> <a href={sent.resetLink}>{sent.resetLink}</a>
-                </div>
-              )}
-            </div>
+{/* 
+<div style={{ marginTop: 8, opacity: 0.8 }}>
+  <div>
+    <b>Dev token:</b> <code>{sent.token || "(hidden)"}</code>
+  </div>
+  {sent.resetLink && (
+    <div>
+      <b>Dev link:</b> <a href={sent.resetLink}>{sent.resetLink}</a>
+    </div>
+  )}
+</div>
+*/}
+
           </div>
         )}
 
