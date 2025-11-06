@@ -1,11 +1,22 @@
-import React, { useState } from "react";
-import { login } from "../auth";
+// Login.jsx
+import React, { useState, useEffect } from "react";
+import { login, getToken } from "../auth";
 
 export default function Login({ navigate, setUser }) {
   const [identifier, setIdentifier] = useState(""); // email or username
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // if user is already logged in, don't show login page
+  useEffect(() => {
+    const token = getToken();
+    if (token) {
+      // use replace so /#/login is not kept in history
+      window.location.replace("#/");
+      // or: navigate("#/"); but replace is safer for the back button
+    }
+  }, []);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -14,7 +25,11 @@ export default function Login({ navigate, setUser }) {
     try {
       const u = await login(identifier, password);
       setUser(u);
-      navigate("#/"); // go to Home after login
+
+      // go to home and REPLACE the current entry so Back won't return to /login
+      window.location.replace("#/");
+      // if you really want to use the passed-in navigate:
+      // if (navigate) navigate("#/");
     } catch (e) {
       setError("Login failed. Check your email/username and password.");
     } finally {
@@ -57,7 +72,6 @@ export default function Login({ navigate, setUser }) {
             {busy ? "Signing in..." : "Log in"}
           </button>
         </div>
-
 
         <div style={{ marginTop: 10, fontSize: 12 }}>
           <a href="#/forgot">Forgot password?</a> &nbsp;•&nbsp;{" "}
