@@ -12,6 +12,7 @@ import { createWriteStream } from "fs";
 import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
 import webpush from "web-push";
+import { google } from "googleapis"; // <— added
 import { loadDB, saveDB } from "./storage.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -533,21 +534,76 @@ async function notifyUsers(userIds, { title, body, link, type = "info" }) {
   await saveDB(db);
 }
 
-/* ------------ EMAIL HELPER (Resend-only) ------------- */
+/* ------------ EMAIL HELPER (Gmail API + Resend fallback) ------------- */
 async function sendResetEmail(to, link) {
-  // prefer FROM_EMAIL if you set it in Render
-  const from =
-    process.env.FROM_EMAIL ||
-    process.env.MAIL_FROM ||
-    "ATAG Jobs <onboarding@resend.dev>";
+  const {
+    GMAIL_CLIENT_ID,
+    GMAIL_CLIENT_SECRET,
+    GMAIL_REFRESH_TOKEN,
+    GMAIL_SENDER,
+    RESEND_API_KEY
+  } = process.env;
 
-  // Resend HTTP API only
-  if (process.env.RESEND_API_KEY) {
+  // 1) try Gmail API first
+  if (
+    GMAIL_CLIENT_ID &&
+    GMAIL_CLIENT_SECRET &&
+    GMAIL_REFRESH_TOKEN &&
+    GMAIL_SENDER
+  ) {
     try {
+      const oAuth2Client = new google.auth.OAuth2(
+        GMAIL_CLIENT_ID,
+        GMAIL_CLIENT_SECRET,
+        "urn:ietf:wg:oauth:2.0:oob"
+      );
+      oAuth2Client.setCredentials({ refresh_token: GMAIL_REFRESH_TOKEN });
+
+      const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
+
+      const subject = "Reset your ATAG Jobs password";
+      const messageText = `Click this link to reset your password:\n${link}\n`;
+
+      const rawLines = [
+        `From: ${GMAIL_SENDER}`,
+        `To: ${to}`,
+        `Subject: ${subject}`,
+        "Content-Type: text/plain; charset=\"UTF-8\"",
+        "",
+        messageText
+      ];
+      const raw = Buffer.from(rawLines.join("\r\n"))
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      await gmail.users.messages.send({
+        userId: "me",
+        requestBody: { raw }
+      });
+      console.log("[sendResetEmail] sent via Gmail API to", to);
+      return;
+    } catch (err) {
+      console.error(
+        "[sendResetEmail] Gmail API error:",
+        err?.response?.data || err
+      );
+      // fall through to resend/log
+    }
+  }
+
+  // 2) Resend fallback
+  if (RESEND_API_KEY) {
+    try {
+      const from =
+        process.env.FROM_EMAIL ||
+        process.env.MAIL_FROM ||
+        "ATAG Jobs <onboarding@resend.dev>";
       const resp = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          Authorization: `Bearer ${RESEND_API_KEY}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -567,8 +623,8 @@ async function sendResetEmail(to, link) {
     }
   }
 
-  // fallback: log
-  console.log("[sendResetEmail] no RESEND_API_KEY configured, link:", link);
+  // 3) final fallback: just log
+  console.log("[sendResetEmail] no email provider configured, link:", link);
 }
 
 /* -------------- auth --------------- */
@@ -707,11 +763,9 @@ app.post("/forgot-password", async (req, res) => {
   try {
     await sendResetEmail(user.email, resetLink);
   } catch (err) {
-    // even if sending fails, we respond ok
     console.error("sendResetEmail error (outer):", err);
   }
 
-  // keep dev info
   res.json({ ok: true, token, resetLink });
 });
 
@@ -1110,14 +1164,19 @@ app.patch(
       job.roleRates = job.roleRates || {};
       for (const r of STAFF_ROLES) {
         job.roleRates[r] = {
-          payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+          payMode:
+            roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
+          base: Number(
+            roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0
+          ),
           specificPayment:
             roleRates?.[r]?.specificPayment ??
             job.roleRates?.[r]?.specificPayment ??
             null,
           otMultiplier: Number(
-            roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0
+            roleRates?.[r]?.otMultiplier ??
+              job.roleRates?.[r]?.otMultiplier ??
+              0
           )
         };
       }
@@ -1193,14 +1252,19 @@ app.post(
       job.roleRates = job.roleRates || {};
       for (const r of STAFF_ROLES) {
         job.roleRates[r] = {
-          payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+          payMode:
+            roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
+          base: Number(
+            roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0
+          ),
           specificPayment:
             roleRates?.[r]?.specificPayment ??
             job.roleRates?.[r]?.specificPayment ??
             null,
           otMultiplier: Number(
-            roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0
+            roleRates?.[r]?.otMultiplier ??
+              job.roleRates?.[r]?.otMultiplier ??
+              0
           )
         };
       }
@@ -1376,6 +1440,7 @@ app.post(
       return res.json({ message: "already_applied" });
     }
 
+    // first-time apply
     job.applications.push({
       userId: req.user.id,
       email: req.user.email,
