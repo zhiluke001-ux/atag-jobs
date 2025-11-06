@@ -158,13 +158,12 @@ export default function PMJobDetails({ jobId }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const canvasCtxRef = useRef(null);
-  const detRef = useRef(null);
+  const detectorRef = useRef(null);
   const rafRef = useRef(null);
   const streamRef = useRef(null);
-  const scanningNowRef = useRef(false);      // NEW: prevent overlapping detect calls
+  const scanningNowRef = useRef(false);
   const [camActive, setCamActive] = useState(false);
   const [camSupported, setCamSupported] = useState(false);
-  const [qrSupported, setQrSupported] = useState(false); // informational only
   const usingJsQRRef = useRef(false);
 
   // Geo (PM scanner location)
@@ -172,7 +171,7 @@ export default function PMJobDetails({ jobId }) {
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
 
-  // Persist PM-clicked end time across reloads even if backend hasn't saved it yet
+  // Persist PM-clicked end time across reloads
   const endedAtRef = useRef(null);
   const LOCAL_KEY = (id) => `atag.jobs.${id}.actualEndAt`;
 
@@ -216,37 +215,47 @@ export default function PMJobDetails({ jobId }) {
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
 
-  /* feature detect & jsQR fallback */
+  /* feature detect */
   useEffect(() => {
     setCamSupported(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
-    (async () => {
-      if ("BarcodeDetector" in window) {
-        try {
-          const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
-          if (fmts.includes("qr_code")) {
-            setQrSupported(true);
-          }
-        } catch {}
-      }
-      try {
-        await loadJsQR();
-        usingJsQRRef.current = true;  // will switch off if we build BarcodeDetector successfully in startCamera
-        setQrSupported(true);
-      } catch {
-        // If JS lib fails, BarcodeDetector (if any) will still be attempted in startCamera
-      }
-    })();
   }, []);
+
+  /* helper: load jsQR once */
   function loadJsQR() {
     return new Promise((resolve, reject) => {
-      if (window.jsQR) return resolve();
+      if (window.jsQR) return resolve(true);
       const s = document.createElement("script");
       s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
       s.async = true;
-      s.onload = () => (window.jsQR ? resolve() : reject(new Error("jsQR not available")));
+      s.onload = () => (window.jsQR ? resolve(true) : reject(new Error("jsQR not available")));
       s.onerror = reject;
       document.head.appendChild(s);
     });
+  }
+
+  // ensure we have either BarcodeDetector or jsQR
+  async function ensureDetectorReady() {
+    // try BarcodeDetector first
+    if ("BarcodeDetector" in window) {
+      try {
+        const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
+        if (fmts.includes("qr_code")) {
+          detectorRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
+          usingJsQRRef.current = false;
+          return true;
+        }
+      } catch {
+        // fall back to jsQR
+      }
+    }
+    // fallback to jsQR
+    try {
+      await loadJsQR();
+      usingJsQRRef.current = true;
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   const pill = useMemo(() => {
@@ -271,7 +280,6 @@ export default function PMJobDetails({ jobId }) {
     if (effectiveStatus(job.status) !== "upcoming") return;
     setStartBusy(true);
     try {
-      // optimistic UI
       setStatusForce("ongoing");
       setJob((prev) => (prev ? { ...prev, status: "ongoing" } : prev));
       await apiPost(`/jobs/${jobId}/start`, {});
@@ -295,7 +303,6 @@ export default function PMJobDetails({ jobId }) {
     try {
       const actualEndAt = new Date().toISOString();
 
-      // Optimistic update FIRST
       endedAtRef.current = actualEndAt;
       try { localStorage.setItem(LOCAL_KEY(jobId), actualEndAt); } catch {}
       setStatusForce("ended");
@@ -395,7 +402,6 @@ export default function PMJobDetails({ jobId }) {
   /* ------- Camera + QR decoding ------- */
 
   async function ensureVideoReady(video) {
-    // Wait until we have real dimensions
     let attempts = 0;
     while (attempts < 30 && (!video.videoWidth || !video.videoHeight)) {
       await new Promise((r) => setTimeout(r, 100));
@@ -414,23 +420,6 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
     try {
-      // Prefer BarcodeDetector if present; fall back to jsQR
-      let useBarcode = false;
-      if ("BarcodeDetector" in window) {
-        try {
-          const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
-          if (fmts.includes("qr_code")) {
-            detRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
-            useBarcode = true;
-            usingJsQRRef.current = false;
-          }
-        } catch { /* fall through to jsQR */ }
-      }
-      if (!useBarcode) {
-        await loadJsQR();
-        usingJsQRRef.current = true;
-      }
-
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" },
@@ -444,7 +433,6 @@ export default function PMJobDetails({ jobId }) {
       const video = videoRef.current;
       if (video) {
         video.srcObject = stream;
-        // Make sure metadata (dimensions) is ready
         await new Promise((res) => {
           const onMeta = () => { res(); video.removeEventListener("loadedmetadata", onMeta); };
           video.addEventListener("loadedmetadata", onMeta);
@@ -452,10 +440,10 @@ export default function PMJobDetails({ jobId }) {
         await video.play();
       }
 
-      // Ensure we actually have width/height before sizing the canvas
       const ready = await ensureVideoReady(videoRef.current);
-      if (!ready) throw new Error("Camera failed to initialize correctly.");
+      if (!ready) throw new Error("Camera failed to initialize.");
 
+      // canvas sizing
       const cv = canvasRef.current;
       const vw = videoRef.current.videoWidth;
       const vh = videoRef.current.videoHeight;
@@ -463,8 +451,16 @@ export default function PMJobDetails({ jobId }) {
       cv.height = vh;
       canvasCtxRef.current = cv.getContext("2d", { willReadFrequently: true });
 
+      // make sure we actually have a decoder
+      const ok = await ensureDetectorReady();
+      if (!ok) {
+        setScanMsg("Camera ready, but QR decoder not available. Please paste token.");
+      } else {
+        setScanMsg("Camera ready — scanning…");
+      }
+
       setCamActive(true);
-      setScanMsg("Camera ready — scanning…");
+      scanningNowRef.current = false;
       loopDetect();
     } catch (err) {
       setScanMsg("Could not open camera. Please allow permission or paste the token.");
@@ -484,15 +480,18 @@ export default function PMJobDetails({ jobId }) {
       try { streamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
       streamRef.current = null;
     }
-    detRef.current = null;
+    detectorRef.current = null;
     setCamActive(false);
   }
 
   useEffect(() => () => stopCamera(), []);
 
   async function loopDetect() {
-    if (!videoRef.current || !canvasRef.current || !canvasCtxRef.current) return;
     if (!camActive) return;
+    if (!videoRef.current || !canvasRef.current || !canvasCtxRef.current) {
+      rafRef.current = requestAnimationFrame(loopDetect);
+      return;
+    }
 
     if (scanningNowRef.current) {
       rafRef.current = requestAnimationFrame(loopDetect);
@@ -512,24 +511,34 @@ export default function PMJobDetails({ jobId }) {
         return;
       }
 
-      // Draw current frame to canvas
       ctx.drawImage(v, 0, 0, w, h);
 
-      if (!usingJsQRRef.current && detRef.current) {
-        // BarcodeDetector path — detect from the canvas element directly
-        const codes = await detRef.current.detect(cv);
-        if (codes && codes[0]?.rawValue) {
-          setToken(codes[0].rawValue);
-          setScanMsg("QR detected — ready to Scan.");
+      let decoded = null;
+
+      // try BarcodeDetector
+      if (detectorRef.current) {
+        try {
+          const codes = await detectorRef.current.detect(cv);
+          if (codes && codes[0]?.rawValue) {
+            decoded = codes[0].rawValue;
+          }
+        } catch {
+          // detector error, we'll try jsQR
         }
-      } else if (window.jsQR) {
-        // jsQR path
+      }
+
+      // fallback: jsQR
+      if (!decoded && window.jsQR) {
         const img = ctx.getImageData(0, 0, w, h);
         const result = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
         if (result && result.data) {
-          setToken(result.data);
-          setScanMsg("QR detected — ready to Scan.");
+          decoded = result.data;
         }
+      }
+
+      if (decoded) {
+        setToken(decoded);
+        setScanMsg("QR detected — ready to Scan.");
       }
     } catch (e) {
       // keep quiet; continue trying
@@ -558,7 +567,7 @@ export default function PMJobDetails({ jobId }) {
     }
 
     const applicantLL = extractLatLngFromToken(token);
-    const maxM = Number(job?.scanMaxMeters) || 500; // UI default; server enforces its own
+    const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
       const d = haversineMeters(loc, applicantLL);
       if (d != null && d > maxM) {
@@ -578,7 +587,7 @@ export default function PMJobDetails({ jobId }) {
     try {
       const r = await apiPost("/scan", {
         token,
-        direction: scanDir,          // server ignores extra fields; harmless
+        direction: scanDir,
         scannerLat: loc.lat,
         scannerLng: loc.lng,
       });
@@ -646,7 +655,7 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
-  // Build display rows (now include name/phone/discord, remove late)
+  // Build display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = (job.applications || []).find((a) => a.userId === uid) || {};
     const rec = (job.attendance || {})[uid] || {};
@@ -694,7 +703,7 @@ export default function PMJobDetails({ jobId }) {
               {isVirtual && <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>}
             </div>
 
-            {/* End-time + OT display (new rule) */}
+            {/* End-time + OT display */}
             <div
               className="card"
               style={{ marginTop: 10, padding: 10, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 8 }}
@@ -796,7 +805,7 @@ export default function PMJobDetails({ jobId }) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
 
-        {/* Virtual mode controls (kept simple) */}
+        {/* Virtual mode controls */}
         {isVirtual && (
           <div className="card" style={{ padding: 12, marginBottom: 8, border: "1px dashed #e5e7eb" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Virtual attendance</div>
