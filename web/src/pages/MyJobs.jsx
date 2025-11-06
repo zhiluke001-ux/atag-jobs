@@ -17,25 +17,41 @@ function haversineMeters(a, b) {
 }
 function fmtRange(start, end) {
   try {
-    const S = dayjs(start), E = dayjs(end);
+    const S = dayjs(start),
+      E = dayjs(end);
     const sameDay = S.isSame(E, "day");
     const d = S.format("YYYY/MM/DD");
     const t1 = S.format("hA");
     const t2 = E.format("hA");
-    return sameDay ? `${d}  ${t1} — ${t2}` : `${S.format("YYYY/MM/DD hA")} — ${E.format("YYYY/MM/DD hA")}`;
-  } catch { return ""; }
+    return sameDay
+      ? `${d}  ${t1} — ${t2}`
+      : `${S.format("YYYY/MM/DD hA")} — ${E.format("YYYY/MM/DD hA")}`;
+  } catch {
+    return "";
+  }
 }
 
 /* ------- shared pay/session helpers ------- */
-const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
+const num = (v) =>
+  v === null || v === undefined || v === "" ? null : Number(v);
 const money = (v) => {
   const n = num(v);
-  return Number.isFinite(n) && n > 0 ? `RM${n % 1 === 0 ? n : n.toFixed(2)}` : null;
+  return Number.isFinite(n) && n > 0
+    ? `RM${n % 1 === 0 ? n : n.toFixed(2)}`
+    : null;
 };
 function deriveViewerRank(user) {
   const raw = (
-    user?.ptRole || user?.jobRole || user?.rank || user?.tier || user?.level || user?.roleRank || ""
-  ).toString().toLowerCase();
+    user?.ptRole ||
+    user?.jobRole ||
+    user?.rank ||
+    user?.tier ||
+    user?.level ||
+    user?.roleRank ||
+    ""
+  )
+    .toString()
+    .toLowerCase();
   if (["lead", "leader", "supervisor", "captain"].includes(raw)) return "lead";
   if (["senior", "sr"].includes(raw)) return "senior";
   return "junior";
@@ -48,31 +64,51 @@ function deriveKind(job) {
     job?.session?.physicalType ||
     (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
+  const mode =
+    job?.session?.mode ||
+    job?.sessionMode ||
+    job?.mode ||
+    (kind === "virtual" ? "virtual" : "physical");
   const isVirtual = mode === "virtual" || kind === "virtual";
 
   const resolvedKind = isVirtual
     ? "virtual"
-    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
-      ? kind
-      : "half_day";
+    : [
+        "half_day",
+        "full_day",
+        "2d1n",
+        "3d2n",
+        "hourly_by_role",
+        "hourly_flat",
+      ].includes(kind)
+    ? kind
+    : "half_day";
 
   const label =
-    resolvedKind === "virtual" ? "Virtual"
-      : resolvedKind === "half_day" ? "Physical — Half Day"
-      : resolvedKind === "full_day" ? "Physical — Full Day"
-      : resolvedKind === "2d1n" ? "Physical — 2D1N"
-      : resolvedKind === "3d2n" ? "Physical — 3D2N"
-      : resolvedKind === "hourly_by_role" ? "Physical — Hourly (by role)"
+    resolvedKind === "virtual"
+      ? "Virtual"
+      : resolvedKind === "half_day"
+      ? "Physical — Half Day"
+      : resolvedKind === "full_day"
+      ? "Physical — Full Day"
+      : resolvedKind === "2d1n"
+      ? "Physical — 2D1N"
+      : resolvedKind === "3d2n"
+      ? "Physical — 3D2N"
+      : resolvedKind === "hourly_by_role"
+      ? "Physical — Hourly (by role)"
       : "Physical — Backend (flat hourly)";
 
   return { isVirtual, kind: resolvedKind, label };
 }
 function parkingRM(job) {
   const r = job?.rate || {};
-  const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
-    : Number.isFinite(r.transportAllowance) ? r.transportAllowance
-    : Number.isFinite(r.transportBus) ? r.transportBus
+  const v = Number.isFinite(r.parkingAllowance)
+    ? r.parkingAllowance
+    : Number.isFinite(r.transportAllowance)
+    ? r.transportAllowance
+    : Number.isFinite(r.transportBus)
+    ? r.transportBus
     : null;
   return v == null ? null : Math.round(Number(v));
 }
@@ -90,23 +126,25 @@ function buildPayForViewer(job, user) {
 
   if (kind === "hourly_flat") {
     const base = money(flat?.base ?? tier.base);
-    const ot   = money(flat?.otRatePerHour);
-    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    const ot = money(flat?.otRatePerHour);
+    if (base || ot)
+      return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return "-";
   }
 
   if (kind === "virtual" || kind === "hourly_by_role") {
     const base = money(tier.base);
-    const ot   = money(tier.otRatePerHour);
-    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    const ot = money(tier.otRatePerHour);
+    if (base || ot)
+      return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return "-";
   }
 
   const pick = (k) => {
     if (k === "half_day") return tier?.halfDay ?? tier?.specificPayment ?? null;
     if (k === "full_day") return tier?.fullDay ?? tier?.specificPayment ?? null;
-    if (k === "2d1n")     return tier?.twoD1N ?? tier?.specificPayment ?? null;
-    if (k === "3d2n")     return tier?.threeD2N ?? tier?.specificPayment ?? null;
+    if (k === "2d1n") return tier?.twoD1N ?? tier?.specificPayment ?? null;
+    if (k === "3d2n") return tier?.threeD2N ?? tier?.specificPayment ?? null;
     return null;
   };
   const sessionRM = money(pick(kind));
@@ -115,10 +153,14 @@ function buildPayForViewer(job, user) {
     job?.physicalHourlyEnabled ||
     tier?.payMode === "specific_plus_hourly";
   const base = money(tier.base);
-  const ot   = money(tier.otRatePerHour);
+  const ot = money(tier.otRatePerHour);
 
   if (sessionRM) {
-    if (hasAddon && (base || ot)) return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    if (hasAddon && (base || ot))
+      return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(
+        base,
+        ot
+      )}`;
     return sessionRM;
   }
 
@@ -133,11 +175,26 @@ function TransportBadges({ job }) {
     ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
     ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
   ];
-  if (!items.length) return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
+  if (!items.length)
+    return (
+      <span style={{ fontSize: 12, color: "#6b7280" }}>
+        No transport option
+      </span>
+    );
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {items.map((it, i) => (
-        <span key={i} style={{ background: it.bg, color: it.color, padding: "2px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+        <span
+          key={i}
+          style={{
+            background: it.bg,
+            color: it.color,
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
           {it.text}
         </span>
       ))}
@@ -172,9 +229,14 @@ export default function MyJobs({ navigate, user }) {
     let mounted = true;
     (async () => {
       try {
-        const mine = await apiGet("/me/jobs"); // may be slim
+        const mine = await apiGet("/me/jobs");
+        // 🔴 only approved
+        const onlyApproved = (mine || []).filter(
+          (j) => j.myStatus === "approved"
+        );
+
         const full = await Promise.all(
-          (mine || []).map(async (j) => {
+          onlyApproved.map(async (j) => {
             try {
               const fj = await apiGet(`/jobs/${j.id}`);
               return { ...j, ...fj };
@@ -188,7 +250,9 @@ export default function MyJobs({ navigate, user }) {
         if (mounted) setJobs([]);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // watch user location
@@ -205,11 +269,14 @@ export default function MyJobs({ navigate, user }) {
           acc: p.coords.accuracy ?? null,
           ts: Date.now(),
         }),
-      () => setLocMsg("Please allow location to generate QR and show distance."),
+      () =>
+        setLocMsg("Please allow location to generate QR and show distance."),
       { enableHighAccuracy: true, maximumAge: 2_000, timeout: 10_000 }
     );
     return () => {
-      try { navigator.geolocation.clearWatch(id); } catch {}
+      try {
+        navigator.geolocation.clearWatch(id);
+      } catch {}
     };
   }, []);
 
@@ -222,11 +289,15 @@ export default function MyJobs({ navigate, user }) {
         if (j.status !== "ongoing") continue;
         try {
           const s = await apiGet(`/jobs/${j.id}/scanner`);
-          const dist = (s && loc) ? haversineMeters(loc, { lat: s.lat, lng: s.lng }) : null;
+          const dist =
+            s && loc ? haversineMeters(loc, { lat: s.lat, lng: s.lng }) : null;
           map[j.id] = { ...s, dist };
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
-      if (Object.keys(map).length) setScannerInfo((prev) => ({ ...prev, ...map }));
+      if (Object.keys(map).length)
+        setScannerInfo((prev) => ({ ...prev, ...map }));
     };
     fetchAll();
     timer = setInterval(fetchAll, 15000);
@@ -243,7 +314,9 @@ export default function MyJobs({ navigate, user }) {
     // skip QR entirely for virtual mode
     const { isVirtual } = deriveKind(job);
     if (isVirtual) {
-      setQrError("Virtual job — no scan required. PM/Admin will mark attendance.");
+      setQrError(
+        "Virtual job — no scan required. PM/Admin will mark attendance."
+      );
       setQrOpen(true);
       return;
     }
@@ -283,13 +356,15 @@ export default function MyJobs({ navigate, user }) {
       setQrToken(r.token);
       setQrOpen(true);
     } catch (e) {
-      // friendly mapping for common server errors
       let msg = "Failed to generate QR.";
       try {
         const j = JSON.parse(String(e));
-        if (j.error === "not_approved") msg = "You are not approved for this job yet. Please contact the PM.";
-        else if (j.error === "not_ongoing") msg = "Scanning only opens when the job is ongoing.";
-        else if (j.error === "too_far") msg = "You are too far from the event scanner location.";
+        if (j.error === "not_approved")
+          msg = "You are not approved for this job yet. Please contact the PM.";
+        else if (j.error === "not_ongoing")
+          msg = "Scanning only opens when the job is ongoing.";
+        else if (j.error === "too_far")
+          msg = "You are too far from the event scanner location.";
         else msg = j.error || msg;
       } catch {}
       setQrError(msg);
@@ -306,16 +381,20 @@ export default function MyJobs({ navigate, user }) {
 
   const qrImgSrc = useMemo(() => {
     if (!qrToken) return "";
-    return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(qrToken)}`;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(
+      qrToken
+    )}`;
   }, [qrToken]);
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div className="card">
-        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>My Jobs</div>
+        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>
+          My Jobs
+        </div>
 
         {jobs.length === 0 ? (
-          <div style={{ color: "#6b7280" }}>No jobs yet.</div>
+          <div style={{ color: "#6b7280" }}>No approved jobs yet.</div>
         ) : (
           jobs.map((j) => {
             const s = scannerInfo[j.id];
@@ -323,7 +402,11 @@ export default function MyJobs({ navigate, user }) {
             const { isVirtual, label } = deriveKind(j);
 
             const yourLocLine = loc
-              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""} · ${dayjs(loc.ts).format("HH:mm:ss")}`
+              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(
+                  5
+                )}${loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""} · ${dayjs(
+                  loc.ts
+                ).format("HH:mm:ss")}`
               : locMsg || "—";
 
             const pa = parkingRM(j);
@@ -332,22 +415,64 @@ export default function MyJobs({ navigate, user }) {
             const payForViewer = buildPayForViewer(j, user);
 
             return (
-              <div key={j.id} className="card" style={{ marginBottom: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <div
+                key={j.id}
+                className="card"
+                style={{ marginBottom: 10 }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>{j.title}</div>
-                    <div className="status" style={{ marginTop: 6 }}>{j.myStatus} · {j.status}</div>
-                    <div style={{ color: "#374151", marginTop: 4 }}>{fmtRange(j.startTime, j.endTime)}</div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>
+                      {j.title}
+                    </div>
+                    <div className="status" style={{ marginTop: 6 }}>
+                      {j.myStatus} · {j.status}
+                    </div>
+                    <div style={{ color: "#374151", marginTop: 4 }}>
+                      {fmtRange(j.startTime, j.endTime)}
+                    </div>
 
                     <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
-                      <div><strong>Session</strong> <span style={{ marginLeft: 8 }}>{label}</span></div>
-                      <div><strong>Venue</strong> <span style={{ marginLeft: 8 }}>{j.venue || "-"}</span></div>
-                      <div><strong>Description</strong><div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div></div>
+                      <div>
+                        <strong>Session</strong>{" "}
+                        <span style={{ marginLeft: 8 }}>{label}</span>
+                      </div>
+                      <div>
+                        <strong>Venue</strong>{" "}
+                        <span style={{ marginLeft: 8 }}>
+                          {j.venue || "-"}
+                        </span>
+                      </div>
+                      <div>
+                        <strong>Description</strong>
+                        <div
+                          style={{
+                            marginTop: 4,
+                            color: "#374151",
+                          }}
+                        >
+                          {j.description || "-"}
+                        </div>
+                      </div>
                       <div>
                         <strong>Transport</strong>
-                        <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
+                        <div style={{ marginTop: 6 }}>
+                          <TransportBadges job={j} />
+                        </div>
                         {pa != null && (
-                          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              color: "#6b7280",
+                              marginTop: 4,
+                            }}
+                          >
                             ATAG Bus allowance: RM{pa} per person (if selected)
                           </div>
                         )}
@@ -355,19 +480,39 @@ export default function MyJobs({ navigate, user }) {
 
                       {/* Allowances */}
                       <div style={{ display: "grid", gap: 4 }}>
-                        <div><strong>Allowances</strong></div>
-                        <div style={{ fontSize: 14, color: "#374151" }}>
-                          Early Call: {ec?.enabled ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
+                        <div>
+                          <strong>Allowances</strong>
                         </div>
                         <div style={{ fontSize: 14, color: "#374151" }}>
-                          Loading & Unloading: {lu?.enabled ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})` : "No"}
+                          Early Call:{" "}
+                          {ec?.enabled
+                            ? `Yes (RM${Number(
+                                ec.amount || 0
+                              )}, ≥ ${Number(ec.thresholdHours || 0)}h)`
+                            : "No"}
+                        </div>
+                        <div style={{ fontSize: 14, color: "#374151" }}>
+                          Loading & Unloading:{" "}
+                          {lu?.enabled
+                            ? `Yes (RM${Number(
+                                lu.price || 0
+                              )} / helper, quota ${Number(lu.quota || 0)})`
+                            : "No"}
                         </div>
                       </div>
 
                       {/* Pay — viewer specific */}
                       <div>
                         <strong>Pay</strong>
-                        <div style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace", fontSize: 13, lineHeight: 1.5 }}>
+                        <div
+                          style={{
+                            marginTop: 6,
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            fontSize: 13,
+                            lineHeight: 1.5,
+                          }}
+                        >
                           {payForViewer}
                         </div>
                       </div>
@@ -380,18 +525,56 @@ export default function MyJobs({ navigate, user }) {
                       </span>
                     </div>
 
-                    <div style={{ marginTop: 6, display: "flex", gap: 10, alignItems: "center", color: "#374151", flexWrap: "wrap" }}>
+                    <div
+                      style={{
+                        marginTop: 6,
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "center",
+                        color: "#374151",
+                        flexWrap: "wrap",
+                      }}
+                    >
                       {j.status === "ongoing" && !isVirtual && (
-                        <span className="status" title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}>
-                          Scanner distance: {dist == null ? "—" : `${dist} m`}
+                        <span
+                          className="status"
+                          title={
+                            s?.updatedAt
+                              ? `updated ${dayjs(s.updatedAt).format(
+                                  "HH:mm:ss"
+                                )}`
+                              : ""
+                          }
+                        >
+                          Scanner distance:{" "}
+                          {dist == null ? "—" : `${dist} m`}
                         </span>
                       )}
-                      {isVirtual && <span className="status" style={{ background: "#eef2ff", color: "#3730a3" }}>Virtual · PM will mark</span>}
+                      {isVirtual && (
+                        <span
+                          className="status"
+                          style={{
+                            background: "#eef2ff",
+                            color: "#3730a3",
+                          }}
+                        >
+                          Virtual · PM will mark
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 8, alignItems: "start" }}>
-                    <button className="btn" onClick={() => navigate(`#/jobs/${j.id}`)}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "start",
+                    }}
+                  >
+                    <button
+                      className="btn"
+                      onClick={() => navigate(`#/jobs/${j.id}`)}
+                    >
                       View details
                     </button>
                     {j.myStatus === "approved" && (
@@ -410,14 +593,31 @@ export default function MyJobs({ navigate, user }) {
 
                 {/* Actions */}
                 {!isVirtual && (
-                  <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                    <button className="btn primary" onClick={() => openQR(j, "in")}>Get Check-in QR</button>
-                    <button className="btn" onClick={() => openQR(j, "out")}>Get Check-out QR</button>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 10,
+                      marginTop: 10,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      className="btn primary"
+                      onClick={() => openQR(j, "in")}
+                    >
+                      Get Check-in QR
+                    </button>
+                    <button className="btn" onClick={() => openQR(j, "out")}>
+                      Get Check-out QR
+                    </button>
                   </div>
                 )}
                 {isVirtual && (
-                  <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
-                    This is a virtual job — no scanning needed. The PM/Admin will tick your attendance.
+                  <div
+                    style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}
+                  >
+                    This is a virtual job — no scanning needed. The PM/Admin
+                    will tick your attendance.
                   </div>
                 )}
               </div>
@@ -453,29 +653,64 @@ export default function MyJobs({ navigate, user }) {
               boxShadow: "0 10px 30px rgba(0,0,0,.25)",
             }}
           >
-            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>
-              {qrJob ? `${qrDir === "in" ? "Check-in" : "Check-out"} QR — ${qrJob.title}` : "QR"}
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 16,
+                marginBottom: 8,
+              }}
+            >
+              {qrJob
+                ? `${qrDir === "in" ? "Check-in" : "Check-out"} QR — ${
+                    qrJob.title
+                  }`
+                : "QR"}
             </div>
 
             {qrError ? (
-              <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
+              <div
+                style={{
+                  padding: 10,
+                  border: "1px solid var(--red)",
+                  borderRadius: 8,
+                  color: "var(--red)",
+                }}
+              >
                 {qrError}
               </div>
             ) : (
               <>
-                <div style={{ display: "flex", justifyContent: "center", margin: "6px 0 10px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "center",
+                    margin: "6px 0 10px",
+                  }}
+                >
                   {qrToken ? (
                     <img
                       src={qrImgSrc}
                       alt="QR code"
-                      style={{ width: 260, height: 260, borderRadius: 8, border: "1px solid var(--border)" }}
+                      style={{
+                        width: 260,
+                        height: 260,
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                      }}
                     />
                   ) : (
                     <div style={{ color: "#6b7280" }}>Generating QR…</div>
                   )}
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                  Show this QR to the PM scanner. Token is valid for about 60 seconds.
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#6b7280",
+                    marginTop: 4,
+                  }}
+                >
+                  Show this QR to the PM scanner. Token is valid for about 60
+                  seconds.
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <label style={{ fontWeight: 700 }}>Token (fallback)</label>
@@ -484,10 +719,22 @@ export default function MyJobs({ navigate, user }) {
               </>
             )}
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-              <button className="btn" onClick={closeQR}>Close</button>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                marginTop: 14,
+              }}
+            >
+              <button className="btn" onClick={closeQR}>
+                Close
+              </button>
               {!qrError && qrJob && (
-                <button className="btn primary" onClick={() => openQR(qrJob, qrDir)}>
+                <button
+                  className="btn primary"
+                  onClick={() => openQR(qrJob, qrDir)}
+                >
                   Regenerate
                 </button>
               )}
