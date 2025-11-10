@@ -51,7 +51,7 @@ function b64urlDecode(str) {
 function extractLatLngFromToken(token) {
   if (!token || typeof token !== "string") return null;
 
-  // A) JWT-like
+  // JWT-like
   if (token.includes(".")) {
     const parts = token.split(".");
     if (parts[1]) {
@@ -63,7 +63,7 @@ function extractLatLngFromToken(token) {
       } catch {}
     }
   }
-  // B) querystring
+  // querystring
   try {
     const qs = token.includes("?") ? token.split("?")[1] : token;
     const sp = new URLSearchParams(qs);
@@ -71,7 +71,7 @@ function extractLatLngFromToken(token) {
     const lng = Number(sp.get("lng"));
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
-  // C) last-two-floats
+  // last-two-floats
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
     const lat = Number(m[1]),
@@ -110,7 +110,6 @@ const applBodyRow = {
   borderBottom: "1px solid var(--border, #f1f5f9)",
 };
 
-/* robust virtual detector */
 function isVirtualJob(j) {
   if (!j) return false;
   if (j.isVirtual === true) return true;
@@ -129,7 +128,6 @@ function isVirtualJob(j) {
   return false;
 }
 
-/* better error extraction */
 function readApiError(err) {
   if (!err) return {};
   if (typeof err === "string") {
@@ -150,7 +148,6 @@ function readApiError(err) {
 }
 
 export default function PMJobDetails({ jobId }) {
-  /* ---------- state ---------- */
   const [job, setJob] = useState(null);
   const [applicants, setApplicants] = useState([]);
   const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
@@ -166,9 +163,7 @@ export default function PMJobDetails({ jobId }) {
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
-
-  // popup center
-  const [scanPopup, setScanPopup] = useState(null); // {kind, text}
+  const [scanPopup, setScanPopup] = useState(null); // {kind,text}
 
   // camera
   const videoRef = useRef(null);
@@ -182,6 +177,9 @@ export default function PMJobDetails({ jobId }) {
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
+
+  // if scan happened before GPS ready, we store token here and auto-scan when GPS arrives
+  const pendingTokenRef = useRef(null);
 
   // end time cache
   const endedAtRef = useRef(null);
@@ -239,7 +237,7 @@ export default function PMJobDetails({ jobId }) {
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
 
-  /* ---------- prevent page scroll when scanner open ---------- */
+  /* lock scroll when scanner open */
   useEffect(() => {
     if (!scannerOpen) return;
     const prevBody = document.body.style.overflow;
@@ -252,7 +250,7 @@ export default function PMJobDetails({ jobId }) {
     };
   }, [scannerOpen]);
 
-  /* ---------- qr script loader (jsQR) ---------- */
+  /* jsQR loader */
   function ensureJsQR() {
     return new Promise((resolve, reject) => {
       if (window.jsQR) return resolve(true);
@@ -265,7 +263,7 @@ export default function PMJobDetails({ jobId }) {
     });
   }
 
-  /* ---------- start / stop camera ---------- */
+  /* camera start/stop */
   async function startCamera() {
     try {
       await ensureJsQR();
@@ -284,12 +282,10 @@ export default function PMJobDetails({ jobId }) {
       setScanMsg("Camera not available or permission denied.");
     }
   }
-
   function stopCamera() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef = { current: null };
+    rafRef.current = null;
     setCamReady(false);
-
     if (streamRef.current) {
       try {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -301,11 +297,11 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* open/close scanner overlay */
   function openScanner() {
     setScanMsg("");
     setToken("");
     lastDecodedRef.current = "";
+    pendingTokenRef.current = null;
     setScannerOpen(true);
   }
   function closeScanner() {
@@ -314,7 +310,6 @@ export default function PMJobDetails({ jobId }) {
     stopHeartbeat();
   }
 
-  /* auto start camera when overlay opens */
   useEffect(() => {
     if (scannerOpen && !isVirtual) {
       startCamera();
@@ -322,7 +317,7 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, isVirtual]);
 
-  /* ---------- scan loop (AUTO submit) ---------- */
+  /* scan loop */
   function startScanLoop() {
     const loop = () => {
       if (!videoRef.current || !canvasRef.current || !window.jsQR) {
@@ -354,7 +349,7 @@ export default function PMJobDetails({ jobId }) {
     rafRef.current = requestAnimationFrame(loop);
   }
 
-  /* ---------- geo heartbeat while scanner open ---------- */
+  /* geo heartbeat */
   useEffect(() => {
     if (!scannerOpen) return;
     if ("geolocation" in navigator) {
@@ -390,7 +385,20 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* ---------- decoded handler ---------- */
+  /* if we were waiting for location and now we have it, auto-rescan the pending token */
+  useEffect(() => {
+    if (!scannerOpen) return;
+    if (loc && pendingTokenRef.current) {
+      const t = pendingTokenRef.current;
+      pendingTokenRef.current = null;
+      // location is ready now, scan again
+      doScan(t);
+      // clear old "getting your location" message
+      setScanMsg("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc?.lat, loc?.lng, scannerOpen]);
+
   function vibrateOk() {
     try {
       if (navigator.vibrate) navigator.vibrate(120);
@@ -402,7 +410,6 @@ export default function PMJobDetails({ jobId }) {
     await doScan(decoded);
   }
 
-  /* ---------- manual paste ---------- */
   async function pasteFromClipboard() {
     try {
       const t = await navigator.clipboard.readText();
@@ -413,23 +420,25 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
-  /* ---------- scan submit to server ---------- */
   async function doScan(manualToken) {
     const useToken = manualToken || token;
     if (!useToken) {
       setScanMsg("No token detected.");
       return;
     }
+
+    // if GPS not ready yet, wait for it
     if (!loc) {
       setScanMsg("Getting your location… allow location and try again.");
-      // allow same QR again
+      pendingTokenRef.current = useToken; // remember it
+      // allow the same QR to be seen again
       setTimeout(() => {
         lastDecodedRef.current = "";
-      }, 1200);
+      }, 600);
       return;
     }
 
-    // local distance check (500m)
+    // local distance check
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -439,9 +448,10 @@ export default function PMJobDetails({ jobId }) {
         setScanMsg("❌ " + text);
         setScanPopup({ kind: "error", text });
         setTimeout(() => setScanPopup(null), 1800);
+        setToken(""); // clear
         setTimeout(() => {
           lastDecodedRef.current = "";
-        }, 1200);
+        }, 600);
         return;
       }
     }
@@ -468,7 +478,8 @@ export default function PMJobDetails({ jobId }) {
       vibrateOk();
       setTimeout(() => setScanPopup(null), 1500);
 
-      // refresh data WITHOUT killing camera
+      setToken(""); // clear input so next QR looks fresh
+      // refresh data silently
       load(true);
     } catch (e) {
       let msg = "Scan failed.";
@@ -484,14 +495,14 @@ export default function PMJobDetails({ jobId }) {
       console.error("scan error", e);
     } finally {
       setScanBusy(false);
-      // VERY IMPORTANT: allow re-scan of same QR
+      // allow re-scan of same QR
       setTimeout(() => {
         lastDecodedRef.current = "";
-      }, 1200);
+      }, 600);
     }
   }
 
-  /* ---------- start / end / reset ---------- */
+  /* start / end / reset */
   async function startAndOpen() {
     if (!job) return;
     if (effectiveStatus(job.status) !== "upcoming") return;
@@ -576,7 +587,6 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* OT calc */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
   const actualEndIso =
     job?.actualEndAt ||
@@ -597,7 +607,6 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
-  // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = (job.applications || []).find((a) => a.userId === uid) || {};
     const rec = (job.attendance || {})[uid] || {};
@@ -629,7 +638,7 @@ export default function PMJobDetails({ jobId }) {
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
-      {/* --- Job header --- */}
+      {/* header */}
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
           <div>
@@ -863,7 +872,7 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* ---------- FULLSCREEN SIMPLE SCANNER ---------- */}
+      {/* ---------- SCANNER OVERLAY ---------- */}
       {!isVirtual && scannerOpen && (
         <div
           style={{
@@ -1036,13 +1045,13 @@ export default function PMJobDetails({ jobId }) {
               {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
             {scanMsg && (
-              <div style={{ color: "white", fontSize: 11, maxWidth: "100%" }}>
+              <div style={{ color: "white", fontSize: 11 }}>
                 {scanMsg}
               </div>
             )}
           </div>
 
-          {/* CENTER POPUP */}
+          {/* center popup */}
           {scanPopup && (
             <div
               style={{
