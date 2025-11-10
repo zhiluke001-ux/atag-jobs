@@ -6,7 +6,7 @@ import { apiGet, apiPost } from "../api";
 /* ---------- geo helpers ---------- */
 const toRad = (d) => (d * Math.PI) / 180;
 function haversineMeters(a, b) {
-  if (!a || !b) return null;
+  if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
   const R = 6371000;
   const dLat = toRad(b.lat - a.lat);
   const dLng = toRad(b.lng - a.lng);
@@ -32,13 +32,10 @@ function fmtRange(start, end) {
 }
 
 /* ------- shared pay/session helpers ------- */
-const num = (v) =>
-  v === null || v === undefined || v === "" ? null : Number(v);
+const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
 const money = (v) => {
   const n = num(v);
-  return Number.isFinite(n) && n > 0
-    ? `RM${n % 1 === 0 ? n : n.toFixed(2)}`
-    : null;
+  return Number.isFinite(n) && n > 0 ? `RM${n % 1 === 0 ? n : n.toFixed(2)}` : null;
 };
 function deriveViewerRank(user) {
   const raw = (
@@ -73,14 +70,7 @@ function deriveKind(job) {
 
   const resolvedKind = isVirtual
     ? "virtual"
-    : [
-        "half_day",
-        "full_day",
-        "2d1n",
-        "3d2n",
-        "hourly_by_role",
-        "hourly_flat",
-      ].includes(kind)
+    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
     ? kind
     : "half_day";
 
@@ -127,16 +117,14 @@ function buildPayForViewer(job, user) {
   if (kind === "hourly_flat") {
     const base = money(flat?.base ?? tier.base);
     const ot = money(flat?.otRatePerHour);
-    if (base || ot)
-      return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return "-";
   }
 
   if (kind === "virtual" || kind === "hourly_by_role") {
     const base = money(tier.base);
     const ot = money(tier.otRatePerHour);
-    if (base || ot)
-      return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return "-";
   }
 
@@ -157,10 +145,7 @@ function buildPayForViewer(job, user) {
 
   if (sessionRM) {
     if (hasAddon && (base || ot))
-      return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(
-        base,
-        ot
-      )}`;
+      return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return sessionRM;
   }
 
@@ -206,13 +191,16 @@ function TransportBadges({ job }) {
 const DISCORD_URL = "https://discord.gg/ZAeR28z3p2";
 const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
 
+// geo options similar to PMJobDetails
+const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 };
+
 /* ========================== Page ========================== */
 export default function MyJobs({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
 
   // live user location
   const [loc, setLoc] = useState(null); // { lat, lng, acc, ts }
-  const [locMsg, setLocMsg] = useState("");
+  const [locMsg, setLocMsg] = useState("Getting your location…");
 
   // last-known scanner info per job
   const [scannerInfo, setScannerInfo] = useState({}); // { [jobId]: {lat,lng,updatedAt,dist} }
@@ -224,17 +212,13 @@ export default function MyJobs({ navigate, user }) {
   const [qrJob, setQrJob] = useState(null);
   const [qrError, setQrError] = useState("");
 
-  // load "my jobs" and hydrate with full /jobs/:id so pay fields are complete
+  // load "my jobs"
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const mine = await apiGet("/me/jobs");
-        // 🔴 only approved
-        const onlyApproved = (mine || []).filter(
-          (j) => j.myStatus === "approved"
-        );
-
+        const onlyApproved = (mine || []).filter((j) => j.myStatus === "approved");
         const full = await Promise.all(
           onlyApproved.map(async (j) => {
             try {
@@ -255,32 +239,62 @@ export default function MyJobs({ navigate, user }) {
     };
   }, []);
 
-  // watch user location
+  /* ---------- faster geo, like PMJobDetails ---------- */
   useEffect(() => {
     if (!("geolocation" in navigator)) {
       setLocMsg("Location not supported by browser.");
       return;
     }
-    const id = navigator.geolocation.watchPosition(
-      (p) =>
+
+    let active = true;
+
+    // 1) immediate fetch
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        if (!active) return;
         setLoc({
           lat: p.coords.latitude,
           lng: p.coords.longitude,
           acc: p.coords.accuracy ?? null,
           ts: Date.now(),
-        }),
-      () =>
-        setLocMsg("Please allow location to generate QR and show distance."),
-      { enableHighAccuracy: true, maximumAge: 2_000, timeout: 10_000 }
+        });
+        setLocMsg("");
+      },
+      () => {
+        if (!active) return;
+        setLocMsg("Getting your location… allow location and try again.");
+      },
+      GEO_OPTS
     );
+
+    // 2) continuous watch
+    const id = navigator.geolocation.watchPosition(
+      (p) => {
+        if (!active) return;
+        setLoc({
+          lat: p.coords.latitude,
+          lng: p.coords.longitude,
+          acc: p.coords.accuracy ?? null,
+          ts: Date.now(),
+        });
+        setLocMsg("");
+      },
+      () => {
+        if (!active) return;
+        setLocMsg("Getting your location…");
+      },
+      GEO_OPTS
+    );
+
     return () => {
+      active = false;
       try {
         navigator.geolocation.clearWatch(id);
       } catch {}
     };
   }, []);
 
-  // fetch scanner location for ongoing jobs; refresh every 15s
+  /* ---------- fetch scanner location for ongoing jobs ---------- */
   useEffect(() => {
     let timer;
     const fetchAll = async () => {
@@ -289,9 +303,12 @@ export default function MyJobs({ navigate, user }) {
         if (j.status !== "ongoing") continue;
         try {
           const s = await apiGet(`/jobs/${j.id}/scanner`);
-          const dist =
-            s && loc ? haversineMeters(loc, { lat: s.lat, lng: s.lng }) : null;
-          map[j.id] = { ...s, dist };
+          // we store lat/lng first; dist will be recomputed when loc changes
+          map[j.id] = {
+            ...s,
+            dist:
+              s && loc ? haversineMeters(loc, { lat: s.lat, lng: s.lng }) : null,
+          };
         } catch {
           /* ignore */
         }
@@ -304,6 +321,25 @@ export default function MyJobs({ navigate, user }) {
     return () => clearInterval(timer);
   }, [jobs, loc]);
 
+  /* ---------- when user location changes, recompute distances (like PM page) ---------- */
+  useEffect(() => {
+    if (!loc) return;
+    setScannerInfo((prev) => {
+      const next = {};
+      for (const [jobId, info] of Object.entries(prev)) {
+        if (info && info.lat != null && info.lng != null) {
+          next[jobId] = {
+            ...info,
+            dist: haversineMeters(loc, { lat: info.lat, lng: info.lng }),
+          };
+        } else {
+          next[jobId] = info;
+        }
+      }
+      return next;
+    });
+  }, [loc]);
+
   /* ---------- QR generation ---------- */
   async function openQR(job, direction) {
     setQrError("");
@@ -311,17 +347,14 @@ export default function MyJobs({ navigate, user }) {
     setQrJob(job);
     setQrDir(direction);
 
-    // skip QR entirely for virtual mode
     const { isVirtual } = deriveKind(job);
     if (isVirtual) {
-      setQrError(
-        "Virtual job — no scan required. PM/Admin will mark attendance."
-      );
+      setQrError("Virtual job — no scan required. PM/Admin will mark attendance.");
       setQrOpen(true);
       return;
     }
 
-    // need a reasonably-fresh location
+    // ensure location
     let here = loc;
     if (!here && "geolocation" in navigator) {
       try {
@@ -335,7 +368,7 @@ export default function MyJobs({ navigate, user }) {
                 ts: Date.now(),
               }),
             rej,
-            { enableHighAccuracy: true, timeout: 10000 }
+            GEO_OPTS
           )
         );
         here = p;
@@ -402,12 +435,10 @@ export default function MyJobs({ navigate, user }) {
             const { isVirtual, label } = deriveKind(j);
 
             const yourLocLine = loc
-              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(
-                  5
-                )}${loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""} · ${dayjs(
-                  loc.ts
-                ).format("HH:mm:ss")}`
-              : locMsg || "—";
+              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${
+                  loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""
+                } · ${dayjs(loc.ts).format("HH:mm:ss")}`
+              : locMsg || "Getting your location…";
 
             const pa = parkingRM(j);
             const lu = j.loadingUnload || {};
@@ -415,11 +446,7 @@ export default function MyJobs({ navigate, user }) {
             const payForViewer = buildPayForViewer(j, user);
 
             return (
-              <div
-                key={j.id}
-                className="card"
-                style={{ marginBottom: 10 }}
-              >
+              <div key={j.id} className="card" style={{ marginBottom: 10 }}>
                 <div
                   style={{
                     display: "flex",
@@ -540,14 +567,11 @@ export default function MyJobs({ navigate, user }) {
                           className="status"
                           title={
                             s?.updatedAt
-                              ? `updated ${dayjs(s.updatedAt).format(
-                                  "HH:mm:ss"
-                                )}`
+                              ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}`
                               : ""
                           }
                         >
-                          Scanner distance:{" "}
-                          {dist == null ? "—" : `${dist} m`}
+                          Scanner distance: {dist == null ? "—" : `${dist} m`}
                         </span>
                       )}
                       {isVirtual && (
@@ -613,11 +637,9 @@ export default function MyJobs({ navigate, user }) {
                   </div>
                 )}
                 {isVirtual && (
-                  <div
-                    style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}
-                  >
-                    This is a virtual job — no scanning needed. The PM/Admin
-                    will tick your attendance.
+                  <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
+                    This is a virtual job — no scanning needed. The PM/Admin will
+                    tick your attendance.
                   </div>
                 )}
               </div>
@@ -661,20 +683,18 @@ export default function MyJobs({ navigate, user }) {
               }}
             >
               {qrJob
-                ? `${qrDir === "in" ? "Check-in" : "Check-out"} QR — ${
-                    qrJob.title
-                  }`
+                ? `${qrDir === "in" ? "Check-in" : "Check-out"} QR — ${qrJob.title}`
                 : "QR"}
             </div>
 
             {qrError ? (
               <div
                 style={{
-                  padding: 10,
-                  border: "1px solid var(--red)",
-                  borderRadius: 8,
-                  color: "var(--red)",
-                }}
+                    padding: 10,
+                    border: "1px solid var(--red)",
+                    borderRadius: 8,
+                    color: "var(--red)",
+                  }}
               >
                 {qrError}
               </div>
