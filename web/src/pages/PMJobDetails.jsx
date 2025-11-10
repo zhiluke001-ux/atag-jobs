@@ -385,8 +385,19 @@ export default function PMJobDetails({ jobId }) {
   }
 
   async function handleDecoded(decoded) {
+    // if location not ready yet, don't lock the token forever
+    if (!loc) {
+      setScanMsg("Waiting for location…");
+      setScanPopup({ kind: "error", text: "Waiting for location…" });
+      setTimeout(() => setScanPopup(null), 1400);
+      // allow same code again soon
+      setTimeout(() => {
+        lastDecodedRef.current = "";
+      }, 1200);
+      return;
+    }
     setToken(decoded);
-    await doScan(decoded); // AUTO submit on camera scan
+    await doScan(decoded);
   }
 
   /* ---------- manual paste ---------- */
@@ -395,7 +406,7 @@ export default function PMJobDetails({ jobId }) {
       const t = await navigator.clipboard.readText();
       if (t) {
         setToken(t.trim());
-        await doScan(t.trim()); // also auto-run for pasted token
+        await doScan(t.trim());
       }
     } catch {}
   }
@@ -421,6 +432,10 @@ export default function PMJobDetails({ jobId }) {
         setScanMsg("❌ " + text);
         setScanPopup({ kind: "error", text });
         setTimeout(() => setScanPopup(null), 1800);
+        // allow re-scan of same code
+        setTimeout(() => {
+          lastDecodedRef.current = "";
+        }, 1400);
         return;
       }
     }
@@ -445,8 +460,7 @@ export default function PMJobDetails({ jobId }) {
       setScanMsg("✅ " + msg);
       setScanPopup({ kind: "success", text: msg });
       vibrateOk();
-      setTimeout(() => setScanPopup(null), 1800);
-      // reload to show attendance
+      setTimeout(() => setScanPopup(null), 1600);
       await load();
     } catch (e) {
       let msg = "Scan failed.";
@@ -462,6 +476,10 @@ export default function PMJobDetails({ jobId }) {
       console.error("scan error", e);
     } finally {
       setScanBusy(false);
+      // very important: allow same QR again after a short pause
+      setTimeout(() => {
+        lastDecodedRef.current = "";
+      }, 1400);
     }
   }
 
@@ -847,6 +865,7 @@ export default function PMJobDetails({ jobId }) {
             zIndex: 999,
             display: "flex",
             flexDirection: "column",
+            overflow: "hidden",
           }}
         >
           <video
@@ -862,13 +881,13 @@ export default function PMJobDetails({ jobId }) {
           <div
             style={{
               position: "absolute",
-              top: "14%",
+              top: "16%",
               left: "50%",
               transform: "translateX(-50%)",
-              width: "70vw",
+              width: "65vw",
               maxWidth: 360,
-              height: "42vh",
-              maxHeight: 320,
+              height: "40vh",
+              maxHeight: 300,
               border: "2px solid rgba(255,255,255,0.35)",
               borderRadius: 8,
               overflow: "hidden",
@@ -901,8 +920,11 @@ export default function PMJobDetails({ jobId }) {
               left: 12,
               right: 12,
               display: "flex",
-              justifyContent: "space-between",
+              flexWrap: "wrap",
+              gap: 8,
               alignItems: "center",
+              justifyContent: "space-between",
+              maxWidth: "100%",
             }}
           >
             <button
@@ -925,12 +947,13 @@ export default function PMJobDetails({ jobId }) {
                 borderRadius: 999,
                 display: "flex",
                 gap: 12,
+                alignItems: "center",
               }}
             >
-              <label>
+              <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
               </label>
-              <label>
+              <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <input type="radio" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> OUT
               </label>
             </div>
@@ -957,7 +980,7 @@ export default function PMJobDetails({ jobId }) {
                 placeholder="Token…"
                 style={{
                   flex: 1,
-                  minWidth: 0,
+                  minWidth: 140,
                   borderRadius: 6,
                   border: "1px solid rgba(255,255,255,0.35)",
                   background: "rgba(0,0,0,0.35)",
@@ -975,6 +998,7 @@ export default function PMJobDetails({ jobId }) {
                   padding: "6px 10px",
                   borderRadius: 6,
                   fontSize: 12,
+                  flexShrink: 0,
                 }}
               >
                 Paste
@@ -990,6 +1014,7 @@ export default function PMJobDetails({ jobId }) {
                   borderRadius: 6,
                   fontWeight: 600,
                   fontSize: 12,
+                  flexShrink: 0,
                 }}
               >
                 {scanBusy ? "..." : "Scan"}
@@ -1000,7 +1025,7 @@ export default function PMJobDetails({ jobId }) {
             </div>
             <div style={{ color: "white", fontSize: 11 }}>
               {loc
-                ? `Scanner location: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`
+                ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`
                 : "Waiting for location…"}
             </div>
           </div>
