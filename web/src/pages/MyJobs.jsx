@@ -203,7 +203,7 @@ function TransportBadges({ job }) {
 }
 
 // ---- Discord constants ----
-const DISCORD_URL = "https://discord.gg/AwGaCG3W";
+const DISCORD_URL = "https://discord.gg/ZAeR28z3p2";
 const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
 
 /* ========================== Page ========================== */
