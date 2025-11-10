@@ -51,7 +51,7 @@ function b64urlDecode(str) {
 function extractLatLngFromToken(token) {
   if (!token || typeof token !== "string") return null;
 
-  // A) JWT-ish token: header.payload.sig (payload contains {lat,lng})
+  // A) JWT-ish token
   if (token.includes(".")) {
     const parts = token.split(".");
     if (parts[1]) {
@@ -63,7 +63,7 @@ function extractLatLngFromToken(token) {
       } catch {}
     }
   }
-  // B) URL / querystring
+  // B) querystring
   try {
     const qs = token.includes("?") ? token.split("?")[1] : token;
     const sp = new URLSearchParams(qs);
@@ -71,7 +71,7 @@ function extractLatLngFromToken(token) {
     const lng = Number(sp.get("lng"));
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
-  // C) "3.123,101.234"
+  // C) "3.1,101.6"
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
     const lat = Number(m[1]),
@@ -155,116 +155,98 @@ function readApiError(err) {
   return {};
 }
 
+/* --------------- html5-qrcode loader --------------- */
+const QR_LIB_SRC =
+  "https://unpkg.com/html5-qrcode@2.3.10/dist/html5-qrcode.min.js";
+function loadHtml5QrLib() {
+  return new Promise((resolve, reject) => {
+    if (window.Html5Qrcode) return resolve(true);
+    const s = document.createElement("script");
+    s.src = QR_LIB_SRC;
+    s.async = true;
+    s.onload = () => (window.Html5Qrcode ? resolve(true) : reject(new Error("html5-qrcode failed")));
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
 export default function PMJobDetails({ jobId }) {
   const [job, setJob] = useState(null);
   const [applicants, setApplicants] = useState([]);
   const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
   const [loading, setLoading] = useState(true);
 
-  // status override
   const [statusForce, setStatusForce] = useState(null);
   const effectiveStatus = (s) => statusForce ?? s ?? "upcoming";
 
-  // scanner
+  // scanner state
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanDir, setScanDir] = useState("in");
   const [token, setToken] = useState("");
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
+  const [startBusy, setStartBusy] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
   const [scanSuccessMsg, setScanSuccessMsg] = useState("");
-  const [startBusy, setStartBusy] = useState(false);
   const scannerCardRef = useRef(null);
 
-  // camera
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const canvasCtxRef = useRef(null);
-  const detectorRef = useRef(null);
-  const rafRef = useRef(null);
-  const streamRef = useRef(null);
-  const scanningNowRef = useRef(false);
-  const lastTokenRef = useRef("");
-  const [camActive, setCamActive] = useState(false);
-  const [camSupported, setCamSupported] = useState(false);
-
-  // zoom
-  const [zoomCap, setZoomCap] = useState(null); // {min, max, value, step}
-  const videoTrackRef = useRef(null);
+  // html5-qrcode instance
+  const qrRef = useRef(null);
+  const lastScannedRef = useRef("");
 
   // geo
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
 
-  // persist PM end time
+  // Persist end time
   const endedAtRef = useRef(null);
   const LOCAL_KEY = (id) => `atag.jobs.${id}.actualEndAt`;
 
-  /* inject styles for overlay only once */
+  /* inject CSS for overlay once */
   useEffect(() => {
-    if (document.getElementById("pmjobdetails-scan-style")) return;
+    if (document.getElementById("pm-scan-css")) return;
     const style = document.createElement("style");
-    style.id = "pmjobdetails-scan-style";
+    style.id = "pm-scan-css";
     style.textContent = `
-      .pm-scan-box {
-        position: absolute;
-        top: 52%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: min(75vw, 70vh);
-        aspect-ratio: 1/1;
-        border: 2px solid rgba(255,255,255,0.25);
-        box-sizing: border-box;
+      .pm-scan-box{
+        position:absolute;
+        top:52%;
+        left:50%;
+        transform:translate(-50%, -50%);
+        width:min(75vw, 70vh);
+        aspect-ratio:1/1;
+        border:2px solid rgba(255,255,255,0.25);
       }
-      .pm-scan-corner {
-        position: absolute;
-        width: 30px;
-        height: 30px;
-        border: 4px solid #0ea5e9;
+      .pm-scan-corner{
+        position:absolute;
+        width:30px;
+        height:30px;
+        border:4px solid #0ea5e9;
       }
-      .pm-scan-corner.tl { top: -2px; left: -2px; border-right: none; border-bottom: none; }
-      .pm-scan-corner.tr { top: -2px; right: -2px; border-left: none; border-bottom: none; }
-      .pm-scan-corner.bl { bottom: -2px; left: -2px; border-right: none; border-top: none; }
-      .pm-scan-corner.br { bottom: -2px; right: -2px; border-left: none; border-top: none; }
+      .pm-scan-corner.tl{top:-2px;left:-2px;border-right:none;border-bottom:none;}
+      .pm-scan-corner.tr{top:-2px;right:-2px;border-left:none;border-bottom:none;}
+      .pm-scan-corner.bl{bottom:-2px;left:-2px;border-right:none;border-top:none;}
+      .pm-scan-corner.br{bottom:-2px;right:-2px;border-left:none;border-top:none;}
       @keyframes pm-scan-line {
         0% { top: 6px; }
         50% { top: calc(100% - 10px); }
         100% { top: 6px; }
       }
-      .pm-scan-line {
-        position: absolute;
-        left: 0;
-        width: 100%;
-        height: 3px;
-        background: #ef4444;
-        filter: drop-shadow(0 0 6px rgba(239,68,68,0.55));
-        animation: pm-scan-line 2.4s ease-in-out infinite;
-      }
-      .pm-zoom-bar {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        background: rgba(15,23,42,0.45);
-        padding: 4px 10px;
-        border-radius: 9999px;
-      }
-      .pm-zoom-btn {
-        background: transparent;
-        border: none;
-        color: white;
-        font-size: 20px;
-        line-height: 1;
-        cursor: pointer;
-      }
-      .pm-zoom-range {
-        flex: 1;
+      .pm-scan-line{
+        position:absolute;
+        left:0;
+        width:100%;
+        height:3px;
+        background:#ef4444;
+        animation:pm-scan-line 2.4s ease-in-out infinite;
+        filter:drop-shadow(0 0 6px rgba(239,68,68,0.55));
       }
     `;
     document.head.appendChild(style);
   }, []);
 
-  /* load data */
+  /* ---------------- load data ---------------- */
   async function load() {
     setLoading(true);
     const bust = `?_=${Date.now()}`;
@@ -279,7 +261,9 @@ export default function PMJobDetails({ jobId }) {
         merged.closedAt ||
         null;
 
-      const cachedEnd = LOCAL_KEY(jobId) ? localStorage.getItem(LOCAL_KEY(jobId)) : null;
+      const cachedEnd = LOCAL_KEY(jobId)
+        ? localStorage.getItem(LOCAL_KEY(jobId))
+        : null;
 
       if (statusForce === "ended" || merged.status === "ended") {
         if (!serverAltEnd) {
@@ -311,63 +295,6 @@ export default function PMJobDetails({ jobId }) {
   }, [jobId]);
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
-
-  /* camera feature detect */
-  useEffect(() => {
-    setCamSupported(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
-  }, []);
-
-  /* load jsQR (fallback) */
-  function loadJsQR() {
-    return new Promise((resolve, reject) => {
-      if (window.jsQR) return resolve(true);
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
-      s.async = true;
-      s.onload = () => (window.jsQR ? resolve(true) : reject(new Error("jsQR not available")));
-      s.onerror = reject;
-      document.head.appendChild(s);
-    });
-  }
-
-  async function ensureDetectorReady() {
-    if ("BarcodeDetector" in window) {
-      try {
-        const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
-        if (fmts.includes("qr_code")) {
-          detectorRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
-          console.log("[scanner] using native BarcodeDetector");
-          return true;
-        }
-      } catch {
-        // fall through
-      }
-    }
-    try {
-      await loadJsQR();
-      console.log("[scanner] using jsQR fallback");
-      return true;
-    } catch (e) {
-      console.warn("[scanner] no QR capability", e);
-      return false;
-    }
-  }
-
-  const pill = useMemo(() => {
-    const s = effectiveStatus(job?.status);
-    const bg = s === "ongoing" ? "#d1fae5" : s === "ended" ? "#fee2e2" : "#e5e7eb";
-    const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#374151";
-    return (
-      <span className="status" style={{ background: bg, color: fg }}>
-        {s}
-      </span>
-    );
-  }, [job]);
-
-  async function setApproval(userId, approve) {
-    await apiPost(`/jobs/${jobId}/approve`, { userId, approve });
-    await load();
-  }
 
   /* start / end / reset */
   async function startAndOpen() {
@@ -415,7 +342,7 @@ export default function PMJobDetails({ jobId }) {
       }
 
       setScannerOpen(false);
-      stopCamera();
+      stopHtml5Scanner();
       stopHeartbeat();
       setTimeout(load, 200);
     } catch {
@@ -433,7 +360,7 @@ export default function PMJobDetails({ jobId }) {
       setStatusForce("upcoming");
       setJob((prev) => (prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev));
       setScannerOpen(false);
-      stopCamera();
+      stopHtml5Scanner();
       stopHeartbeat();
       setTimeout(load, 300);
     } catch (e) {
@@ -446,7 +373,7 @@ export default function PMJobDetails({ jobId }) {
   function openScanner() {
     setScanMsg("");
     setToken("");
-    lastTokenRef.current = "";
+    lastScannedRef.current = "";
     setScanSuccess(false);
     setScannerOpen(true);
     setTimeout(() => {
@@ -455,19 +382,22 @@ export default function PMJobDetails({ jobId }) {
   }
   function closeScanner() {
     setScannerOpen(false);
-    stopCamera();
+    stopHtml5Scanner();
     stopHeartbeat();
   }
 
-  // auto start camera when overlay opens
+  /* start html5-qrcode when scanner is open */
   useEffect(() => {
-    if (scannerOpen && !camActive && !isVirtual) {
-      startCamera();
+    if (scannerOpen && !isVirtual) {
+      startHtml5Scanner();
     }
+    return () => {
+      stopHtml5Scanner();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, isVirtual]);
 
-  // auto close if job ended / virtual
+  /* auto close if job becomes virtual or ended */
   useEffect(() => {
     if ((isVirtual || effectiveStatus(job?.status) === "ended") && scannerOpen) {
       closeScanner();
@@ -475,7 +405,7 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVirtual, job?.status, scannerOpen]);
 
-  /* heartbeat geo */
+  /* heartbeat while scanner open */
   useEffect(() => {
     if (!scannerOpen) return;
     if ("geolocation" in navigator) {
@@ -507,175 +437,76 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* camera + decoding */
-  async function ensureVideoReady(video) {
-    let attempts = 0;
-    while (attempts < 30 && (!video.videoWidth || !video.videoHeight)) {
-      await new Promise((r) => setTimeout(r, 100));
-      attempts++;
-    }
-    return video.videoWidth && video.videoHeight;
-  }
-
-  async function startCamera() {
-    if (isVirtual) {
-      setScanMsg("Virtual job — scanner disabled.");
-      return;
-    }
-    if (!camSupported) {
-      setScanMsg("Camera not available on this device.");
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-      streamRef.current = stream;
-
-      const video = videoRef.current;
-      if (video) {
-        video.srcObject = stream;
-        await new Promise((res) => {
-          const onMeta = () => {
-            res();
-            video.removeEventListener("loadedmetadata", onMeta);
-          };
-          video.addEventListener("loadedmetadata", onMeta);
-        });
-        await video.play();
-      }
-
-      const ready = await ensureVideoReady(videoRef.current);
-      if (!ready) throw new Error("Camera failed to initialize.");
-
-      // canvas
-      const cv = canvasRef.current;
-      const vw = videoRef.current.videoWidth;
-      const vh = videoRef.current.videoHeight;
-      cv.width = vw;
-      cv.height = vh;
-      canvasCtxRef.current = cv.getContext("2d", { willReadFrequently: true });
-
-      // zoom capabilities
-      const track = stream.getVideoTracks()[0];
-      videoTrackRef.current = track;
-      const caps = track.getCapabilities ? track.getCapabilities() : null;
-      if (caps && caps.zoom) {
-        const min = caps.zoom.min ?? 1;
-        const max = caps.zoom.max ?? min;
-        const step = caps.zoom.step ?? 0.1;
-        setZoomCap({ min, max, step, value: min });
-        try {
-          await track.applyConstraints({ advanced: [{ zoom: min }] });
-        } catch {}
-      } else {
-        setZoomCap(null);
-      }
-
-      const ok = await ensureDetectorReady();
-      if (!ok) {
-        setScanMsg("Camera ready, but QR decoder not available. Paste the token below.");
-      } else {
-        setScanMsg("Camera ready — point at QR code.");
-      }
-
-      setCamActive(true);
-      scanningNowRef.current = false;
-      loopDetect();
-    } catch (err) {
-      setScanMsg("Could not open camera. Please allow permission or paste the token.");
-      console.error(err);
-    }
-  }
-
-  function stopCamera() {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = null;
-    scanningNowRef.current = false;
-    if (videoRef.current?.srcObject) {
-      try {
-        videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
-      } catch {}
-      videoRef.current.srcObject = null;
-    }
-    if (streamRef.current) {
-      try {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      } catch {}
-      streamRef.current = null;
-    }
-    detectorRef.current = null;
-    videoTrackRef.current = null;
-    setCamActive(false);
-    setZoomCap(null);
-  }
-
-  useEffect(() => () => stopCamera(), []);
-
   function vibrateOk() {
     try {
       if (navigator.vibrate) navigator.vibrate(120);
     } catch {}
   }
 
-  async function handleDecoded(decoded) {
-    if (!decoded || decoded === lastTokenRef.current) return;
-    lastTokenRef.current = decoded;
-    setToken(decoded);
-    await doScan(decoded);
-  }
-
-  async function loopDetect() {
-    if (!camActive) return;
-    if (!videoRef.current || !canvasRef.current || !canvasCtxRef.current) {
-      rafRef.current = requestAnimationFrame(loopDetect);
+  /* ------------ html5-qrcode setup ------------ */
+  async function startHtml5Scanner() {
+    try {
+      await loadHtml5QrLib();
+    } catch (e) {
+      console.error("QR lib failed", e);
+      setScanMsg("QR library failed to load. Try manual token.");
       return;
     }
-    if (scanningNowRef.current) {
-      rafRef.current = requestAnimationFrame(loopDetect);
+    if (!document.getElementById("pm-qr-reader")) {
+      // the overlay not rendered yet
       return;
     }
-    scanningNowRef.current = true;
+    if (qrRef.current) {
+      // already started
+      return;
+    }
 
     try {
-      const v = videoRef.current;
-      const cv = canvasRef.current;
-      const ctx = canvasCtxRef.current;
-      const w = v.videoWidth;
-      const h = v.videoHeight;
-      if (!(w && h)) {
-        scanningNowRef.current = false;
-        rafRef.current = requestAnimationFrame(loopDetect);
-        return;
-      }
-      ctx.drawImage(v, 0, 0, w, h);
+      const qr = new window.Html5Qrcode("pm-qr-reader", { verbose: false });
+      qrRef.current = qr;
 
-      let decoded = null;
-      if (detectorRef.current) {
-        try {
-          const codes = await detectorRef.current.detect(cv);
-          if (codes && codes[0]?.rawValue) decoded = codes[0].rawValue;
-        } catch {}
-      }
-      if (!decoded && window.jsQR) {
-        const img = ctx.getImageData(0, 0, w, h);
-        const result = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
-        if (result && result.data) decoded = result.data;
-      }
-      if (decoded) {
-        console.log("[scanner] decoded:", decoded);
-        handleDecoded(decoded);
-      }
-    } finally {
-      scanningNowRef.current = false;
+      const onSuccess = async (decodedText /*, decodedResult */) => {
+        if (!decodedText) return;
+        if (decodedText === lastScannedRef.current) return;
+        lastScannedRef.current = decodedText;
+        setToken(decodedText);
+        await doScan(decodedText);
+      };
+      const onError = () => {
+        // ignore errors
+      };
+
+      await qr.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: (w, h) => {
+            const minEdge = Math.min(w, h);
+            const box = Math.floor(minEdge * 0.7);
+            return { width: box, height: box };
+          },
+        },
+        onSuccess,
+        onError
+      );
+
+      setScanMsg("Camera ready — point at QR code.");
+    } catch (e) {
+      console.error("startHtml5Scanner error", e);
+      setScanMsg("Could not start camera. Allow camera or paste token.");
     }
+  }
 
-    rafRef.current = requestAnimationFrame(loopDetect);
+  async function stopHtml5Scanner() {
+    if (qrRef.current) {
+      try {
+        await qrRef.current.stop();
+      } catch {}
+      try {
+        await qrRef.current.clear();
+      } catch {}
+      qrRef.current = null;
+    }
   }
 
   async function pasteFromClipboard() {
@@ -685,8 +516,8 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
-  async function doScan(manualToken) {
-    const useToken = manualToken || token;
+  async function doScan(useTokenArg) {
+    const useToken = useTokenArg || token;
     if (!useToken) {
       setScanMsg("No token. Paste the QR token or use the camera.");
       return;
@@ -696,6 +527,7 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
+    // optional local precheck
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -781,7 +613,12 @@ export default function PMJobDetails({ jobId }) {
   /* OT calc */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
   const actualEndIso =
-    job?.actualEndAt || job?.endedAt || job?.finishedAt || job?.closedAt || endedAtRef.current || null;
+    job?.actualEndAt ||
+    job?.endedAt ||
+    job?.finishedAt ||
+    job?.closedAt ||
+    endedAtRef.current ||
+    null;
   const actualEndDJ = actualEndIso ? dayjs(actualEndIso) : null;
   const otRoundedHours = useMemo(() => {
     if (!scheduledEndDJ || !actualEndDJ) return 0;
@@ -825,27 +662,16 @@ export default function PMJobDetails({ jobId }) {
   const tokenDir = extractDirFromToken(token);
   const dirMismatch = token && tokenDir && tokenDir !== scanDir;
 
-  /* zoom handlers */
-  const handleZoomChange = async (val) => {
-    setZoomCap((prev) => (prev ? { ...prev, value: val } : prev));
-    if (videoTrackRef.current && videoTrackRef.current.applyConstraints) {
-      try {
-        await videoTrackRef.current.applyConstraints({ advanced: [{ zoom: Number(val) }] });
-      } catch (e) {
-        console.warn("zoom apply failed", e);
-      }
-    }
-  };
-  const zoomMinus = () => {
-    if (!zoomCap) return;
-    const next = Math.max(zoomCap.min, (Number(zoomCap.value) || zoomCap.min) - (zoomCap.step || 0.1));
-    handleZoomChange(next);
-  };
-  const zoomPlus = () => {
-    if (!zoomCap) return;
-    const next = Math.min(zoomCap.max, (Number(zoomCap.value) || zoomCap.min) + (zoomCap.step || 0.1));
-    handleZoomChange(next);
-  };
+  const pill = useMemo(() => {
+    const s = effectiveStatus(job?.status);
+    const bg = s === "ongoing" ? "#d1fae5" : s === "ended" ? "#fee2e2" : "#e5e7eb";
+    const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#374151";
+    return (
+      <span className="status" style={{ background: bg, color: fg }}>
+        {s}
+      </span>
+    );
+  }, [job]);
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
@@ -994,6 +820,7 @@ export default function PMJobDetails({ jobId }) {
       {/* Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
+
         {isVirtual && (
           <div className="card" style={{ padding: 12, marginBottom: 8, border: "1px dashed #e5e7eb" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Virtual attendance</div>
@@ -1124,28 +951,14 @@ export default function PMJobDetails({ jobId }) {
             flexDirection: "column",
           }}
         >
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            autoPlay
+          {/* this div is where html5-qrcode will put the video */}
+          <div
+            id="pm-qr-reader"
             style={{
               width: "100%",
               height: "100%",
-              objectFit: "cover",
             }}
           />
-          <canvas ref={canvasRef} style={{ display: "none" }} />
-
-          {/* center scan box */}
-          <div className="pm-scan-box">
-            <div className="pm-scan-corner tl" />
-            <div className="pm-scan-corner tr" />
-            <div className="pm-scan-corner bl" />
-            <div className="pm-scan-corner br" />
-            <div className="pm-scan-line" />
-          </div>
-
           {/* top bar */}
           <div
             style={{
@@ -1192,7 +1005,16 @@ export default function PMJobDetails({ jobId }) {
             </div>
           </div>
 
-          {/* bottom area */}
+          {/* overlay box + line */}
+          <div className="pm-scan-box">
+            <div className="pm-scan-corner tl" />
+            <div className="pm-scan-corner tr" />
+            <div className="pm-scan-corner bl" />
+            <div className="pm-scan-corner br" />
+            <div className="pm-scan-line" />
+          </div>
+
+          {/* bottom controls */}
           <div
             style={{
               position: "absolute",
@@ -1206,30 +1028,6 @@ export default function PMJobDetails({ jobId }) {
               gap: 6,
             }}
           >
-            {/* zoom bar */}
-            {zoomCap && (
-              <div style={{ display: "flex", justifyContent: "center", marginBottom: 6 }}>
-                <div className="pm-zoom-bar" style={{ width: "75%" }}>
-                  <button className="pm-zoom-btn" onClick={zoomMinus} type="button">
-                    🔍
-                  </button>
-                  <input
-                    className="pm-zoom-range"
-                    type="range"
-                    min={zoomCap.min}
-                    max={zoomCap.max}
-                    step={zoomCap.step || 0.1}
-                    value={zoomCap.value}
-                    onChange={(e) => handleZoomChange(e.target.value)}
-                    style={{ width: "100%" }}
-                  />
-                  <button className="pm-zoom-btn" onClick={zoomPlus} type="button">
-                    ➕
-                  </button>
-                </div>
-              </div>
-            )}
-
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 value={token}
