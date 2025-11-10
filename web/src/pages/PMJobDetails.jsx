@@ -6,8 +6,7 @@ import { apiGet, apiPost } from "../api";
 /* ---------------- helpers ---------------- */
 const toRad = (d) => (d * Math.PI) / 180;
 function haversineMeters(a, b) {
-  if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null)
-    return null;
+  if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
   const R = 6371000;
   const dLat = toRad(b.lat - a.lat);
   const dLng = toRad(b.lng - a.lng);
@@ -64,7 +63,7 @@ function extractLatLngFromToken(token) {
       } catch {}
     }
   }
-  // B) URL or querystring style: "...?lat=...&lng=..."
+  // B) URL / querystring
   try {
     const qs = token.includes("?") ? token.split("?")[1] : token;
     const sp = new URLSearchParams(qs);
@@ -72,9 +71,8 @@ function extractLatLngFromToken(token) {
     const lng = Number(sp.get("lng"));
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
-  // C) Last-two-floats pattern
-  const m =
-    token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/) || null;
+  // C) "3.123,101.234"
+  const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
     const lat = Number(m[1]),
       lng = Number(m[2]);
@@ -86,7 +84,7 @@ function extractDirFromToken(token) {
   try {
     if (!token || !token.includes(".")) return null;
     const payload = JSON.parse(b64urlDecode(token.split(".")[1]));
-    return payload?.dir ?? null; // "in" | "out"
+    return payload?.dir ?? null;
   } catch {
     return null;
   }
@@ -112,7 +110,7 @@ const applBodyRow = {
   borderBottom: "1px solid var(--border, #f1f5f9)",
 };
 
-/* Robust virtual detector */
+/* robust virtual detector */
 function isVirtualJob(j) {
   if (!j) return false;
   if (j.isVirtual === true) return true;
@@ -132,7 +130,7 @@ function isVirtualJob(j) {
   return false;
 }
 
-/* Better error extraction */
+/* better error extraction */
 function readApiError(err) {
   if (!err) return {};
   if (typeof err === "string") {
@@ -167,18 +165,18 @@ export default function PMJobDetails({ jobId }) {
   const [statusForce, setStatusForce] = useState(null);
   const effectiveStatus = (s) => statusForce ?? s ?? "upcoming";
 
-  // scanner state
+  // scanner
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanDir, setScanDir] = useState("in");
   const [token, setToken] = useState("");
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
-  const [startBusy, setStartBusy] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
   const [scanSuccessMsg, setScanSuccessMsg] = useState("");
+  const [startBusy, setStartBusy] = useState(false);
   const scannerCardRef = useRef(null);
 
-  // camera refs
+  // camera
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const canvasCtxRef = useRef(null);
@@ -186,20 +184,87 @@ export default function PMJobDetails({ jobId }) {
   const rafRef = useRef(null);
   const streamRef = useRef(null);
   const scanningNowRef = useRef(false);
-  const lastTokenRef = useRef(""); // prevent same-token spam
+  const lastTokenRef = useRef("");
   const [camActive, setCamActive] = useState(false);
   const [camSupported, setCamSupported] = useState(false);
+
+  // zoom
+  const [zoomCap, setZoomCap] = useState(null); // {min, max, value, step}
+  const videoTrackRef = useRef(null);
 
   // geo
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
 
-  // persist end time
+  // persist PM end time
   const endedAtRef = useRef(null);
   const LOCAL_KEY = (id) => `atag.jobs.${id}.actualEndAt`;
 
-  /* -------- load data -------- */
+  /* inject styles for overlay only once */
+  useEffect(() => {
+    if (document.getElementById("pmjobdetails-scan-style")) return;
+    const style = document.createElement("style");
+    style.id = "pmjobdetails-scan-style";
+    style.textContent = `
+      .pm-scan-box {
+        position: absolute;
+        top: 52%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(75vw, 70vh);
+        aspect-ratio: 1/1;
+        border: 2px solid rgba(255,255,255,0.25);
+        box-sizing: border-box;
+      }
+      .pm-scan-corner {
+        position: absolute;
+        width: 30px;
+        height: 30px;
+        border: 4px solid #0ea5e9;
+      }
+      .pm-scan-corner.tl { top: -2px; left: -2px; border-right: none; border-bottom: none; }
+      .pm-scan-corner.tr { top: -2px; right: -2px; border-left: none; border-bottom: none; }
+      .pm-scan-corner.bl { bottom: -2px; left: -2px; border-right: none; border-top: none; }
+      .pm-scan-corner.br { bottom: -2px; right: -2px; border-left: none; border-top: none; }
+      @keyframes pm-scan-line {
+        0% { top: 6px; }
+        50% { top: calc(100% - 10px); }
+        100% { top: 6px; }
+      }
+      .pm-scan-line {
+        position: absolute;
+        left: 0;
+        width: 100%;
+        height: 3px;
+        background: #ef4444;
+        filter: drop-shadow(0 0 6px rgba(239,68,68,0.55));
+        animation: pm-scan-line 2.4s ease-in-out infinite;
+      }
+      .pm-zoom-bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: rgba(15,23,42,0.45);
+        padding: 4px 10px;
+        border-radius: 9999px;
+      }
+      .pm-zoom-btn {
+        background: transparent;
+        border: none;
+        color: white;
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .pm-zoom-range {
+        flex: 1;
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
+
+  /* load data */
   async function load() {
     setLoading(true);
     const bust = `?_=${Date.now()}`;
@@ -247,12 +312,12 @@ export default function PMJobDetails({ jobId }) {
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
 
-  /* feature detect camera */
+  /* camera feature detect */
   useEffect(() => {
     setCamSupported(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   }, []);
 
-  /* ---- jsQR loader (fallback) ---- */
+  /* load jsQR (fallback) */
   function loadJsQR() {
     return new Promise((resolve, reject) => {
       if (window.jsQR) return resolve(true);
@@ -265,7 +330,6 @@ export default function PMJobDetails({ jobId }) {
     });
   }
 
-  /* ensure we have detector or jsQR */
   async function ensureDetectorReady() {
     if ("BarcodeDetector" in window) {
       try {
@@ -276,7 +340,7 @@ export default function PMJobDetails({ jobId }) {
           return true;
         }
       } catch {
-        // fallback to jsQR
+        // fall through
       }
     }
     try {
@@ -305,7 +369,7 @@ export default function PMJobDetails({ jobId }) {
     await load();
   }
 
-  /* ----------------- Start / End / Reset ----------------- */
+  /* start / end / reset */
   async function startAndOpen() {
     if (!job) return;
     if (effectiveStatus(job.status) !== "upcoming") return;
@@ -314,7 +378,6 @@ export default function PMJobDetails({ jobId }) {
       setStatusForce("ongoing");
       setJob((prev) => (prev ? { ...prev, status: "ongoing" } : prev));
       await apiPost(`/jobs/${jobId}/start`, {});
-
       if (!isVirtual) {
         openScanner();
       } else {
@@ -332,7 +395,6 @@ export default function PMJobDetails({ jobId }) {
   async function endEvent() {
     try {
       const actualEndAt = new Date().toISOString();
-
       endedAtRef.current = actualEndAt;
       try {
         localStorage.setItem(LOCAL_KEY(jobId), actualEndAt);
@@ -347,9 +409,7 @@ export default function PMJobDetails({ jobId }) {
         const presentIds = Object.keys(attendance).filter((uid) => !!attendance[uid]?.in);
         await Promise.all(
           presentIds.map((uid) =>
-            apiPost(`/jobs/${jobId}/attendance/mark`, { userId: uid, outAt: actualEndAt }).catch(
-              () => {}
-            )
+            apiPost(`/jobs/${jobId}/attendance/mark`, { userId: uid, outAt: actualEndAt }).catch(() => {})
           )
         );
       }
@@ -357,7 +417,6 @@ export default function PMJobDetails({ jobId }) {
       setScannerOpen(false);
       stopCamera();
       stopHeartbeat();
-
       setTimeout(load, 200);
     } catch {
       await load();
@@ -372,9 +431,7 @@ export default function PMJobDetails({ jobId }) {
         localStorage.removeItem(LOCAL_KEY(jobId));
       } catch {}
       setStatusForce("upcoming");
-      setJob((prev) =>
-        prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev
-      );
+      setJob((prev) => (prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev));
       setScannerOpen(false);
       stopCamera();
       stopHeartbeat();
@@ -385,7 +442,7 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* ----------------- Scanner open/close ----------------- */
+  /* scanner open/close */
   function openScanner() {
     setScanMsg("");
     setToken("");
@@ -402,7 +459,7 @@ export default function PMJobDetails({ jobId }) {
     stopHeartbeat();
   }
 
-  // auto start camera when scanner opens
+  // auto start camera when overlay opens
   useEffect(() => {
     if (scannerOpen && !camActive && !isVirtual) {
       startCamera();
@@ -410,7 +467,7 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, isVirtual]);
 
-  // auto close when job ends / virtual
+  // auto close if job ended / virtual
   useEffect(() => {
     if ((isVirtual || effectiveStatus(job?.status) === "ended") && scannerOpen) {
       closeScanner();
@@ -418,7 +475,7 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVirtual, job?.status, scannerOpen]);
 
-  /* ------- heartbeat geolocation while scanner is open ------- */
+  /* heartbeat geo */
   useEffect(() => {
     if (!scannerOpen) return;
     if ("geolocation" in navigator) {
@@ -429,10 +486,7 @@ export default function PMJobDetails({ jobId }) {
       );
     }
     hbTimerRef.current = setInterval(() => {
-      if (loc)
-        apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(
-          () => {}
-        );
+      if (loc) apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(() => {});
     }, 10000);
     return () => {
       stopHeartbeat();
@@ -453,7 +507,7 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* ------- Camera + QR decoding ------- */
+  /* camera + decoding */
   async function ensureVideoReady(video) {
     let attempts = 0;
     while (attempts < 30 && (!video.videoWidth || !video.videoHeight)) {
@@ -499,13 +553,29 @@ export default function PMJobDetails({ jobId }) {
       const ready = await ensureVideoReady(videoRef.current);
       if (!ready) throw new Error("Camera failed to initialize.");
 
-      // canvas sizing (for jsQR)
+      // canvas
       const cv = canvasRef.current;
       const vw = videoRef.current.videoWidth;
       const vh = videoRef.current.videoHeight;
       cv.width = vw;
       cv.height = vh;
       canvasCtxRef.current = cv.getContext("2d", { willReadFrequently: true });
+
+      // zoom capabilities
+      const track = stream.getVideoTracks()[0];
+      videoTrackRef.current = track;
+      const caps = track.getCapabilities ? track.getCapabilities() : null;
+      if (caps && caps.zoom) {
+        const min = caps.zoom.min ?? 1;
+        const max = caps.zoom.max ?? min;
+        const step = caps.zoom.step ?? 0.1;
+        setZoomCap({ min, max, step, value: min });
+        try {
+          await track.applyConstraints({ advanced: [{ zoom: min }] });
+        } catch {}
+      } else {
+        setZoomCap(null);
+      }
 
       const ok = await ensureDetectorReady();
       if (!ok) {
@@ -540,7 +610,9 @@ export default function PMJobDetails({ jobId }) {
       streamRef.current = null;
     }
     detectorRef.current = null;
+    videoTrackRef.current = null;
     setCamActive(false);
+    setZoomCap(null);
   }
 
   useEffect(() => () => stopCamera(), []);
@@ -552,9 +624,7 @@ export default function PMJobDetails({ jobId }) {
   }
 
   async function handleDecoded(decoded) {
-    if (!decoded) return;
-    // avoid infinite "same code" loop
-    if (decoded === lastTokenRef.current) return;
+    if (!decoded || decoded === lastTokenRef.current) return;
     lastTokenRef.current = decoded;
     setToken(decoded);
     await doScan(decoded);
@@ -562,11 +632,10 @@ export default function PMJobDetails({ jobId }) {
 
   async function loopDetect() {
     if (!camActive) return;
-    if (!videoRef.current) {
+    if (!videoRef.current || !canvasRef.current || !canvasCtxRef.current) {
       rafRef.current = requestAnimationFrame(loopDetect);
       return;
     }
-
     if (scanningNowRef.current) {
       rafRef.current = requestAnimationFrame(loopDetect);
       return;
@@ -574,47 +643,34 @@ export default function PMJobDetails({ jobId }) {
     scanningNowRef.current = true;
 
     try {
-      const video = videoRef.current;
-      let decoded = null;
+      const v = videoRef.current;
+      const cv = canvasRef.current;
+      const ctx = canvasCtxRef.current;
+      const w = v.videoWidth;
+      const h = v.videoHeight;
+      if (!(w && h)) {
+        scanningNowRef.current = false;
+        rafRef.current = requestAnimationFrame(loopDetect);
+        return;
+      }
+      ctx.drawImage(v, 0, 0, w, h);
 
-      // 1) native detector: detect(video) (more reliable than canvas on mobile)
+      let decoded = null;
       if (detectorRef.current) {
         try {
-          const codes = await detectorRef.current.detect(video);
-          if (codes && codes[0]?.rawValue) {
-            decoded = codes[0].rawValue;
-          }
-        } catch {
-          // will fall back to jsQR
-        }
+          const codes = await detectorRef.current.detect(cv);
+          if (codes && codes[0]?.rawValue) decoded = codes[0].rawValue;
+        } catch {}
       }
-
-      // 2) fallback to jsQR
-      if (!decoded && canvasRef.current && canvasCtxRef.current) {
-        const cv = canvasRef.current;
-        const ctx = canvasCtxRef.current;
-        const w = video.videoWidth;
-        const h = video.videoHeight;
-        if (w && h) {
-          ctx.drawImage(video, 0, 0, w, h);
-          if (window.jsQR) {
-            const img = ctx.getImageData(0, 0, w, h);
-            const result = window.jsQR(img.data, img.width, img.height, {
-              inversionAttempts: "attemptBoth",
-            });
-            if (result && result.data) {
-              decoded = result.data;
-            }
-          }
-        }
+      if (!decoded && window.jsQR) {
+        const img = ctx.getImageData(0, 0, w, h);
+        const result = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+        if (result && result.data) decoded = result.data;
       }
-
       if (decoded) {
         console.log("[scanner] decoded:", decoded);
         handleDecoded(decoded);
       }
-    } catch (e) {
-      // ignore, keep looping
     } finally {
       scanningNowRef.current = false;
     }
@@ -635,16 +691,8 @@ export default function PMJobDetails({ jobId }) {
       setScanMsg("No token. Paste the QR token or use the camera.");
       return;
     }
-
-    // if location not ready, show message and allow re-scan
     if (!loc) {
       setScanMsg("Getting your location… allow location and try again.");
-      // important: allow the same code to be scanned again when GPS is ready
-      if (manualToken) {
-        setTimeout(() => {
-          lastTokenRef.current = "";
-        }, 600);
-      }
       return;
     }
 
@@ -654,12 +702,6 @@ export default function PMJobDetails({ jobId }) {
       const d = haversineMeters(loc, applicantLL);
       if (d != null && d > maxM) {
         setScanMsg("❌ Too far based on local check.");
-        // allow retry
-        if (manualToken) {
-          setTimeout(() => {
-            lastTokenRef.current = "";
-          }, 600);
-        }
         return;
       }
     }
@@ -680,46 +722,32 @@ export default function PMJobDetails({ jobId }) {
         scannerLat: loc.lat,
         scannerLng: loc.lng,
       });
-      const msg = `✅ ${
-        tokenDir ? tokenDir.toUpperCase() : scanDir.toUpperCase()
-      } recorded at ${dayjs(r.time).format("HH:mm:ss")}`;
+      const msg = `✅ ${tokenDir ? tokenDir.toUpperCase() : scanDir.toUpperCase()} recorded at ${dayjs(
+        r.time
+      ).format("HH:mm:ss")}`;
       setScanMsg(msg);
       setScanSuccess(true);
       setScanSuccessMsg(msg);
       vibrateOk();
-
-      // after a successful scan, we let camera continue but we also
-      // clear lastToken after a short delay so next QR can be scanned
-      setTimeout(() => {
-        setScanSuccess(false);
-        lastTokenRef.current = "";
-      }, 1800);
-
+      setTimeout(() => setScanSuccess(false), 2000);
       await load();
     } catch (e) {
       let msg = "Scan failed.";
       try {
         const j = readApiError(e);
         if (j?.error === "jwt_error") msg = "Invalid/expired QR. Ask the part-timer to regenerate.";
-        else if (j?.error === "too_far")
-          msg = `Too far from user (> ${j.maxDistanceMeters ?? maxM} m).`;
+        else if (j?.error === "too_far") msg = `Too far from user (> ${j.maxDistanceMeters ?? maxM} m).`;
         else if (j?.error === "event_not_started") msg = "Event not started.";
         else if (j?.error === "bad_token_type") msg = "Bad token type.";
-        else if (j?.error === "token_missing_location")
-          msg = "QR code was generated without location.";
+        else if (j?.error === "token_missing_location") msg = "QR code was generated without location.";
         else if (j?.error === "scanner_location_required")
           msg = "Scanner location missing. Allow location on this device.";
-        else if (j?.error === "job_not_found") msg = "Job not found for this QR.";
+        else if (j?.error === "job_not_found") msg = "Job not found for this QR. Maybe for another job.";
         else if (j?.error) msg = String(j.error);
         else if (j?.message) msg = String(j.message);
       } catch {}
       setScanMsg("❌ " + msg);
       console.error("scan error", e);
-
-      // important: let this same QR be scanned again
-      setTimeout(() => {
-        lastTokenRef.current = "";
-      }, 800);
     } finally {
       setScanBusy(false);
     }
@@ -731,7 +759,7 @@ export default function PMJobDetails({ jobId }) {
     setLU(l);
   }
 
-  /* ---------------- Virtual Attendance ---------------- */
+  /* virtual attendance */
   async function markVirtualPresent(userId, present) {
     if (!job) return;
     try {
@@ -752,16 +780,9 @@ export default function PMJobDetails({ jobId }) {
 
   /* OT calc */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
-
   const actualEndIso =
-    job?.actualEndAt ||
-    job?.endedAt ||
-    job?.finishedAt ||
-    job?.closedAt ||
-    endedAtRef.current ||
-    null;
+    job?.actualEndAt || job?.endedAt || job?.finishedAt || job?.closedAt || endedAtRef.current || null;
   const actualEndDJ = actualEndIso ? dayjs(actualEndIso) : null;
-
   const otRoundedHours = useMemo(() => {
     if (!scheduledEndDJ || !actualEndDJ) return 0;
     const minutes = actualEndDJ.diff(scheduledEndDJ, "minute");
@@ -773,7 +794,7 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
-  // Build display rows
+  // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = (job.applications || []).find((a) => a.userId === uid) || {};
     const rec = (job.attendance || {})[uid] || {};
@@ -804,44 +825,46 @@ export default function PMJobDetails({ jobId }) {
   const tokenDir = extractDirFromToken(token);
   const dirMismatch = token && tokenDir && tokenDir !== scanDir;
 
+  /* zoom handlers */
+  const handleZoomChange = async (val) => {
+    setZoomCap((prev) => (prev ? { ...prev, value: val } : prev));
+    if (videoTrackRef.current && videoTrackRef.current.applyConstraints) {
+      try {
+        await videoTrackRef.current.applyConstraints({ advanced: [{ zoom: Number(val) }] });
+      } catch (e) {
+        console.warn("zoom apply failed", e);
+      }
+    }
+  };
+  const zoomMinus = () => {
+    if (!zoomCap) return;
+    const next = Math.max(zoomCap.min, (Number(zoomCap.value) || zoomCap.min) - (zoomCap.step || 0.1));
+    handleZoomChange(next);
+  };
+  const zoomPlus = () => {
+    if (!zoomCap) return;
+    const next = Math.min(zoomCap.max, (Number(zoomCap.value) || zoomCap.min) + (zoomCap.step || 0.1));
+    handleZoomChange(next);
+  };
+
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div className="card">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: 8,
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>{job.title}</div>
             <div style={{ color: "#374151", marginTop: 6 }}>{job.description || ""}</div>
 
-            <div
-              style={{
-                marginTop: 10,
-                display: "flex",
-                gap: 16,
-                flexWrap: "wrap",
-                color: "#374151",
-              }}
-            >
+            <div style={{ marginTop: 10, display: "flex", gap: 16, flexWrap: "wrap", color: "#374151" }}>
               <div>
                 <strong>{job.venue}</strong>
               </div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
-              <div>
-                Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
-              </div>
-              {isVirtual && (
-                <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>
-              )}
+              <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
+              {isVirtual && <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>}
             </div>
 
-            {/* End-time + OT display */}
             <div
               className="card"
               style={{
@@ -866,11 +889,7 @@ export default function PMJobDetails({ jobId }) {
                 <div>
                   <b>OT (rounded hours):</b>
                   <br />
-                  {actualEndDJ
-                    ? otRoundedHours > 0
-                      ? `${otRoundedHours} hour(s)`
-                      : "0 (no OT)"
-                    : "—"}
+                  {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
@@ -975,7 +994,6 @@ export default function PMJobDetails({ jobId }) {
       {/* Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
-
         {isVirtual && (
           <div className="card" style={{ padding: 12, marginBottom: 8, border: "1px dashed #e5e7eb" }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Virtual attendance</div>
@@ -1119,46 +1137,13 @@ export default function PMJobDetails({ jobId }) {
           />
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
-          {/* overlay frame like your screenshot */}
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              width: "70vw",
-              maxWidth: 420,
-              aspectRatio: "1 / 1",
-              transform: "translate(-50%, -50%)",
-              border: "2px solid rgba(255,255,255,0.45)",
-              borderRadius: 8,
-              boxSizing: "border-box",
-            }}
-          >
-            {/* red center line */}
-            <div
-              style={{
-                position: "absolute",
-                top: "50%",
-                left: 0,
-                right: 0,
-                height: 2,
-                background: "rgba(244,63,94,0.95)",
-                transform: "translateY(-50%)",
-              }}
-            />
-            {/* corner accents */}
-            {["tl", "tr", "bl", "br"].map((c) => {
-              const base = {
-                position: "absolute",
-                width: 26,
-                height: 26,
-                borderColor: "#38bdf8",
-              };
-              if (c === "tl") return <div key={c} style={{ ...base, top: -2, left: -2, borderLeftWidth: 3, borderTopWidth: 3, borderStyle: "solid" }} />;
-              if (c === "tr") return <div key={c} style={{ ...base, top: -2, right: -2, borderRightWidth: 3, borderTopWidth: 3, borderStyle: "solid" }} />;
-              if (c === "bl") return <div key={c} style={{ ...base, bottom: -2, left: -2, borderLeftWidth: 3, borderBottomWidth: 3, borderStyle: "solid" }} />;
-              return <div key={c} style={{ ...base, bottom: -2, right: -2, borderRightWidth: 3, borderBottomWidth: 3, borderStyle: "solid" }} />;
-            })}
+          {/* center scan box */}
+          <div className="pm-scan-box">
+            <div className="pm-scan-corner tl" />
+            <div className="pm-scan-corner tr" />
+            <div className="pm-scan-corner bl" />
+            <div className="pm-scan-corner br" />
+            <div className="pm-scan-line" />
           </div>
 
           {/* top bar */}
@@ -1199,22 +1184,10 @@ export default function PMJobDetails({ jobId }) {
               }}
             >
               <label>
-                <input
-                  type="radio"
-                  name="dir"
-                  checked={scanDir === "in"}
-                  onChange={() => setScanDir("in")}
-                />{" "}
-                IN
+                <input type="radio" name="dir" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
               </label>
               <label>
-                <input
-                  type="radio"
-                  name="dir"
-                  checked={scanDir === "out"}
-                  onChange={() => setScanDir("out")}
-                />{" "}
-                OUT
+                <input type="radio" name="dir" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> OUT
               </label>
             </div>
           </div>
@@ -1233,6 +1206,30 @@ export default function PMJobDetails({ jobId }) {
               gap: 6,
             }}
           >
+            {/* zoom bar */}
+            {zoomCap && (
+              <div style={{ display: "flex", justifyContent: "center", marginBottom: 6 }}>
+                <div className="pm-zoom-bar" style={{ width: "75%" }}>
+                  <button className="pm-zoom-btn" onClick={zoomMinus} type="button">
+                    🔍
+                  </button>
+                  <input
+                    className="pm-zoom-range"
+                    type="range"
+                    min={zoomCap.min}
+                    max={zoomCap.max}
+                    step={zoomCap.step || 0.1}
+                    value={zoomCap.value}
+                    onChange={(e) => handleZoomChange(e.target.value)}
+                    style={{ width: "100%" }}
+                  />
+                  <button className="pm-zoom-btn" onClick={zoomPlus} type="button">
+                    ➕
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 8 }}>
               <input
                 value={token}
@@ -1305,8 +1302,7 @@ export default function PMJobDetails({ jobId }) {
                   fontSize: 12,
                 }}
               >
-                Token is for <b>{tokenDir.toUpperCase()}</b> but you selected{" "}
-                <b>{scanDir.toUpperCase()}</b>.
+                Token is for <b>{tokenDir.toUpperCase()}</b> but you selected <b>{scanDir.toUpperCase()}</b>.
               </div>
             )}
             {scanMsg && (
