@@ -18,13 +18,18 @@ function haversineMeters(a, b) {
 
 function fmtRange(start, end) {
   try {
-    const s = dayjs(start), e = dayjs(end);
+    const s = dayjs(start),
+      e = dayjs(end);
     const sameDay = s.isSame(e, "day");
     const d = s.format("YYYY/MM/DD");
     const t1 = s.format("h:mm a");
     const t2 = e.format("h:mm a");
-    return sameDay ? `${d}  ${t1} — ${t2}` : `${s.format("YYYY/MM/DD h:mm a")} — ${e.format("YYYY/MM/DD h:mm a")}`;
-  } catch { return ""; }
+    return sameDay
+      ? `${d}  ${t1} — ${t2}`
+      : `${s.format("YYYY/MM/DD h:mm a")} — ${e.format("YYYY/MM/DD h:mm a")}`;
+  } catch {
+    return "";
+  }
 }
 const fmtTime = (t) => (t ? dayjs(t).format("HH:mm:ss") : "");
 const fmtDateTime = (t) => (t ? dayjs(t).format("YYYY/MM/DD HH:mm:ss") : "");
@@ -69,7 +74,8 @@ function extractLatLngFromToken(token) {
   // C) Last-two-floats pattern
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
-    const lat = Number(m[1]), lng = Number(m[2]);
+    const lat = Number(m[1]),
+      lng = Number(m[2]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;
@@ -127,10 +133,24 @@ function isVirtualJob(j) {
 /* ---------- Better error extraction for apiPost failures ---------- */
 function readApiError(err) {
   if (!err) return {};
-  if (typeof err === "string") { try { return JSON.parse(err); } catch { return { message: err }; } }
-  if (err.message) { try { return JSON.parse(err.message); } catch { return { message: err.message }; } }
+  if (typeof err === "string") {
+    try {
+      return JSON.parse(err);
+    } catch {
+      return { message: err };
+    }
+  }
+  if (err.message) {
+    try {
+      return JSON.parse(err.message);
+    } catch {
+      return { message: err.message };
+    }
+  }
   if (err.response && typeof err.response.json === "function") {
-    try { return err.response.json(); } catch {}
+    try {
+      return err.response.json();
+    } catch {}
   }
   return {};
 }
@@ -205,13 +225,20 @@ export default function PMJobDetails({ jobId }) {
       const a = await apiGet(`/jobs/${jobId}/applicants${bust}`).catch(() => []);
       setApplicants(a);
 
-      const l = await apiGet(`/jobs/${jobId}/loading${bust}`).catch(() => ({ quota: 0, applicants: [], participants: [] }));
+      const l = await apiGet(`/jobs/${jobId}/loading${bust}`).catch(() => ({
+        quota: 0,
+        applicants: [],
+        participants: [],
+      }));
       setLU(l);
     } finally {
       setLoading(false);
     }
   }
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [jobId]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId]);
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
 
@@ -304,7 +331,9 @@ export default function PMJobDetails({ jobId }) {
       const actualEndAt = new Date().toISOString();
 
       endedAtRef.current = actualEndAt;
-      try { localStorage.setItem(LOCAL_KEY(jobId), actualEndAt); } catch {}
+      try {
+        localStorage.setItem(LOCAL_KEY(jobId), actualEndAt);
+      } catch {}
       setStatusForce("ended");
       setJob((prev) => (prev ? { ...prev, status: "ended", actualEndAt } : prev));
 
@@ -334,7 +363,9 @@ export default function PMJobDetails({ jobId }) {
     try {
       await apiPost(`/jobs/${jobId}/reset`, { keepAttendance });
       endedAtRef.current = null;
-      try { localStorage.removeItem(LOCAL_KEY(jobId)); } catch {}
+      try {
+        localStorage.removeItem(LOCAL_KEY(jobId));
+      } catch {}
       setStatusForce("upcoming");
       setJob((prev) => (prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev));
       setScannerOpen(false);
@@ -384,13 +415,17 @@ export default function PMJobDetails({ jobId }) {
     hbTimerRef.current = setInterval(() => {
       if (loc) apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(() => {});
     }, 10000);
-    return () => { stopHeartbeat(); };
+    return () => {
+      stopHeartbeat();
+    };
     // eslint-disable-next-line
   }, [scannerOpen, jobId, loc?.lat, loc?.lng]);
 
   function stopHeartbeat() {
     if (watchIdRef.current != null) {
-      try { navigator.geolocation.clearWatch(watchIdRef.current); } catch {}
+      try {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      } catch {}
       watchIdRef.current = null;
     }
     if (hbTimerRef.current) {
@@ -434,7 +469,10 @@ export default function PMJobDetails({ jobId }) {
       if (video) {
         video.srcObject = stream;
         await new Promise((res) => {
-          const onMeta = () => { res(); video.removeEventListener("loadedmetadata", onMeta); };
+          const onMeta = () => {
+            res();
+            video.removeEventListener("loadedmetadata", onMeta);
+          };
           video.addEventListener("loadedmetadata", onMeta);
         });
         await video.play();
@@ -473,11 +511,15 @@ export default function PMJobDetails({ jobId }) {
     rafRef.current = null;
     scanningNowRef.current = false;
     if (videoRef.current?.srcObject) {
-      try { videoRef.current.srcObject.getTracks().forEach((t) => t.stop()); } catch {}
+      try {
+        videoRef.current.srcObject.getTracks().forEach((t) => t.stop());
+      } catch {}
       videoRef.current.srcObject = null;
     }
     if (streamRef.current) {
-      try { streamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+      try {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+      } catch {}
       streamRef.current = null;
     }
     detectorRef.current = null;
@@ -504,7 +546,8 @@ export default function PMJobDetails({ jobId }) {
       const cv = canvasRef.current;
       const ctx = canvasCtxRef.current;
 
-      const w = v.videoWidth, h = v.videoHeight;
+      const w = v.videoWidth,
+        h = v.videoHeight;
       if (!(w && h)) {
         scanningNowRef.current = false;
         rafRef.current = requestAnimationFrame(loopDetect);
@@ -566,6 +609,7 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
+    // optional local precheck
     const applicantLL = extractLatLngFromToken(token);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -578,20 +622,24 @@ export default function PMJobDetails({ jobId }) {
 
     const tokenDir = extractDirFromToken(token);
     if (tokenDir && tokenDir !== scanDir) {
-      setScanMsg(`Heads up: token is for "${tokenDir.toUpperCase()}" but you selected "${scanDir.toUpperCase()}". Proceeding…`);
+      setScanMsg(
+        `Heads up: token is for "${tokenDir.toUpperCase()}" but you selected "${scanDir.toUpperCase()}". Proceeding…`
+      );
     } else {
       setScanMsg("");
     }
 
     setScanBusy(true);
     try {
+      // server /scan already knows the direction from the token itself
       const r = await apiPost("/scan", {
         token,
-        direction: scanDir,
         scannerLat: loc.lat,
         scannerLng: loc.lng,
       });
-      setScanMsg(`✅ ${scanDir.toUpperCase()} recorded at ${dayjs(r.time).format("HH:mm:ss")}`);
+      setScanMsg(`✅ ${tokenDir ? tokenDir.toUpperCase() : scanDir.toUpperCase()} recorded at ${dayjs(r.time).format(
+        "HH:mm:ss"
+      )}`);
       setToken("");
       await load();
     } catch (e) {
@@ -599,9 +647,14 @@ export default function PMJobDetails({ jobId }) {
       try {
         const j = readApiError(e);
         if (j?.error === "jwt_error") msg = "Invalid/expired QR. Ask the part-timer to regenerate.";
-        else if (j?.error === "too_far") msg = `Too far from user (> ${j.maxDistanceMeters} m).`;
+        else if (j?.error === "too_far")
+          msg = `Too far from user (> ${j.maxDistanceMeters ?? maxM} m).`;
         else if (j?.error === "event_not_started") msg = "Event not started.";
         else if (j?.error === "bad_token_type") msg = "Bad token type.";
+        else if (j?.error === "token_missing_location") msg = "QR code was generated without location.";
+        else if (j?.error === "scanner_location_required")
+          msg = "Scanner location missing. Allow location on this device.";
+        else if (j?.error === "job_not_found") msg = "Job not found for this QR. Maybe for another job.";
         else if (j?.error) msg = String(j.error);
         else if (j?.message) msg = String(j.message);
       } catch {}
@@ -641,7 +694,12 @@ export default function PMJobDetails({ jobId }) {
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
 
   const actualEndIso =
-    job?.actualEndAt || job?.endedAt || job?.finishedAt || job?.closedAt || endedAtRef.current || null;
+    job?.actualEndAt ||
+    job?.endedAt ||
+    job?.finishedAt ||
+    job?.closedAt ||
+    endedAtRef.current ||
+    null;
   const actualEndDJ = actualEndIso ? dayjs(actualEndIso) : null;
 
   const otRoundedHours = useMemo(() => {
@@ -696,7 +754,9 @@ export default function PMJobDetails({ jobId }) {
             <div style={{ color: "#374151", marginTop: 6 }}>{job.description || ""}</div>
 
             <div style={{ marginTop: 10, display: "flex", gap: 16, flexWrap: "wrap", color: "#374151" }}>
-              <div><strong>{job.venue}</strong></div>
+              <div>
+                <strong>{job.venue}</strong>
+              </div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
               <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
@@ -706,19 +766,28 @@ export default function PMJobDetails({ jobId }) {
             {/* End-time + OT display */}
             <div
               className="card"
-              style={{ marginTop: 10, padding: 10, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 8 }}
+              style={{
+                marginTop: 10,
+                padding: 10,
+                background: "#f8fafc",
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+              }}
             >
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                 <div>
-                  <b>Initial End Time:</b><br />
+                  <b>Initial End Time:</b>
+                  <br />
                   {fmtDateTime(job.endTime) || "-"}
                 </div>
                 <div>
-                  <b>PM Ended At:</b><br />
+                  <b>PM Ended At:</b>
+                  <br />
                   {actualEndDJ ? fmtDateTime(actualEndDJ.toISOString()) : "— (not ended)"}
                 </div>
                 <div>
-                  <b>OT (rounded hours):</b><br />
+                  <b>OT (rounded hours):</b>
+                  <br />
                   {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
                 </div>
               </div>
@@ -736,21 +805,35 @@ export default function PMJobDetails({ jobId }) {
               {startBusy ? "Starting…" : isVirtual ? "Start event" : "Start event & open scanner"}
             </button>
           ) : isOngoing ? (
-            <button className="btn gray" disabled>Started</button>
+            <button className="btn gray" disabled>
+              Started
+            </button>
           ) : (
-            <button className="btn gray" disabled>Ended</button>
+            <button className="btn gray" disabled>
+              Ended
+            </button>
           )}
 
           {isOngoing && !isVirtual && !scannerOpen && (
-            <button className="btn" onClick={openScanner}>Open scanner</button>
+            <button className="btn" onClick={openScanner}>
+              Open scanner
+            </button>
           )}
           {!isVirtual && scannerOpen && (
-            <button className="btn gray" onClick={closeScanner}>Hide scanner</button>
+            <button className="btn gray" onClick={closeScanner}>
+              Hide scanner
+            </button>
           )}
 
-          <button className="btn" onClick={() => resetEvent(true)}>Reset (keep attendance)</button>
-          <button className="btn danger" onClick={() => resetEvent(false)}>Reset (delete attendance)</button>
-          <button className="btn" onClick={endEvent}>End event</button>
+          <button className="btn" onClick={() => resetEvent(true)}>
+            Reset (keep attendance)
+          </button>
+          <button className="btn danger" onClick={() => resetEvent(false)}>
+            Reset (delete attendance)
+          </button>
+          <button className="btn" onClick={endEvent}>
+            End event
+          </button>
         </div>
       </div>
 
@@ -790,11 +873,17 @@ export default function PMJobDetails({ jobId }) {
                     />
                     <span>Confirmed</span>
                   </label>
-                ) : ("—")}
+                ) : (
+                  "—"
+                )}
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <button className="btn green" onClick={() => setApproval(a.userId, true)}>Approve</button>
-                <button className="btn danger" onClick={() => setApproval(a.userId, false)}>Reject</button>
+                <button className="btn green" onClick={() => setApproval(a.userId, true)}>
+                  Approve
+                </button>
+                <button className="btn danger" onClick={() => setApproval(a.userId, false)}>
+                  Reject
+                </button>
               </div>
             </div>
           ))
@@ -824,7 +913,9 @@ export default function PMJobDetails({ jobId }) {
                 <tbody>
                   {(job.approved || []).length === 0 ? (
                     <tr>
-                      <td colSpan={2} style={{ color: "#6b7280" }}>No approved users yet.</td>
+                      <td colSpan={2} style={{ color: "#6b7280" }}>
+                        No approved users yet.
+                      </td>
                     </tr>
                   ) : (
                     (job.approved || []).map((uid) => {
@@ -879,7 +970,9 @@ export default function PMJobDetails({ jobId }) {
                 <tbody>
                   {approvedRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ color: "#6b7280" }}>No approved users yet.</td>
+                      <td colSpan={6} style={{ color: "#6b7280" }}>
+                        No approved users yet.
+                      </td>
                     </tr>
                   ) : (
                     approvedRows.map((r) => (
@@ -938,14 +1031,23 @@ export default function PMJobDetails({ jobId }) {
 
           <div className="grid">
             <div className="card" style={{ gridColumn: "span 8" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 6,
+                }}
+              >
                 <label style={{ fontWeight: 700 }}>Camera (auto-scan)</label>
                 {!camActive ? (
                   <button className="btn" onClick={startCamera} disabled={!camSupported}>
                     {camSupported ? "Use camera (auto-scan)" : "Camera not available"}
                   </button>
                 ) : (
-                  <button className="btn gray" onClick={stopCamera}>Stop camera</button>
+                  <button className="btn gray" onClick={stopCamera}>
+                    Stop camera
+                  </button>
                 )}
               </div>
               <video
@@ -953,7 +1055,13 @@ export default function PMJobDetails({ jobId }) {
                 muted
                 playsInline
                 autoPlay
-                style={{ width: "100%", maxHeight: 360, background: "#000", borderRadius: 8, display: camActive ? "block" : "none" }}
+                style={{
+                  width: "100%",
+                  maxHeight: 360,
+                  background: "#000",
+                  borderRadius: 8,
+                  display: camActive ? "block" : "none",
+                }}
               />
               <canvas ref={canvasRef} style={{ display: "none" }} />
               {!camActive && (
@@ -966,12 +1074,21 @@ export default function PMJobDetails({ jobId }) {
             <div className="card" style={{ gridColumn: "span 4" }}>
               <label style={{ fontWeight: 700 }}>Token (from QR)</label>
               <div style={{ display: "flex", gap: 8 }}>
-                <input value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste decoded QR token here…" />
-                <button className="btn" type="button" onClick={pasteFromClipboard}>Paste</button>
+                <input
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="Paste decoded QR token here…"
+                />
+                <button className="btn" type="button" onClick={pasteFromClipboard}>
+                  Paste
+                </button>
               </div>
               <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10 }}>
-                {loc ? <>Scanner location: {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)} (heartbeat active)</>
-                     : <>Waiting for location… allow permission.</>}
+                {loc ? (
+                  <>Scanner location: {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)} (heartbeat active)</>
+                ) : (
+                  <>Waiting for location… allow permission.</>
+                )}
               </div>
 
               {precheck && (
@@ -990,18 +1107,36 @@ export default function PMJobDetails({ jobId }) {
               )}
 
               {dirMismatch && (
-                <div style={{ marginTop: 8, padding: 8, background: "#fffbeb", border: "1px solid var(--border)", borderRadius: 8 }}>
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: 8,
+                    background: "#fffbeb",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                  }}
+                >
                   Token is for <b>{tokenDir.toUpperCase()}</b> but you selected <b>{scanDir.toUpperCase()}</b>.
                 </div>
               )}
 
               {scanMsg && (
-                <div style={{ marginTop: 10, padding: 8, background: "#f8fafc", border: "1px solid var(--border)", borderRadius: 8 }}>
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: 8,
+                    background: "#f8fafc",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                  }}
+                >
                   {scanMsg}
                 </div>
               )}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-                <button className="btn" onClick={closeScanner}>Hide</button>
+                <button className="btn" onClick={closeScanner}>
+                  Hide
+                </button>
                 <button className="btn primary" disabled={scanBusy || !token} onClick={doScan}>
                   {scanBusy ? "Scanning…" : "Scan"}
                 </button>
