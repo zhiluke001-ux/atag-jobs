@@ -180,7 +180,7 @@ export default function PMJobDetails({ jobId }) {
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
-  const pendingTokenRef = useRef(null); // for "GPS not ready yet"
+  const pendingTokenRef = useRef(null); // for “GPS not ready yet”
 
   // end time cache
   const endedAtRef = useRef(null);
@@ -427,7 +427,6 @@ export default function PMJobDetails({ jobId }) {
     }
 
     if (!loc) {
-      // GPS not yet ready: stash the token and wait
       setScanMsg("Getting your location… allow location and try again.");
       pendingTokenRef.current = useToken;
       setTimeout(() => {
@@ -436,7 +435,7 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // local distance check 500m
+    // local distance precheck
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -604,11 +603,18 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
-  // ----- build rows for attendance -----
+  // helper to find applicant data for an approved id
+  function findApplicant(id) {
+    return (
+      applicants.find((a) => a.userId === id || a.email === id) ||
+      (job.applications || []).find((a) => a.userId === id || a.email === id) ||
+      null
+    );
+  }
+
+  // display rows
   const approvedRows = (job.approved || []).map((uid) => {
-    // try to match by userId OR by email
-    const app =
-      (job.applications || []).find((a) => a.userId === uid || a.email === uid) || {};
+    const app = findApplicant(uid) || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
     return {
@@ -639,7 +645,7 @@ export default function PMJobDetails({ jobId }) {
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
-      {/* --- Job header --- */}
+      {/* header */}
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
           <div>
@@ -780,109 +786,64 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* Attendance */}
+      {/* Attendance (fixed) */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
-
-        {isVirtual ? (
-          <div className="card" style={{ padding: 12, border: "1px dashed #e5e7eb" }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Virtual attendance</div>
-            <table width="100%" cellPadding="8" style={{ borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #ddd" }}>
-                  <th align="left">Email</th>
-                  <th align="center">Present</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(job.approved || []).length === 0 ? (
-                  <tr>
-                    <td colSpan={2} style={{ color: "#6b7280" }}>
-                      No approved users yet.
-                    </td>
-                  </tr>
-                ) : (
-                  (job.approved || []).map((uid) => {
-                    const app =
-                      (job.applications || []).find((a) => a.userId === uid || a.email === uid) || {};
-                    const rec =
-                      (job.attendance || {})[uid] ||
-                      (job.attendance || {})[app.userId] ||
-                      (job.attendance || {})[app.email] ||
-                      {};
-                    const present = !!rec.in && !!rec.out;
-                    return (
-                      <tr key={uid} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                        <td>{app?.email || uid}</td>
-                        <td align="center">
-                          <input
-                            type="checkbox"
-                            checked={present}
-                            onChange={(e) => markVirtualPresent(uid, e.target.checked)}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              className="table"
-              style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}
-            >
-              <thead>
+        <div style={{ overflowX: "auto" }}>
+          <table
+            className="table"
+            style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}
+          >
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
+              </tr>
+            </thead>
+            <tbody>
+              {approvedRows.length === 0 ? (
                 <tr>
-                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
-                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
-                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
-                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
-                  <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
-                  <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
+                  <td colSpan={6} style={{ color: "#6b7280", padding: 8 }}>
+                    No approved users yet.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {approvedRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} style={{ color: "#6b7280", padding: 8 }}>
-                      No approved users yet.
+              ) : (
+                approvedRows.map((r) => (
+                  <tr key={r.userId || r.email} style={{ borderTop: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "8px 4px" }}>{r.email}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
+                    <td
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "center",
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                      }}
+                    >
+                      {fmtTime(r.in)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "center",
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                      }}
+                    >
+                      {fmtTime(r.out)}
                     </td>
                   </tr>
-                ) : (
-                  approvedRows.map((r) => (
-                    <tr key={r.userId || r.email} style={{ borderTop: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "8px 4px" }}>{r.email}</td>
-                      <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
-                      <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
-                      <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
-                      <td
-                        style={{
-                          padding: "8px 4px",
-                          textAlign: "center",
-                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                        }}
-                      >
-                        {fmtTime(r.in)}
-                      </td>
-                      <td
-                        style={{
-                          padding: "8px 4px",
-                          textAlign: "center",
-                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                        }}
-                      >
-                        {fmtTime(r.out)}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* ---------- SCANNER OVERLAY ---------- */}
