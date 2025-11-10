@@ -71,7 +71,7 @@ function extractLatLngFromToken(token) {
     const lng = Number(sp.get("lng"));
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
-  // C) "3.1,101.6"
+  // C) "3.123,101.234"
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
     const lat = Number(m[1]),
@@ -155,9 +155,10 @@ function readApiError(err) {
   return {};
 }
 
-/* --------------- html5-qrcode loader --------------- */
+/* ---------- html5-qrcode loader ---------- */
 const QR_LIB_SRC =
   "https://unpkg.com/html5-qrcode@2.3.10/dist/html5-qrcode.min.js";
+
 function loadHtml5QrLib() {
   return new Promise((resolve, reject) => {
     if (window.Html5Qrcode) return resolve(true);
@@ -176,18 +177,19 @@ export default function PMJobDetails({ jobId }) {
   const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
   const [loading, setLoading] = useState(true);
 
+  // status override
   const [statusForce, setStatusForce] = useState(null);
   const effectiveStatus = (s) => statusForce ?? s ?? "upcoming";
 
-  // scanner state
+  // scanner
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanDir, setScanDir] = useState("in");
   const [token, setToken] = useState("");
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
-  const [startBusy, setStartBusy] = useState(false);
   const [scanSuccess, setScanSuccess] = useState(false);
   const [scanSuccessMsg, setScanSuccessMsg] = useState("");
+  const [startBusy, setStartBusy] = useState(false);
   const scannerCardRef = useRef(null);
 
   // html5-qrcode instance
@@ -199,11 +201,11 @@ export default function PMJobDetails({ jobId }) {
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
 
-  // Persist end time
+  // persist actual end
   const endedAtRef = useRef(null);
   const LOCAL_KEY = (id) => `atag.jobs.${id}.actualEndAt`;
 
-  /* inject CSS for overlay once */
+  /* inject simple scanner styles once */
   useEffect(() => {
     if (document.getElementById("pm-scan-css")) return;
     const style = document.createElement("style");
@@ -246,7 +248,7 @@ export default function PMJobDetails({ jobId }) {
     document.head.appendChild(style);
   }, []);
 
-  /* ---------------- load data ---------------- */
+  /* load data */
   async function load() {
     setLoading(true);
     const bust = `?_=${Date.now()}`;
@@ -386,7 +388,7 @@ export default function PMJobDetails({ jobId }) {
     stopHeartbeat();
   }
 
-  /* start html5-qrcode when scanner is open */
+  /* start html5-qrcode when overlay opens */
   useEffect(() => {
     if (scannerOpen && !isVirtual) {
       startHtml5Scanner();
@@ -397,7 +399,7 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, isVirtual]);
 
-  /* auto close if job becomes virtual or ended */
+  /* auto close if job ended / virtual */
   useEffect(() => {
     if ((isVirtual || effectiveStatus(job?.status) === "ended") && scannerOpen) {
       closeScanner();
@@ -405,7 +407,7 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVirtual, job?.status, scannerOpen]);
 
-  /* heartbeat while scanner open */
+  /* heartbeat while open */
   useEffect(() => {
     if (!scannerOpen) return;
     if ("geolocation" in navigator) {
@@ -443,7 +445,7 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
-  /* ------------ html5-qrcode setup ------------ */
+  /* html5-qrcode setup */
   async function startHtml5Scanner() {
     try {
       await loadHtml5QrLib();
@@ -453,11 +455,9 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
     if (!document.getElementById("pm-qr-reader")) {
-      // the overlay not rendered yet
       return;
     }
     if (qrRef.current) {
-      // already started
       return;
     }
 
@@ -465,15 +465,16 @@ export default function PMJobDetails({ jobId }) {
       const qr = new window.Html5Qrcode("pm-qr-reader", { verbose: false });
       qrRef.current = qr;
 
-      const onSuccess = async (decodedText /*, decodedResult */) => {
+      const onSuccess = async (decodedText) => {
         if (!decodedText) return;
         if (decodedText === lastScannedRef.current) return;
         lastScannedRef.current = decodedText;
         setToken(decodedText);
         await doScan(decodedText);
       };
+
       const onError = () => {
-        // ignore errors
+        // ignore frame errors
       };
 
       await qr.start(
@@ -527,7 +528,6 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // optional local precheck
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -951,14 +951,9 @@ export default function PMJobDetails({ jobId }) {
             flexDirection: "column",
           }}
         >
-          {/* this div is where html5-qrcode will put the video */}
-          <div
-            id="pm-qr-reader"
-            style={{
-              width: "100%",
-              height: "100%",
-            }}
-          />
+          {/* html5-qrcode will put the video here */}
+          <div id="pm-qr-reader" style={{ width: "100%", height: "100%" }} />
+
           {/* top bar */}
           <div
             style={{
@@ -1005,7 +1000,7 @@ export default function PMJobDetails({ jobId }) {
             </div>
           </div>
 
-          {/* overlay box + line */}
+          {/* overlay box */}
           <div className="pm-scan-box">
             <div className="pm-scan-corner tl" />
             <div className="pm-scan-corner tr" />
