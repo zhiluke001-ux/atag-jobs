@@ -34,7 +34,7 @@ function fmtRange(start, end) {
 const fmtTime = (t) => (t ? dayjs(t).format("HH:mm:ss") : "");
 const fmtDateTime = (t) => (t ? dayjs(t).format("YYYY/MM/DD HH:mm:ss") : "");
 
-/* ----- Token helpers (same as original working one) ----- */
+/* ----- Token helpers ----- */
 function b64urlDecode(str) {
   try {
     const pad = (s) => s + "===".slice((s.length + 3) % 4);
@@ -51,7 +51,7 @@ function b64urlDecode(str) {
 function extractLatLngFromToken(token) {
   if (!token || typeof token !== "string") return null;
 
-  // JWT-like
+  // A) JWT-like
   if (token.includes(".")) {
     const parts = token.split(".");
     if (parts[1]) {
@@ -63,7 +63,7 @@ function extractLatLngFromToken(token) {
       } catch {}
     }
   }
-  // querystring
+  // B) querystring
   try {
     const qs = token.includes("?") ? token.split("?")[1] : token;
     const sp = new URLSearchParams(qs);
@@ -71,7 +71,7 @@ function extractLatLngFromToken(token) {
     const lng = Number(sp.get("lng"));
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
-  // last two floats
+  // C) last-two-floats
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
     const lat = Number(m[1]),
@@ -110,7 +110,7 @@ const applBodyRow = {
   borderBottom: "1px solid var(--border, #f1f5f9)",
 };
 
-/* robust virtual detector (keep as-is) */
+/* robust virtual detector */
 function isVirtualJob(j) {
   if (!j) return false;
   if (j.isVirtual === true) return true;
@@ -167,8 +167,8 @@ export default function PMJobDetails({ jobId }) {
   const [scanBusy, setScanBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
 
-  // popup in middle
-  const [scanPopup, setScanPopup] = useState(null); // {kind:'success'|'error', text:''}
+  // popup center
+  const [scanPopup, setScanPopup] = useState(null); // {kind, text}
 
   // camera
   const videoRef = useRef(null);
@@ -178,7 +178,7 @@ export default function PMJobDetails({ jobId }) {
   const lastDecodedRef = useRef("");
   const [camReady, setCamReady] = useState(false);
 
-  // geo (same idea as original – watch + heartbeat)
+  // geo
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
@@ -187,9 +187,9 @@ export default function PMJobDetails({ jobId }) {
   const endedAtRef = useRef(null);
   const LOCAL_KEY = (id) => `atag.jobs.${id}.actualEndAt`;
 
-  /* ---------- load job ---------- */
-  async function load() {
-    setLoading(true);
+  /* ---------- load job (with silent) ---------- */
+  async function load(silent = false) {
+    if (!silent) setLoading(true);
     const bust = `?_=${Date.now()}`;
     try {
       const j = await apiGet(`/jobs/${jobId}${bust}`);
@@ -229,7 +229,7 @@ export default function PMJobDetails({ jobId }) {
         console.error("load job failed", e);
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
   useEffect(() => {
@@ -238,6 +238,19 @@ export default function PMJobDetails({ jobId }) {
   }, [jobId]);
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
+
+  /* ---------- prevent page scroll when scanner open ---------- */
+  useEffect(() => {
+    if (!scannerOpen) return;
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
+    };
+  }, [scannerOpen]);
 
   /* ---------- qr script loader (jsQR) ---------- */
   function ensureJsQR() {
@@ -274,7 +287,7 @@ export default function PMJobDetails({ jobId }) {
 
   function stopCamera() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = null;
+    rafRef = { current: null };
     setCamReady(false);
 
     if (streamRef.current) {
@@ -341,7 +354,7 @@ export default function PMJobDetails({ jobId }) {
     rafRef.current = requestAnimationFrame(loop);
   }
 
-  /* ---------- geo heartbeat while scanner open (same as original idea) ---------- */
+  /* ---------- geo heartbeat while scanner open ---------- */
   useEffect(() => {
     if (!scannerOpen) return;
     if ("geolocation" in navigator) {
@@ -384,7 +397,6 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
-  // AUTO submit, but do NOT block if location is not ready – just try and re-allow same QR
   async function handleDecoded(decoded) {
     setToken(decoded);
     await doScan(decoded);
@@ -409,7 +421,6 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
     if (!loc) {
-      // same message as original
       setScanMsg("Getting your location… allow location and try again.");
       // allow same QR again
       setTimeout(() => {
@@ -418,7 +429,7 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // distance pre-check (keep 500m rule)
+    // local distance check (500m)
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -428,7 +439,6 @@ export default function PMJobDetails({ jobId }) {
         setScanMsg("❌ " + text);
         setScanPopup({ kind: "error", text });
         setTimeout(() => setScanPopup(null), 1800);
-        // allow re-scan
         setTimeout(() => {
           lastDecodedRef.current = "";
         }, 1200);
@@ -456,8 +466,10 @@ export default function PMJobDetails({ jobId }) {
       setScanMsg("✅ " + msg);
       setScanPopup({ kind: "success", text: msg });
       vibrateOk();
-      setTimeout(() => setScanPopup(null), 1600);
-      await load();
+      setTimeout(() => setScanPopup(null), 1500);
+
+      // refresh data WITHOUT killing camera
+      load(true);
     } catch (e) {
       let msg = "Scan failed.";
       const j = readApiError(e);
@@ -472,7 +484,7 @@ export default function PMJobDetails({ jobId }) {
       console.error("scan error", e);
     } finally {
       setScanBusy(false);
-      // IMPORTANT: allow same QR again so user doesn't get stuck
+      // VERY IMPORTANT: allow re-scan of same QR
       setTimeout(() => {
         lastDecodedRef.current = "";
       }, 1200);
@@ -489,7 +501,7 @@ export default function PMJobDetails({ jobId }) {
       setJob((prev) => (prev ? { ...prev, status: "ongoing" } : prev));
       await apiPost(`/jobs/${jobId}/start`, {});
       if (!isVirtual) openScanner();
-      setTimeout(load, 200);
+      setTimeout(() => load(true), 200);
     } catch {
       await load();
     } finally {
@@ -851,7 +863,7 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* ---------- FULLSCREEN SIMPLE SCANNER (responsive) ---------- */}
+      {/* ---------- FULLSCREEN SIMPLE SCANNER ---------- */}
       {!isVirtual && scannerOpen && (
         <div
           style={{
@@ -1021,12 +1033,10 @@ export default function PMJobDetails({ jobId }) {
               {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
             </div>
             <div style={{ color: "white", fontSize: 11 }}>
-              {loc
-                ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`
-                : "Getting your location…"}
+              {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
             {scanMsg && (
-              <div style={{ color: "white", fontSize: 11 }}>
+              <div style={{ color: "white", fontSize: 11, maxWidth: "100%" }}>
                 {scanMsg}
               </div>
             )}
@@ -1040,7 +1050,8 @@ export default function PMJobDetails({ jobId }) {
                 top: "50%",
                 left: "50%",
                 transform: "translate(-50%, -50%)",
-                background: scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
+                background:
+                  scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
                 color: "white",
                 padding: "10px 20px",
                 borderRadius: 999,
