@@ -26,7 +26,7 @@ const money = (v) => {
 };
 
 // ---- Discord/constants ----
-const DISCORD_URL = "https://discord.gg/AwGaCG3W";
+const DISCORD_URL = "https://discord.gg/ZAeR28z3p2";
 const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
 // Compact button helper to keep actions on a single line without overflowing
 const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
