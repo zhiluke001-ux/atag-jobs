@@ -1,11 +1,14 @@
-// auth.js
-import { apiPost, setToken, clearToken } from "./api";
+// web/src/auth.js
+import { apiPost, apiGet, setToken, clearToken } from "./api";
 
-const TOKEN_KEY = "token"; // optional, only if your ./api doesn't already fix the key
+const TOKEN_KEY = "token";
 
 export function getToken() {
-  // if ./api already stores to localStorage, this just reads it
-  return localStorage.getItem(TOKEN_KEY) || null;
+  try {
+    return localStorage.getItem(TOKEN_KEY) || null;
+  } catch {
+    return null;
+  }
 }
 
 export function isLoggedIn() {
@@ -13,28 +16,37 @@ export function isLoggedIn() {
 }
 
 export async function login(identifier, password) {
+  // will throw if /login returns 4xx
   const res = await apiPost("/login", { identifier, password });
   setToken(res.token);
   return res.user;
 }
 
-// Allow role selection at sign-up
-const VALID_ROLES = ["part-timer", "pm", "admin"];
+// call this to see if current token is actually usable
+export async function fetchCurrentUser() {
+  try {
+    const me = await apiGet("/me");
+    return me;
+  } catch (e) {
+    return null;
+  }
+}
 
 export async function registerUser({
   email,
   username,
   name,
   password,
-  role = "part-timer"
+  role = "part-timer",
 }) {
+  const VALID_ROLES = ["part-timer", "pm", "admin"];
   const pickedRole = VALID_ROLES.includes(role) ? role : "part-timer";
   const res = await apiPost("/register", {
     email,
     username,
     name,
     password,
-    role: pickedRole
+    role: pickedRole,
   });
   setToken(res.token);
   return res.user;
