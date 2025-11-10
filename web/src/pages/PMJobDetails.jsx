@@ -6,7 +6,8 @@ import { apiGet, apiPost } from "../api";
 /* ---------------- helpers ---------------- */
 const toRad = (d) => (d * Math.PI) / 180;
 function haversineMeters(a, b) {
-  if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null) return null;
+  if (!a || !b || a.lat == null || a.lng == null || b.lat == null || b.lng == null)
+    return null;
   const R = 6371000;
   const dLat = toRad(b.lat - a.lat);
   const dLng = toRad(b.lng - a.lng);
@@ -18,8 +19,8 @@ function haversineMeters(a, b) {
 
 function fmtRange(start, end) {
   try {
-    const s = dayjs(start),
-      e = dayjs(end);
+    const s = dayjs(start);
+    const e = dayjs(end);
     const sameDay = s.isSame(e, "day");
     const d = s.format("YYYY/MM/DD");
     const t1 = s.format("h:mm a");
@@ -72,7 +73,8 @@ function extractLatLngFromToken(token) {
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
   // C) Last-two-floats pattern
-  const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
+  const m =
+    token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/) || null;
   if (m) {
     const lat = Number(m[1]),
       lng = Number(m[2]);
@@ -161,20 +163,21 @@ export default function PMJobDetails({ jobId }) {
   const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
   const [loading, setLoading] = useState(true);
 
-  // Status override: null | 'upcoming' | 'ongoing' | 'ended'
   const [statusForce, setStatusForce] = useState(null);
   const effectiveStatus = (s) => statusForce ?? s ?? "upcoming";
 
-  // Scanner state
+  // scanner state
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanDir, setScanDir] = useState("in");
   const [token, setToken] = useState("");
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
+  const [scanSuccess, setScanSuccess] = useState(false);
+  const [scanSuccessMsg, setScanSuccessMsg] = useState("");
   const scannerCardRef = useRef(null);
 
-  // Camera / QR
+  // camera
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const canvasCtxRef = useRef(null);
@@ -182,19 +185,20 @@ export default function PMJobDetails({ jobId }) {
   const rafRef = useRef(null);
   const streamRef = useRef(null);
   const scanningNowRef = useRef(false);
+  const lastTokenRef = useRef(""); // avoid scanning same code repeatedly
   const [camActive, setCamActive] = useState(false);
   const [camSupported, setCamSupported] = useState(false);
-  const usingJsQRRef = useRef(false);
 
-  // Geo (PM scanner location)
+  // Geo
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
 
-  // Persist PM-clicked end time across reloads
+  // Persist end time
   const endedAtRef = useRef(null);
   const LOCAL_KEY = (id) => `atag.jobs.${id}.actualEndAt`;
 
+  /* ---------------- load data ---------------- */
   async function load() {
     setLoading(true);
     const bust = `?_=${Date.now()}`;
@@ -209,7 +213,9 @@ export default function PMJobDetails({ jobId }) {
         merged.closedAt ||
         null;
 
-      const cachedEnd = LOCAL_KEY(jobId) ? localStorage.getItem(LOCAL_KEY(jobId)) : null;
+      const cachedEnd = LOCAL_KEY(jobId)
+        ? localStorage.getItem(LOCAL_KEY(jobId))
+        : null;
 
       if (statusForce === "ended" || merged.status === "ended") {
         if (!serverAltEnd) {
@@ -247,7 +253,7 @@ export default function PMJobDetails({ jobId }) {
     setCamSupported(!!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
   }, []);
 
-  /* helper: load jsQR once */
+  /* ---- jsQR loader (fallback) ---- */
   function loadJsQR() {
     return new Promise((resolve, reject) => {
       if (window.jsQR) return resolve(true);
@@ -260,25 +266,26 @@ export default function PMJobDetails({ jobId }) {
     });
   }
 
-  // ensure we have either BarcodeDetector or jsQR
+  /* ensure we have detector or jsQR */
   async function ensureDetectorReady() {
     if ("BarcodeDetector" in window) {
       try {
         const fmts = (await window.BarcodeDetector.getSupportedFormats?.()) || [];
         if (fmts.includes("qr_code")) {
           detectorRef.current = new window.BarcodeDetector({ formats: ["qr_code"] });
-          usingJsQRRef.current = false;
+          console.log("[scanner] using native BarcodeDetector");
           return true;
         }
       } catch {
-        // fall through
+        // fallback to jsQR
       }
     }
     try {
       await loadJsQR();
-      usingJsQRRef.current = true;
+      console.log("[scanner] using jsQR fallback");
       return true;
-    } catch {
+    } catch (e) {
+      console.warn("[scanner] no QR capability", e);
       return false;
     }
   }
@@ -313,7 +320,6 @@ export default function PMJobDetails({ jobId }) {
         openScanner();
       } else {
         setScannerOpen(false);
-        stopCamera();
         stopHeartbeat();
       }
       setTimeout(load, 200);
@@ -342,7 +348,9 @@ export default function PMJobDetails({ jobId }) {
         const presentIds = Object.keys(attendance).filter((uid) => !!attendance[uid]?.in);
         await Promise.all(
           presentIds.map((uid) =>
-            apiPost(`/jobs/${jobId}/attendance/mark`, { userId: uid, outAt: actualEndAt }).catch(() => {})
+            apiPost(`/jobs/${jobId}/attendance/mark`, { userId: uid, outAt: actualEndAt }).catch(
+              () => {}
+            )
           )
         );
       }
@@ -365,7 +373,9 @@ export default function PMJobDetails({ jobId }) {
         localStorage.removeItem(LOCAL_KEY(jobId));
       } catch {}
       setStatusForce("upcoming");
-      setJob((prev) => (prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev));
+      setJob((prev) =>
+        prev ? { ...prev, status: "upcoming", actualEndAt: null } : prev
+      );
       setScannerOpen(false);
       stopCamera();
       stopHeartbeat();
@@ -380,8 +390,10 @@ export default function PMJobDetails({ jobId }) {
   function openScanner() {
     setScanMsg("");
     setToken("");
-    setScanDir("in");
+    lastTokenRef.current = "";
+    setScanSuccess(false);
     setScannerOpen(true);
+    // camera will auto-start in effect below
     setTimeout(() => {
       scannerCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 60);
@@ -391,6 +403,14 @@ export default function PMJobDetails({ jobId }) {
     stopCamera();
     stopHeartbeat();
   }
+
+  /* auto start camera when scanner opens */
+  useEffect(() => {
+    if (scannerOpen && !camActive && !isVirtual) {
+      startCamera();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scannerOpen, isVirtual]);
 
   /* Auto-close scanner if job becomes virtual or ends */
   useEffect(() => {
@@ -411,7 +431,10 @@ export default function PMJobDetails({ jobId }) {
       );
     }
     hbTimerRef.current = setInterval(() => {
-      if (loc) apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(() => {});
+      if (loc)
+        apiPost(`/jobs/${jobId}/scanner/heartbeat`, { lat: loc.lat, lng: loc.lng }).catch(
+          () => {}
+        );
     }, 10000);
     return () => {
       stopHeartbeat();
@@ -478,6 +501,7 @@ export default function PMJobDetails({ jobId }) {
       const ready = await ensureVideoReady(videoRef.current);
       if (!ready) throw new Error("Camera failed to initialize.");
 
+      // canvas sizing
       const cv = canvasRef.current;
       const vw = videoRef.current.videoWidth;
       const vh = videoRef.current.videoHeight;
@@ -487,7 +511,9 @@ export default function PMJobDetails({ jobId }) {
 
       const ok = await ensureDetectorReady();
       if (!ok) {
-        setScanMsg("Camera ready, but QR decoder not available. Please paste token.");
+        setScanMsg(
+          "Camera ready, but QR decoder not available. Paste the token below."
+        );
       } else {
         setScanMsg("Camera ready — scanning…");
       }
@@ -521,13 +547,21 @@ export default function PMJobDetails({ jobId }) {
     setCamActive(false);
   }
 
-  useEffect(() => {
-    return () => {
-      stopCamera();
-      stopHeartbeat();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => () => stopCamera(), []);
+
+  function vibrateOk() {
+    try {
+      if (navigator.vibrate) navigator.vibrate(120);
+    } catch {}
+  }
+
+  async function handleDecoded(decoded) {
+    // prevent repeated hits on same frame
+    if (!decoded || decoded === lastTokenRef.current) return;
+    lastTokenRef.current = decoded;
+    setToken(decoded);
+    await doScan(decoded);
+  }
 
   async function loopDetect() {
     if (!camActive) return;
@@ -547,8 +581,8 @@ export default function PMJobDetails({ jobId }) {
       const cv = canvasRef.current;
       const ctx = canvasCtxRef.current;
 
-      const w = v.videoWidth,
-        h = v.videoHeight;
+      const w = v.videoWidth;
+      const h = v.videoHeight;
       if (!(w && h)) {
         scanningNowRef.current = false;
         rafRef.current = requestAnimationFrame(loopDetect);
@@ -559,7 +593,7 @@ export default function PMJobDetails({ jobId }) {
 
       let decoded = null;
 
-      // try BarcodeDetector
+      // try native detector first
       if (detectorRef.current) {
         try {
           const codes = await detectorRef.current.detect(cv);
@@ -567,25 +601,27 @@ export default function PMJobDetails({ jobId }) {
             decoded = codes[0].rawValue;
           }
         } catch {
-          // fall back
+          // ignore
         }
       }
 
-      // fallback: jsQR
+      // fallback to jsQR
       if (!decoded && window.jsQR) {
         const img = ctx.getImageData(0, 0, w, h);
-        const result = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "attemptBoth" });
+        const result = window.jsQR(img.data, img.width, img.height, {
+          inversionAttempts: "attemptBoth",
+        });
         if (result && result.data) {
           decoded = result.data;
         }
       }
 
       if (decoded) {
-        setToken(decoded);
-        setScanMsg("QR detected — ready to Scan.");
+        console.log("[scanner] decoded:", decoded);
+        handleDecoded(decoded);
       }
     } catch (e) {
-      // ignore
+      // ignore, continue
     } finally {
       scanningNowRef.current = false;
     }
@@ -600,8 +636,9 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
-  async function doScan() {
-    if (!token) {
+  async function doScan(manualToken) {
+    const useToken = manualToken || token;
+    if (!useToken) {
       setScanMsg("No token. Paste the QR token or use the camera.");
       return;
     }
@@ -610,8 +647,7 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // optional local precheck
-    const applicantLL = extractLatLngFromToken(token);
+    const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
       const d = haversineMeters(loc, applicantLL);
@@ -621,7 +657,7 @@ export default function PMJobDetails({ jobId }) {
       }
     }
 
-    const tokenDir = extractDirFromToken(token);
+    const tokenDir = extractDirFromToken(useToken);
     if (tokenDir && tokenDir !== scanDir) {
       setScanMsg(
         `Heads up: token is for "${tokenDir.toUpperCase()}" but you selected "${scanDir.toUpperCase()}". Proceeding…`
@@ -633,26 +669,32 @@ export default function PMJobDetails({ jobId }) {
     setScanBusy(true);
     try {
       const r = await apiPost("/scan", {
-        token,
+        token: useToken,
         scannerLat: loc.lat,
         scannerLng: loc.lng,
       });
-      setScanMsg(
-        `✅ ${tokenDir ? tokenDir.toUpperCase() : scanDir.toUpperCase()} recorded at ${dayjs(r.time).format(
-          "HH:mm:ss"
-        )}`
-      );
-      setToken("");
+      const msg = `✅ ${tokenDir ? tokenDir.toUpperCase() : scanDir.toUpperCase()} recorded at ${dayjs(
+        r.time
+      ).format("HH:mm:ss")}`;
+      setScanMsg(msg);
+      setScanSuccess(true);
+      setScanSuccessMsg(msg);
+      vibrateOk();
+      setTimeout(() => {
+        setScanSuccess(false);
+      }, 2000);
       await load();
     } catch (e) {
       let msg = "Scan failed.";
       try {
         const j = readApiError(e);
         if (j?.error === "jwt_error") msg = "Invalid/expired QR. Ask the part-timer to regenerate.";
-        else if (j?.error === "too_far") msg = `Too far from user (> ${j.maxDistanceMeters ?? maxM} m).`;
+        else if (j?.error === "too_far")
+          msg = `Too far from user (> ${j.maxDistanceMeters ?? maxM} m).`;
         else if (j?.error === "event_not_started") msg = "Event not started.";
         else if (j?.error === "bad_token_type") msg = "Bad token type.";
-        else if (j?.error === "token_missing_location") msg = "QR code was generated without location.";
+        else if (j?.error === "token_missing_location")
+          msg = "QR code was generated without location.";
         else if (j?.error === "scanner_location_required")
           msg = "Scanner location missing. Allow location on this device.";
         else if (j?.error === "job_not_found") msg = "Job not found for this QR. Maybe for another job.";
@@ -732,7 +774,6 @@ export default function PMJobDetails({ jobId }) {
   const statusEff = effectiveStatus(job.status);
   const canStart = statusEff === "upcoming";
   const isOngoing = statusEff === "ongoing";
-  const isEnded = statusEff === "ended";
 
   const precheck = (() => {
     if (!token || !loc) return null;
@@ -943,7 +984,7 @@ export default function PMJobDetails({ jobId }) {
           </div>
         )}
 
-        {/* Physical compact shared view */}
+        {/* Physical view */}
         {!isVirtual && (
           <>
             <table className="table">
@@ -1014,146 +1055,214 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* Inline scanner (physical only) */}
+      {/* FULLSCREEN SCANNER OVERLAY */}
       {!isVirtual && scannerOpen && (
-        <div ref={scannerCardRef} className="card" style={{ marginTop: 14 }}>
-          <div style={{ fontWeight: 800, marginBottom: 10 }}>Scanner — {job.title}</div>
-          <div className="card" style={{ marginBottom: 12 }}>
-            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <label style={{ fontWeight: 700 }}>Direction</label>
+        <div
+          ref={scannerCardRef}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "#000",
+            zIndex: 999,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <video
+            ref={videoRef}
+            muted
+            playsInline
+            autoPlay
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+          />
+          <canvas ref={canvasRef} style={{ display: "none" }} />
+
+          {/* top bar */}
+          <div
+            style={{
+              position: "absolute",
+              top: 12,
+              left: 12,
+              right: 12,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <button
+              onClick={closeScanner}
+              style={{
+                background: "rgba(0,0,0,0.6)",
+                color: "white",
+                border: "none",
+                padding: "6px 12px",
+                borderRadius: 8,
+                fontWeight: 600,
+              }}
+            >
+              ← Back
+            </button>
+            <div
+              style={{
+                background: "rgba(0,0,0,0.4)",
+                color: "white",
+                padding: "4px 12px",
+                borderRadius: 999,
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+              }}
+            >
               <label>
-                <input type="radio" name="dir" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> In
+                <input
+                  type="radio"
+                  name="dir"
+                  checked={scanDir === "in"}
+                  onChange={() => setScanDir("in")}
+                />{" "}
+                IN
               </label>
               <label>
-                <input type="radio" name="dir" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> Out
+                <input
+                  type="radio"
+                  name="dir"
+                  checked={scanDir === "out"}
+                  onChange={() => setScanDir("out")}
+                />{" "}
+                OUT
               </label>
             </div>
           </div>
 
-          <div className="grid">
-            {/* Camera panel */}
-            <div className="card" style={{ gridColumn: "span 8" }}>
-              <div
+          {/* bottom area */}
+          <div
+            style={{
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              padding: 12,
+              background: "linear-gradient(transparent, rgba(0,0,0,0.45))",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="Paste decoded QR token here…"
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginBottom: 6,
-                }}
-              >
-                <label style={{ fontWeight: 700 }}>Camera (auto-scan)</label>
-                {!camActive ? (
-                  <button className="btn" onClick={startCamera} disabled={!camSupported}>
-                    {camSupported ? "Use camera (auto-scan)" : "Camera not available"}
-                  </button>
-                ) : (
-                  <button className="btn gray" onClick={stopCamera}>
-                    Stop camera
-                  </button>
-                )}
-              </div>
-              <video
-                ref={videoRef}
-                muted
-                playsInline
-                autoPlay
-                style={{
-                  width: "100%",
-                  maxHeight: 360,
-                  background: "#000",
-                  borderRadius: 8,
-                  display: camActive ? "block" : "none",
+                  flex: 1,
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.35)",
+                  background: "rgba(0,0,0,0.35)",
+                  color: "white",
+                  padding: "6px 8px",
                 }}
               />
-              <canvas ref={canvasRef} style={{ display: "none" }} />
-              {!camActive && (
-                <div style={{ padding: 8, color: "#6b7280" }}>
-                  Tip: you can also <b>paste</b> the token below if camera access is blocked.
-                </div>
-              )}
+              <button
+                onClick={pasteFromClipboard}
+                style={{
+                  background: "rgba(255,255,255,0.12)",
+                  color: "white",
+                  border: "none",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                }}
+              >
+                Paste
+              </button>
+              <button
+                onClick={() => doScan()}
+                disabled={scanBusy || !token}
+                style={{
+                  background: scanBusy ? "rgba(148,163,184,0.7)" : "#22c55e",
+                  color: "white",
+                  border: "none",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  fontWeight: 600,
+                }}
+              >
+                {scanBusy ? "Scanning…" : "Scan"}
+              </button>
             </div>
-
-            {/* Token panel */}
-            <div className="card" style={{ gridColumn: "span 4" }}>
-              <label style={{ fontWeight: 700 }}>Token (from QR)</label>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="Paste decoded QR token here…"
-                />
-                <button className="btn" type="button" onClick={pasteFromClipboard}>
-                  Paste
-                </button>
-              </div>
-              <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10 }}>
-                {loc ? (
-                  <>Scanner location: {loc.lat.toFixed(5)}, {loc.lng.toFixed(5)} (heartbeat active)</>
-                ) : (
-                  <>Waiting for location… allow permission.</>
-                )}
-              </div>
-
-              {precheck && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    padding: 8,
-                    borderRadius: 8,
-                    background: precheck.ok ? "#f0fdf4" : "#fff1f2",
-                    border: "1px solid var(--border)",
-                  }}
-                >
-                  Distance to applicant (precheck): <b>{precheck.d} m</b>{" "}
-                  {precheck.ok ? "(OK)" : ` (> ${precheck.maxM} m)`}
-                </div>
-              )}
-
-              {dirMismatch && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    padding: 8,
-                    background: "#fffbeb",
-                    border: "1px solid var(--border)",
-                    borderRadius: 8,
-                  }}
-                >
-                  Token is for <b>{tokenDir.toUpperCase()}</b> but you selected <b>{scanDir.toUpperCase()}</b>.
-                </div>
-              )}
-
-              {scanMsg && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: 8,
-                    background: "#f8fafc",
-                    border: "1px solid var(--border)",
-                    borderRadius: 8,
-                  }}
-                >
-                  {scanMsg}
-                </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-                <button className="btn" onClick={closeScanner}>
-                  Hide
-                </button>
-                <button className="btn primary" disabled={scanBusy || !token} onClick={doScan}>
-                  {scanBusy ? "Scanning…" : "Scan"}
-                </button>
-              </div>
-
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-                <ul style={{ margin: 0, paddingLeft: 16 }}>
-                  <li>IN marks attendance start. OUT marks end; OT uses whole hours with a 30-min rounding rule.</li>
-                  <li>Distance guard is enforced on device and server. Default limit {Number(job?.scanMaxMeters) || 500} m.</li>
-                  <li>If the PM can’t scan the QR image, ask the part-timer to copy the token text and send it to you — then paste above.</li>
-                </ul>
-              </div>
+            <div style={{ color: "white", fontSize: 12 }}>
+              {loc
+                ? `Scanner location: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`
+                : "Waiting for location… allow permission."}
             </div>
+            {precheck && (
+              <div
+                style={{
+                  background: precheck.ok ? "rgba(34,197,94,0.15)" : "rgba(248,113,113,0.25)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                  borderRadius: 6,
+                  padding: 6,
+                  color: "white",
+                  fontSize: 12,
+                }}
+              >
+                Distance to applicant (precheck): <b>{precheck.d} m</b>{" "}
+                {precheck.ok ? "(OK)" : ` (> ${precheck.maxM} m)`}
+              </div>
+            )}
+            {dirMismatch && (
+              <div
+                style={{
+                  background: "rgba(250,204,21,0.3)",
+                  border: "1px solid rgba(250,204,21,0.5)",
+                  borderRadius: 6,
+                  padding: 6,
+                  color: "white",
+                  fontSize: 12,
+                }}
+              >
+                Token is for <b>{tokenDir.toUpperCase()}</b> but you selected{" "}
+                <b>{scanDir.toUpperCase()}</b>.
+              </div>
+            )}
+            {scanMsg && (
+              <div
+                style={{
+                  background: "rgba(15,23,42,0.45)",
+                  borderRadius: 6,
+                  padding: 6,
+                  color: "white",
+                  fontSize: 12,
+                }}
+              >
+                {scanMsg}
+              </div>
+            )}
           </div>
+
+          {/* success bubble */}
+          {scanSuccess && (
+            <div
+              style={{
+                position: "absolute",
+                top: "45%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                background: "rgba(34,197,94,0.9)",
+                color: "white",
+                padding: "10px 18px",
+                borderRadius: 999,
+                fontWeight: 700,
+                boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+              }}
+            >
+              {scanSuccessMsg || "Scan successful"}
+            </div>
+          )}
         </div>
       )}
     </div>
