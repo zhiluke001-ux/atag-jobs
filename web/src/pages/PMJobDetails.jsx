@@ -34,7 +34,7 @@ function fmtRange(start, end) {
 const fmtTime = (t) => (t ? dayjs(t).format("HH:mm:ss") : "");
 const fmtDateTime = (t) => (t ? dayjs(t).format("YYYY/MM/DD HH:mm:ss") : "");
 
-/* ----- Token helpers ----- */
+/* ----- Token helpers (same as original working one) ----- */
 function b64urlDecode(str) {
   try {
     const pad = (s) => s + "===".slice((s.length + 3) % 4);
@@ -51,7 +51,7 @@ function b64urlDecode(str) {
 function extractLatLngFromToken(token) {
   if (!token || typeof token !== "string") return null;
 
-  // A) JWT-like
+  // JWT-like
   if (token.includes(".")) {
     const parts = token.split(".");
     if (parts[1]) {
@@ -63,7 +63,7 @@ function extractLatLngFromToken(token) {
       } catch {}
     }
   }
-  // B) querystring
+  // querystring
   try {
     const qs = token.includes("?") ? token.split("?")[1] : token;
     const sp = new URLSearchParams(qs);
@@ -71,7 +71,7 @@ function extractLatLngFromToken(token) {
     const lng = Number(sp.get("lng"));
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
-  // C) last-two-floats
+  // last two floats
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
     const lat = Number(m[1]),
@@ -110,7 +110,7 @@ const applBodyRow = {
   borderBottom: "1px solid var(--border, #f1f5f9)",
 };
 
-/* robust virtual detector */
+/* robust virtual detector (keep as-is) */
 function isVirtualJob(j) {
   if (!j) return false;
   if (j.isVirtual === true) return true;
@@ -178,7 +178,7 @@ export default function PMJobDetails({ jobId }) {
   const lastDecodedRef = useRef("");
   const [camReady, setCamReady] = useState(false);
 
-  // geo
+  // geo (same idea as original – watch + heartbeat)
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
@@ -341,7 +341,7 @@ export default function PMJobDetails({ jobId }) {
     rafRef.current = requestAnimationFrame(loop);
   }
 
-  /* ---------- geo heartbeat while scanner open ---------- */
+  /* ---------- geo heartbeat while scanner open (same as original idea) ---------- */
   useEffect(() => {
     if (!scannerOpen) return;
     if ("geolocation" in navigator) {
@@ -384,18 +384,8 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
+  // AUTO submit, but do NOT block if location is not ready – just try and re-allow same QR
   async function handleDecoded(decoded) {
-    // if location not ready yet, don't lock the token forever
-    if (!loc) {
-      setScanMsg("Waiting for location…");
-      setScanPopup({ kind: "error", text: "Waiting for location…" });
-      setTimeout(() => setScanPopup(null), 1400);
-      // allow same code again soon
-      setTimeout(() => {
-        lastDecodedRef.current = "";
-      }, 1200);
-      return;
-    }
     setToken(decoded);
     await doScan(decoded);
   }
@@ -419,23 +409,29 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
     if (!loc) {
+      // same message as original
       setScanMsg("Getting your location… allow location and try again.");
+      // allow same QR again
+      setTimeout(() => {
+        lastDecodedRef.current = "";
+      }, 1200);
       return;
     }
 
+    // distance pre-check (keep 500m rule)
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
       const d = haversineMeters(loc, applicantLL);
       if (d != null && d > maxM) {
-        const text = "Too far based on local check.";
+        const text = "Too far from part-timer.";
         setScanMsg("❌ " + text);
         setScanPopup({ kind: "error", text });
         setTimeout(() => setScanPopup(null), 1800);
-        // allow re-scan of same code
+        // allow re-scan
         setTimeout(() => {
           lastDecodedRef.current = "";
-        }, 1400);
+        }, 1200);
         return;
       }
     }
@@ -476,10 +472,10 @@ export default function PMJobDetails({ jobId }) {
       console.error("scan error", e);
     } finally {
       setScanBusy(false);
-      // very important: allow same QR again after a short pause
+      // IMPORTANT: allow same QR again so user doesn't get stuck
       setTimeout(() => {
         lastDecodedRef.current = "";
-      }, 1400);
+      }, 1200);
     }
   }
 
@@ -855,12 +851,14 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* ---------- FULLSCREEN SIMPLE SCANNER ---------- */}
+      {/* ---------- FULLSCREEN SIMPLE SCANNER (responsive) ---------- */}
       {!isVirtual && scannerOpen && (
         <div
           style={{
             position: "fixed",
             inset: 0,
+            width: "100vw",
+            maxWidth: "100vw",
             background: "#000",
             zIndex: 999,
             display: "flex",
@@ -881,12 +879,12 @@ export default function PMJobDetails({ jobId }) {
           <div
             style={{
               position: "absolute",
-              top: "16%",
+              top: "18%",
               left: "50%",
               transform: "translateX(-50%)",
-              width: "65vw",
-              maxWidth: 360,
-              height: "40vh",
+              width: "62vw",
+              maxWidth: 350,
+              height: "38vh",
               maxHeight: 300,
               border: "2px solid rgba(255,255,255,0.35)",
               borderRadius: 8,
@@ -924,7 +922,6 @@ export default function PMJobDetails({ jobId }) {
               gap: 8,
               alignItems: "center",
               justifyContent: "space-between",
-              maxWidth: "100%",
             }}
           >
             <button
@@ -943,23 +940,23 @@ export default function PMJobDetails({ jobId }) {
               style={{
                 background: "rgba(0,0,0,0.4)",
                 color: "white",
-                padding: "4px 12px",
+                padding: "4px 10px",
                 borderRadius: 999,
                 display: "flex",
-                gap: 12,
+                gap: 10,
                 alignItems: "center",
               }}
             >
-              <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
               </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 <input type="radio" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> OUT
               </label>
             </div>
           </div>
 
-          {/* bottom bar (mobile friendly) */}
+          {/* bottom bar */}
           <div
             style={{
               position: "absolute",
@@ -973,14 +970,14 @@ export default function PMJobDetails({ jobId }) {
               gap: 6,
             }}
           >
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
               <input
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 placeholder="Token…"
                 style={{
-                  flex: 1,
-                  minWidth: 140,
+                  flex: "1 1 120px",
+                  minWidth: 0,
                   borderRadius: 6,
                   border: "1px solid rgba(255,255,255,0.35)",
                   background: "rgba(0,0,0,0.35)",
@@ -998,7 +995,7 @@ export default function PMJobDetails({ jobId }) {
                   padding: "6px 10px",
                   borderRadius: 6,
                   fontSize: 12,
-                  flexShrink: 0,
+                  flex: "0 0 auto",
                 }}
               >
                 Paste
@@ -1014,7 +1011,7 @@ export default function PMJobDetails({ jobId }) {
                   borderRadius: 6,
                   fontWeight: 600,
                   fontSize: 12,
-                  flexShrink: 0,
+                  flex: "0 0 auto",
                 }}
               >
                 {scanBusy ? "..." : "Scan"}
@@ -1026,8 +1023,13 @@ export default function PMJobDetails({ jobId }) {
             <div style={{ color: "white", fontSize: 11 }}>
               {loc
                 ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`
-                : "Waiting for location…"}
+                : "Getting your location…"}
             </div>
+            {scanMsg && (
+              <div style={{ color: "white", fontSize: 11 }}>
+                {scanMsg}
+              </div>
+            )}
           </div>
 
           {/* CENTER POPUP */}
