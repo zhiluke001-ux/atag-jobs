@@ -51,7 +51,7 @@ function b64urlDecode(str) {
 function extractLatLngFromToken(token) {
   if (!token || typeof token !== "string") return null;
 
-  // JWT-like
+  // A) JWT-like
   if (token.includes(".")) {
     const parts = token.split(".");
     if (parts[1]) {
@@ -63,7 +63,7 @@ function extractLatLngFromToken(token) {
       } catch {}
     }
   }
-  // querystring
+  // B) querystring
   try {
     const qs = token.includes("?") ? token.split("?")[1] : token;
     const sp = new URLSearchParams(qs);
@@ -71,7 +71,7 @@ function extractLatLngFromToken(token) {
     const lng = Number(sp.get("lng"));
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   } catch {}
-  // last-two-floats
+  // C) last-two-floats
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
     const lat = Number(m[1]),
@@ -110,6 +110,7 @@ const applBodyRow = {
   borderBottom: "1px solid var(--border, #f1f5f9)",
 };
 
+/* robust virtual detector */
 function isVirtualJob(j) {
   if (!j) return false;
   if (j.isVirtual === true) return true;
@@ -128,6 +129,7 @@ function isVirtualJob(j) {
   return false;
 }
 
+/* better error extraction */
 function readApiError(err) {
   if (!err) return {};
   if (typeof err === "string") {
@@ -148,6 +150,7 @@ function readApiError(err) {
 }
 
 export default function PMJobDetails({ jobId }) {
+  /* ---------- state ---------- */
   const [job, setJob] = useState(null);
   const [applicants, setApplicants] = useState([]);
   const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
@@ -177,9 +180,7 @@ export default function PMJobDetails({ jobId }) {
   const [loc, setLoc] = useState(null);
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
-
-  // if scan happened before GPS ready, we store token here and auto-scan when GPS arrives
-  const pendingTokenRef = useRef(null);
+  const pendingTokenRef = useRef(null); // for "GPS not ready yet"
 
   // end time cache
   const endedAtRef = useRef(null);
@@ -385,16 +386,14 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* if we were waiting for location and now we have it, auto-rescan the pending token */
+  /* if GPS arrives and we had a QR waiting, auto-scan it */
   useEffect(() => {
     if (!scannerOpen) return;
     if (loc && pendingTokenRef.current) {
       const t = pendingTokenRef.current;
       pendingTokenRef.current = null;
-      // location is ready now, scan again
-      doScan(t);
-      // clear old "getting your location" message
       setScanMsg("");
+      doScan(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loc?.lat, loc?.lng, scannerOpen]);
@@ -427,18 +426,17 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // if GPS not ready yet, wait for it
     if (!loc) {
+      // GPS not yet ready: stash the token and wait
       setScanMsg("Getting your location… allow location and try again.");
-      pendingTokenRef.current = useToken; // remember it
-      // allow the same QR to be seen again
+      pendingTokenRef.current = useToken;
       setTimeout(() => {
         lastDecodedRef.current = "";
       }, 600);
       return;
     }
 
-    // local distance check
+    // local distance check 500m
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -448,7 +446,7 @@ export default function PMJobDetails({ jobId }) {
         setScanMsg("❌ " + text);
         setScanPopup({ kind: "error", text });
         setTimeout(() => setScanPopup(null), 1800);
-        setToken(""); // clear
+        setToken("");
         setTimeout(() => {
           lastDecodedRef.current = "";
         }, 600);
@@ -478,9 +476,8 @@ export default function PMJobDetails({ jobId }) {
       vibrateOk();
       setTimeout(() => setScanPopup(null), 1500);
 
-      setToken(""); // clear input so next QR looks fresh
-      // refresh data silently
-      load(true);
+      setToken("");
+      load(true); // silent refresh
     } catch (e) {
       let msg = "Scan failed.";
       const j = readApiError(e);
@@ -495,7 +492,6 @@ export default function PMJobDetails({ jobId }) {
       console.error("scan error", e);
     } finally {
       setScanBusy(false);
-      // allow re-scan of same QR
       setTimeout(() => {
         lastDecodedRef.current = "";
       }, 600);
@@ -587,6 +583,7 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
+  /* OT calc */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
   const actualEndIso =
     job?.actualEndAt ||
@@ -607,9 +604,13 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
+  // ----- build rows for attendance -----
   const approvedRows = (job.approved || []).map((uid) => {
-    const app = (job.applications || []).find((a) => a.userId === uid) || {};
-    const rec = (job.attendance || {})[uid] || {};
+    // try to match by userId OR by email
+    const app =
+      (job.applications || []).find((a) => a.userId === uid || a.email === uid) || {};
+    const attendanceMap = job.attendance || {};
+    const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
     return {
       userId: uid,
       email: app.email || uid,
@@ -638,7 +639,7 @@ export default function PMJobDetails({ jobId }) {
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
-      {/* header */}
+      {/* --- Job header --- */}
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
           <div>
@@ -802,8 +803,13 @@ export default function PMJobDetails({ jobId }) {
                   </tr>
                 ) : (
                   (job.approved || []).map((uid) => {
-                    const app = (job.applications || []).find((a) => a.userId === uid);
-                    const rec = (job.attendance || {})[uid] || {};
+                    const app =
+                      (job.applications || []).find((a) => a.userId === uid || a.email === uid) || {};
+                    const rec =
+                      (job.attendance || {})[uid] ||
+                      (job.attendance || {})[app.userId] ||
+                      (job.attendance || {})[app.email] ||
+                      {};
                     const present = !!rec.in && !!rec.out;
                     return (
                       <tr key={uid} style={{ borderBottom: "1px solid #f1f5f9" }}>
@@ -823,52 +829,59 @@ export default function PMJobDetails({ jobId }) {
             </table>
           </div>
         ) : (
-          <>
-            <table className="table">
+          <div style={{ overflowX: "auto" }}>
+            <table
+              className="table"
+              style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}
+            >
               <thead>
                 <tr>
-                  <th>Email</th>
-                  <th style={{ width: 180 }}>Name</th>
-                  <th style={{ width: 130 }}>Phone</th>
-                  <th style={{ width: 160 }}>Discord</th>
-                  <th style={{ width: 120, textAlign: "center" }}>In</th>
-                  <th style={{ width: 120, textAlign: "center" }}>Out</th>
+                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
+                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
+                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
+                  <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
+                  <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
+                  <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
                 </tr>
               </thead>
-            </table>
-            <div
-              style={{
-                maxHeight: 340,
-                overflow: "auto",
-                border: "1px solid var(--border)",
-                borderTop: 0,
-                borderRadius: "0 0 8px 8px",
-              }}
-            >
-              <table className="table" style={{ margin: 0 }}>
-                <tbody>
-                  {approvedRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} style={{ color: "#6b7280" }}>
-                        No approved users yet.
+              <tbody>
+                {approvedRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} style={{ color: "#6b7280", padding: 8 }}>
+                      No approved users yet.
+                    </td>
+                  </tr>
+                ) : (
+                  approvedRows.map((r) => (
+                    <tr key={r.userId || r.email} style={{ borderTop: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "8px 4px" }}>{r.email}</td>
+                      <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
+                      <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
+                      <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
+                      <td
+                        style={{
+                          padding: "8px 4px",
+                          textAlign: "center",
+                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        {fmtTime(r.in)}
+                      </td>
+                      <td
+                        style={{
+                          padding: "8px 4px",
+                          textAlign: "center",
+                          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        {fmtTime(r.out)}
                       </td>
                     </tr>
-                  ) : (
-                    approvedRows.map((r) => (
-                      <tr key={r.email}>
-                        <td>{r.email}</td>
-                        <td>{r.name || "-"}</td>
-                        <td>{r.phone || "-"}</td>
-                        <td>{r.discord || "-"}</td>
-                        <td style={{ textAlign: "center" }}>{fmtTime(r.in)}</td>
-                        <td style={{ textAlign: "center" }}>{fmtTime(r.out)}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
