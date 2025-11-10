@@ -1,22 +1,51 @@
-// Login.jsx
+// web/src/pages/Login.jsx
 import React, { useState, useEffect } from "react";
-import { login, getToken } from "../auth";
+import {
+  login,
+  getToken,
+  fetchCurrentUser,
+  logout,
+} from "../auth";
 
 export default function Login({ navigate, setUser }) {
   const [identifier, setIdentifier] = useState(""); // email or username
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [checkingToken, setCheckingToken] = useState(true);
 
-  // if user is already logged in, don't show login page
+  // on mount: only redirect if the token is actually valid
   useEffect(() => {
-    const token = getToken();
-    if (token) {
-      // use replace so /#/login is not kept in history
-      window.location.replace("#/");
-      // or: navigate("#/"); but replace is safer for the back button
+    let cancelled = false;
+
+    async function checkExistingToken() {
+      const token = getToken();
+      if (!token) {
+        setCheckingToken(false);
+        return;
+      }
+
+      // try to verify token with backend
+      const me = await fetchCurrentUser();
+      if (cancelled) return;
+
+      if (me) {
+        // token is good → set user and go home
+        if (setUser) setUser(me);
+        window.location.replace("#/");
+      } else {
+        // token in localStorage was bad/stale → clear it so user can log in
+        logout();
+        setCheckingToken(false);
+      }
     }
-  }, []);
+
+    checkExistingToken();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setUser]);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -24,17 +53,31 @@ export default function Login({ navigate, setUser }) {
     setBusy(true);
     try {
       const u = await login(identifier, password);
-      setUser(u);
+      if (setUser) setUser(u);
 
       // go to home and REPLACE the current entry so Back won't return to /login
       window.location.replace("#/");
-      // if you really want to use the passed-in navigate:
-      // if (navigate) navigate("#/");
+      // or: if (navigate) navigate("#/");
     } catch (e) {
-      setError("Login failed. Check your email/username and password.");
+      console.error("login failed:", e);
+      // show server message if available
+      const msg =
+        e?.payload?.error ||
+        e?.message ||
+        "Login failed. Check your email/username and password.";
+      setError(msg);
     } finally {
       setBusy(false);
     }
+  }
+
+  // while we're checking the old token, don't flash the form
+  if (checkingToken) {
+    return (
+      <div className="container">
+        <div className="card">Checking session…</div>
+      </div>
+    );
   }
 
   return (
