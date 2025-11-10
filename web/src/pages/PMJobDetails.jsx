@@ -165,9 +165,10 @@ export default function PMJobDetails({ jobId }) {
   const [token, setToken] = useState("");
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
-  const [scanSuccess, setScanSuccess] = useState(false);
-  const [scanSuccessMsg, setScanSuccessMsg] = useState("");
   const [startBusy, setStartBusy] = useState(false);
+
+  // popup in middle
+  const [scanPopup, setScanPopup] = useState(null); // {kind:'success'|'error', text:''}
 
   // camera
   const videoRef = useRef(null);
@@ -308,7 +309,7 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, isVirtual]);
 
-  /* ---------- scan loop ---------- */
+  /* ---------- scan loop (AUTO submit) ---------- */
   function startScanLoop() {
     const loop = () => {
       if (!videoRef.current || !canvasRef.current || !window.jsQR) {
@@ -319,8 +320,8 @@ export default function PMJobDetails({ jobId }) {
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -385,14 +386,17 @@ export default function PMJobDetails({ jobId }) {
 
   async function handleDecoded(decoded) {
     setToken(decoded);
-    await doScan(decoded);
+    await doScan(decoded); // AUTO submit on camera scan
   }
 
   /* ---------- manual paste ---------- */
   async function pasteFromClipboard() {
     try {
       const t = await navigator.clipboard.readText();
-      if (t) setToken(t.trim());
+      if (t) {
+        setToken(t.trim());
+        await doScan(t.trim()); // also auto-run for pasted token
+      }
     } catch {}
   }
 
@@ -413,7 +417,10 @@ export default function PMJobDetails({ jobId }) {
     if (applicantLL) {
       const d = haversineMeters(loc, applicantLL);
       if (d != null && d > maxM) {
-        setScanMsg("❌ Too far based on local check.");
+        const text = "Too far based on local check.";
+        setScanMsg("❌ " + text);
+        setScanPopup({ kind: "error", text });
+        setTimeout(() => setScanPopup(null), 1800);
         return;
       }
     }
@@ -434,14 +441,12 @@ export default function PMJobDetails({ jobId }) {
         scannerLat: loc.lat,
         scannerLng: loc.lng,
       });
-      const msg = `✅ ${tokenDir ? tokenDir.toUpperCase() : scanDir.toUpperCase()} at ${dayjs(
-        r.time
-      ).format("HH:mm:ss")}`;
-      setScanMsg(msg);
-      setScanSuccess(true);
-      setScanSuccessMsg(msg);
+      const msg = `Scan OK at ${dayjs(r.time).format("HH:mm:ss")}`;
+      setScanMsg("✅ " + msg);
+      setScanPopup({ kind: "success", text: msg });
       vibrateOk();
-      setTimeout(() => setScanSuccess(false), 2000);
+      setTimeout(() => setScanPopup(null), 1800);
+      // reload to show attendance
       await load();
     } catch (e) {
       let msg = "Scan failed.";
@@ -452,6 +457,8 @@ export default function PMJobDetails({ jobId }) {
       else if (j?.error === "scanner_location_required") msg = "Scanner location missing.";
       else if (j?.error) msg = j.error;
       setScanMsg("❌ " + msg);
+      setScanPopup({ kind: "error", text: msg });
+      setTimeout(() => setScanPopup(null), 2000);
       console.error("scan error", e);
     } finally {
       setScanBusy(false);
@@ -851,15 +858,17 @@ export default function PMJobDetails({ jobId }) {
           />
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
-          {/* simple overlay */}
+          {/* scan frame */}
           <div
             style={{
               position: "absolute",
-              top: "15%",
+              top: "14%",
               left: "50%",
               transform: "translateX(-50%)",
-              width: "70%",
-              height: "45%",
+              width: "70vw",
+              maxWidth: 360,
+              height: "42vh",
+              maxHeight: 320,
               border: "2px solid rgba(255,255,255,0.35)",
               borderRadius: 8,
               overflow: "hidden",
@@ -927,100 +936,94 @@ export default function PMJobDetails({ jobId }) {
             </div>
           </div>
 
-          {/* bottom bar */}
+          {/* bottom bar (mobile friendly) */}
           <div
             style={{
               position: "absolute",
               bottom: 0,
               left: 0,
               right: 0,
-              padding: 12,
+              padding: 10,
               background: "linear-gradient(transparent, rgba(0,0,0,0.6))",
               display: "flex",
               flexDirection: "column",
               gap: 6,
             }}
           >
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               <input
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 placeholder="Token…"
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   borderRadius: 6,
                   border: "1px solid rgba(255,255,255,0.35)",
                   background: "rgba(0,0,0,0.35)",
                   color: "white",
                   padding: "6px 8px",
+                  fontSize: 13,
                 }}
               />
-            <button
-              onClick={pasteFromClipboard}
-              style={{
-                background: "rgba(255,255,255,0.12)",
-                color: "white",
-                border: "none",
-                padding: "6px 10px",
-                borderRadius: 6,
-              }}
-            >
-              Paste
-            </button>
-            <button
-              onClick={() => doScan()}
-              disabled={scanBusy || !token}
-              style={{
-                background: scanBusy ? "rgba(148,163,184,0.7)" : "#22c55e",
-                color: "white",
-                border: "none",
-                padding: "6px 10px",
-                borderRadius: 6,
-                fontWeight: 600,
-              }}
-            >
-              {scanBusy ? "Scanning…" : "Scan"}
-            </button>
+              <button
+                onClick={pasteFromClipboard}
+                style={{
+                  background: "rgba(255,255,255,0.12)",
+                  color: "white",
+                  border: "none",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  fontSize: 12,
+                }}
+              >
+                Paste
+              </button>
+              <button
+                onClick={() => doScan()}
+                disabled={scanBusy || !token}
+                style={{
+                  background: scanBusy ? "rgba(148,163,184,0.7)" : "#22c55e",
+                  color: "white",
+                  border: "none",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: 12,
+                }}
+              >
+                {scanBusy ? "..." : "Scan"}
+              </button>
             </div>
-            <div style={{ color: "white", fontSize: 12 }}>
+            <div style={{ color: "white", fontSize: 11 }}>
               {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
             </div>
-            <div style={{ color: "white", fontSize: 12 }}>
+            <div style={{ color: "white", fontSize: 11 }}>
               {loc
                 ? `Scanner location: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`
                 : "Waiting for location…"}
             </div>
-            {scanMsg && (
-              <div
-                style={{
-                  background: "rgba(15,23,42,0.45)",
-                  borderRadius: 6,
-                  padding: 6,
-                  color: "white",
-                  fontSize: 12,
-                }}
-              >
-                {scanMsg}
-              </div>
-            )}
           </div>
 
-          {scanSuccess && (
+          {/* CENTER POPUP */}
+          {scanPopup && (
             <div
               style={{
                 position: "absolute",
-                top: "45%",
+                top: "50%",
                 left: "50%",
                 transform: "translate(-50%, -50%)",
-                background: "rgba(34,197,94,0.9)",
+                background: scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
                 color: "white",
-                padding: "10px 18px",
+                padding: "10px 20px",
                 borderRadius: 999,
                 fontWeight: 700,
-                boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
+                textAlign: "center",
+                maxWidth: "80%",
+                boxShadow: "0 10px 40px rgba(0,0,0,0.35)",
               }}
             >
-              {scanSuccessMsg || "Scan OK"}
+              {scanPopup.text}
             </div>
           )}
         </div>
