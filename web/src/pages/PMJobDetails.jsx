@@ -622,7 +622,7 @@ export default function PMJobDetails({ jobId }) {
       email: app.email,
       name: app.name,
       phone: app.phone,
-      discord: app.discord
+      discord: app.discord,
       in: rec.in,
       out: rec.out,
     };
