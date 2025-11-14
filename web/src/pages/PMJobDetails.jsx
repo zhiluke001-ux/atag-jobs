@@ -582,6 +582,27 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
+  /* ---- NEW: fast index of applicants so phone/discord always come from the enriched endpoint ---- */
+  const applicantsIndex = useMemo(() => {
+    const byId = new Map();
+    const byEmail = new Map();
+    for (const a of applicants) {
+      if (a?.userId) byId.set(a.userId, a);
+      if (a?.email) byEmail.set(String(a.email).toLowerCase(), a);
+    }
+    return { byId, byEmail };
+  }, [applicants]);
+
+  function lookupApplicant(idOrEmail) {
+    if (!idOrEmail) return null;
+    const idStr = String(idOrEmail);
+    return (
+      applicantsIndex.byId.get(idStr) ||
+      applicantsIndex.byEmail.get(idStr.toLowerCase()) ||
+      null
+    );
+  }
+
   /* OT calc */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
   const actualEndIso =
@@ -603,8 +624,10 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
-  // helper to find applicant data for an approved id
+  // helper to find applicant (kept, but now prefers index first)
   function findApplicant(id) {
+    const fromIx = lookupApplicant(id);
+    if (fromIx) return fromIx;
     return (
       applicants.find((a) => a.userId === id || a.email === id) ||
       (job.applications || []).find((a) => a.userId === id || a.email === id) ||
@@ -612,17 +635,21 @@ export default function PMJobDetails({ jobId }) {
     );
   }
 
-  // display rows
+  // display rows (ALWAYS pull phone/discord from enriched applicants list when possible)
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
     const attendanceMap = job.attendance || {};
-    const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
+    const rec =
+      attendanceMap[uid] ||
+      attendanceMap[app.userId] ||
+      attendanceMap[app.email] ||
+      {};
     return {
       userId: uid,
-      email: app.email,
-      name: app.name,
-      phone: app.phone,
-      discord: app.discord,
+      email: app.email || "-",
+      name: app.name || "-",
+      phone: app.phone || "-",
+      discord: app.discord || "-",
       in: rec.in,
       out: rec.out,
     };
@@ -754,9 +781,9 @@ export default function PMJobDetails({ jobId }) {
           applicants.map((a) => (
             <div key={a.userId} style={applBodyRow}>
               <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
-              <div>{a.name}</div>
-              <div>{a.phone}</div>
-              <div>{a.discord }</div>
+              <div>{a.name || "-"}</div>
+              <div>{a.phone || "-"}</div>
+              <div>{a.discord || "-"}</div>
               <div>{a.transport || "-"}</div>
               <div style={{ textTransform: "capitalize" }}>{a.status}</div>
               <div>
@@ -764,7 +791,7 @@ export default function PMJobDetails({ jobId }) {
                   <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                     <input
                       type="checkbox"
-                      checked={a.luConfirmed}
+                      checked={!!a.luConfirmed}
                       onChange={(e) => toggleLU(a.userId, e.target.checked)}
                     />
                     <span>Confirmed</span>
@@ -815,9 +842,9 @@ export default function PMJobDetails({ jobId }) {
                 approvedRows.map((r) => (
                   <tr key={r.userId || r.email} style={{ borderTop: "1px solid #f1f5f9" }}>
                     <td style={{ padding: "8px 4px" }}>{r.email}</td>
-                    <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
-                    <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
-                    <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.name}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.phone}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.discord}</td>
                     <td
                       style={{
                         padding: "8px 4px",
