@@ -149,38 +149,6 @@ function readApiError(err) {
   return {};
 }
 
-/* --------- NEW: user profile cache to fill phone/discord --------- */
-function pickName(u) {
-  return (
-    u?.name ||
-    u?.fullName ||
-    u?.displayName ||
-    u?.profile?.name ||
-    u?.profile?.fullName ||
-    ""
-  );
-}
-function pickPhone(u) {
-  return (
-    u?.phone ||
-    u?.phoneNumber ||
-    u?.mobile ||
-    u?.profile?.phone ||
-    u?.profile?.phoneNumber ||
-    ""
-  );
-}
-function pickDiscord(u) {
-  return (
-    u?.discord ||
-    u?.discordHandle ||
-    u?.username ||
-    u?.profile?.discord ||
-    u?.profile?.username ||
-    ""
-  );
-}
-
 export default function PMJobDetails({ jobId }) {
   /* ---------- state ---------- */
   const [job, setJob] = useState(null);
@@ -190,9 +158,6 @@ export default function PMJobDetails({ jobId }) {
 
   const [statusForce, setStatusForce] = useState(null);
   const effectiveStatus = (s) => statusForce ?? s ?? "upcoming";
-
-  // NEW: user cache keyed by userId OR email
-  const [userCache, setUserCache] = useState({}); // {key: {name, phone, discord, email}}
 
   // scanner
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -638,101 +603,26 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
-  // helper to find applicant data for an approved id/email
-  function findApplicant(idOrEmail) {
-    const list = applicants.concat(job.applications || []);
+  // helper to find applicant data for an approved id
+  function findApplicant(id) {
     return (
-      list.find((a) => a.userId === idOrEmail || a.email === idOrEmail) ||
-      list.find((a) => a.email === userCache[idOrEmail]?.email) ||
+      applicants.find((a) => a.userId === id || a.email === id) ||
+      (job.applications || []).find((a) => a.userId === id || a.email === id) ||
       null
     );
   }
 
-  /* --------- NEW: enrich user cache when we have approved list --------- */
-  useEffect(() => {
-    if (!job) return;
-    const approved = Array.isArray(job.approved) ? job.approved : [];
-    const knownKeys = new Set(Object.keys(userCache));
-    const toFetch = [];
-
-    approved.forEach((k) => {
-      if (!k) return;
-      const app = findApplicant(k);
-      // if application already carries phone & discord, no need to fetch
-      const hasPhone = !!(app?.phone || app?.phoneNumber);
-      const hasDiscord = !!(app?.discord || app?.discordHandle || app?.username);
-      if (!knownKeys.has(k) && !(hasPhone && hasDiscord)) {
-        toFetch.push({ key: k, app });
-      }
-    });
-
-    if (toFetch.length === 0) return;
-
-    let cancelled = false;
-    (async () => {
-      const updates = {};
-      for (const item of toFetch) {
-        const key = item.key;
-        let u = null;
-        // try /users/:id
-        try {
-          u = await apiGet(`/users/${encodeURIComponent(key)}`);
-        } catch {}
-        // if still null and looks like an email, try by-email
-        if (!u && /\S+@\S+\.\S+/.test(key)) {
-          try {
-            u =
-              (await apiGet(`/users/by-email?email=${encodeURIComponent(key)}`)) ||
-              (await apiGet(`/users/${encodeURIComponent(key)}`));
-          } catch {}
-        }
-        if (u) {
-          updates[key] = {
-            email: u.email || item.app?.email || key,
-            name: pickName(u),
-            phone: pickPhone(u),
-            discord: pickDiscord(u),
-          };
-          // also index by email if different
-          const ekey = updates[key].email;
-          if (ekey && ekey !== key) {
-            updates[ekey] = updates[key];
-          }
-        }
-      }
-      if (!cancelled && Object.keys(updates).length) {
-        setUserCache((prev) => ({ ...prev, ...updates }));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.approved, applicants]);
-
   // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
-    const cached =
-      userCache[uid] || userCache[app.userId] || userCache[app.email] || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
     return {
       userId: uid,
-      email: app.email || cached.email || uid,
-      name: app.name || app.fullName || app.displayName || cached.name || "",
-      phone:
-        app.phone ||
-        app.phoneNumber ||
-        cached.phone ||
-        "",
-      discord:
-        app.discord ||
-        app.discordHandle ||
-        app.username ||
-        cached.discord ||
-        "",
+      email: app.email,
+      name: app.name,
+      phone: app.phone,
+      discord: app.discord
       in: rec.in,
       out: rec.out,
     };
@@ -862,24 +752,11 @@ export default function PMJobDetails({ jobId }) {
           <div style={{ padding: 12, color: "#6b7280" }}>No applicants yet.</div>
         ) : (
           applicants.map((a) => (
-            <div key={a.userId || a.email} style={applBodyRow}>
+            <div key={a.userId} style={applBodyRow}>
               <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
-              <div>{a.name || a.fullName || a.displayName || userCache[a.email]?.name || "-"}</div>
-              <div>
-                {a.phone ||
-                  a.phoneNumber ||
-                  userCache[a.userId]?.phone ||
-                  userCache[a.email]?.phone ||
-                  "-"}
-              </div>
-              <div>
-                {a.discord ||
-                  a.discordHandle ||
-                  a.username ||
-                  userCache[a.userId]?.discord ||
-                  userCache[a.email]?.discord ||
-                  "-"}
-              </div>
+              <div>{a.name}</div>
+              <div>{a.phone}</div>
+              <div>{a.discord }</div>
               <div>{a.transport || "-"}</div>
               <div style={{ textTransform: "capitalize" }}>{a.status}</div>
               <div>
@@ -887,7 +764,7 @@ export default function PMJobDetails({ jobId }) {
                   <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                     <input
                       type="checkbox"
-                      checked={!!a.luConfirmed}
+                      checked={a.luConfirmed}
                       onChange={(e) => toggleLU(a.userId, e.target.checked)}
                     />
                     <span>Confirmed</span>
@@ -909,11 +786,14 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* Approved + Attendance */}
+      {/* Attendance (fixed) */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
         <div style={{ overflowX: "auto" }}>
-          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}>
+          <table
+            className="table"
+            style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}
+          >
             <thead>
               <tr>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
