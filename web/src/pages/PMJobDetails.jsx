@@ -149,46 +149,34 @@ function readApiError(err) {
   return {};
 }
 
-/* ----- helper to read phone / discord robustly ----- */
-function getApplicantPhone(a) {
-  if (!a) return "";
+/* --------- NEW: user profile cache to fill phone/discord --------- */
+function pickName(u) {
   return (
-    a.phone ||
-    a.phoneNumber ||
-    a.mobile ||
-    a.mobileNumber ||
-    a.user?.phone ||
-    a.user?.phoneNumber ||
-    a.user?.mobile ||
-    a.user?.mobileNumber ||
+    u?.name ||
+    u?.fullName ||
+    u?.displayName ||
+    u?.profile?.name ||
+    u?.profile?.fullName ||
     ""
   );
 }
-
-function getApplicantDiscord(a) {
-  if (!a) return "";
+function pickPhone(u) {
   return (
-    a.discord ||
-    a.discordHandle ||
-    a.discordTag ||
-    a.user?.discord ||
-    a.user?.discordHandle ||
-    a.user?.discordTag ||
-    a.username ||
-    a.user?.username ||
+    u?.phone ||
+    u?.phoneNumber ||
+    u?.mobile ||
+    u?.profile?.phone ||
+    u?.profile?.phoneNumber ||
     ""
   );
 }
-
-function getApplicantName(a) {
-  if (!a) return "";
+function pickDiscord(u) {
   return (
-    a.name ||
-    a.fullName ||
-    a.displayName ||
-    a.user?.name ||
-    a.user?.fullName ||
-    a.user?.displayName ||
+    u?.discord ||
+    u?.discordHandle ||
+    u?.username ||
+    u?.profile?.discord ||
+    u?.profile?.username ||
     ""
   );
 }
@@ -202,6 +190,9 @@ export default function PMJobDetails({ jobId }) {
 
   const [statusForce, setStatusForce] = useState(null);
   const effectiveStatus = (s) => statusForce ?? s ?? "upcoming";
+
+  // NEW: user cache keyed by userId OR email
+  const [userCache, setUserCache] = useState({}); // {key: {name, phone, discord, email}}
 
   // scanner
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -647,37 +638,101 @@ export default function PMJobDetails({ jobId }) {
 
   if (loading || !job) return <div className="container">Loading…</div>;
 
-  // helper to find applicant data for an approved id
-  function findApplicant(id) {
-    if (!id) return null;
-    const match = (a) =>
-      a.userId === id ||
-      a.id === id ||
-      a.email === id ||
-      a.username === id ||
-      a.user?.id === id ||
-      a.user?.userId === id ||
-      a.user?.email === id ||
-      a.user?.username === id;
-
+  // helper to find applicant data for an approved id/email
+  function findApplicant(idOrEmail) {
+    const list = applicants.concat(job.applications || []);
     return (
-      applicants.find(match) ||
-      (job.applications || []).find(match) ||
+      list.find((a) => a.userId === idOrEmail || a.email === idOrEmail) ||
+      list.find((a) => a.email === userCache[idOrEmail]?.email) ||
       null
     );
   }
 
+  /* --------- NEW: enrich user cache when we have approved list --------- */
+  useEffect(() => {
+    if (!job) return;
+    const approved = Array.isArray(job.approved) ? job.approved : [];
+    const knownKeys = new Set(Object.keys(userCache));
+    const toFetch = [];
+
+    approved.forEach((k) => {
+      if (!k) return;
+      const app = findApplicant(k);
+      // if application already carries phone & discord, no need to fetch
+      const hasPhone = !!(app?.phone || app?.phoneNumber);
+      const hasDiscord = !!(app?.discord || app?.discordHandle || app?.username);
+      if (!knownKeys.has(k) && !(hasPhone && hasDiscord)) {
+        toFetch.push({ key: k, app });
+      }
+    });
+
+    if (toFetch.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const updates = {};
+      for (const item of toFetch) {
+        const key = item.key;
+        let u = null;
+        // try /users/:id
+        try {
+          u = await apiGet(`/users/${encodeURIComponent(key)}`);
+        } catch {}
+        // if still null and looks like an email, try by-email
+        if (!u && /\S+@\S+\.\S+/.test(key)) {
+          try {
+            u =
+              (await apiGet(`/users/by-email?email=${encodeURIComponent(key)}`)) ||
+              (await apiGet(`/users/${encodeURIComponent(key)}`));
+          } catch {}
+        }
+        if (u) {
+          updates[key] = {
+            email: u.email || item.app?.email || key,
+            name: pickName(u),
+            phone: pickPhone(u),
+            discord: pickDiscord(u),
+          };
+          // also index by email if different
+          const ekey = updates[key].email;
+          if (ekey && ekey !== key) {
+            updates[ekey] = updates[key];
+          }
+        }
+      }
+      if (!cancelled && Object.keys(updates).length) {
+        setUserCache((prev) => ({ ...prev, ...updates }));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.approved, applicants]);
+
   // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
+    const cached =
+      userCache[uid] || userCache[app.userId] || userCache[app.email] || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
     return {
       userId: uid,
-      email: app.email || uid,
-      name: getApplicantName(app),
-      phone: getApplicantPhone(app),
-      discord: getApplicantDiscord(app),
+      email: app.email || cached.email || uid,
+      name: app.name || app.fullName || app.displayName || cached.name || "",
+      phone:
+        app.phone ||
+        app.phoneNumber ||
+        cached.phone ||
+        "",
+      discord:
+        app.discord ||
+        app.discordHandle ||
+        app.username ||
+        cached.discord ||
+        "",
       in: rec.in,
       out: rec.out,
     };
@@ -720,24 +775,12 @@ export default function PMJobDetails({ jobId }) {
               </div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
-              <div>
-                Early call:{" "}
-                {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
-              </div>
-              {isVirtual && (
-                <div style={{ fontWeight: 700, color: "#7c3aed" }}>
-                  Mode: Virtual (no scanning)
-                </div>
-              )}
+              <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
+              {isVirtual && <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>}
             </div>
             <div
               className="card"
-              style={{
-                marginTop: 10,
-                padding: 10,
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
-              }}
+              style={{ marginTop: 10, padding: 10, background: "#f8fafc", border: "1px solid #e2e8f0" }}
             >
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                 <div>
@@ -753,11 +796,7 @@ export default function PMJobDetails({ jobId }) {
                 <div>
                   <b>OT (rounded hours):</b>
                   <br />
-                  {actualEndDJ
-                    ? otRoundedHours > 0
-                      ? `${otRoundedHours} hour(s)`
-                      : "0 (no OT)"
-                    : "—"}
+                  {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
@@ -823,11 +862,24 @@ export default function PMJobDetails({ jobId }) {
           <div style={{ padding: 12, color: "#6b7280" }}>No applicants yet.</div>
         ) : (
           applicants.map((a) => (
-            <div key={a.userId || a.id || a.email} style={applBodyRow}>
+            <div key={a.userId || a.email} style={applBodyRow}>
               <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
-              <div>{getApplicantName(a) || "-"}</div>
-              <div>{getApplicantPhone(a) || "-"}</div>
-              <div>{getApplicantDiscord(a) || "-"}</div>
+              <div>{a.name || a.fullName || a.displayName || userCache[a.email]?.name || "-"}</div>
+              <div>
+                {a.phone ||
+                  a.phoneNumber ||
+                  userCache[a.userId]?.phone ||
+                  userCache[a.email]?.phone ||
+                  "-"}
+              </div>
+              <div>
+                {a.discord ||
+                  a.discordHandle ||
+                  a.username ||
+                  userCache[a.userId]?.discord ||
+                  userCache[a.email]?.discord ||
+                  "-"}
+              </div>
               <div>{a.transport || "-"}</div>
               <div style={{ textTransform: "capitalize" }}>{a.status}</div>
               <div>
@@ -835,7 +887,7 @@ export default function PMJobDetails({ jobId }) {
                   <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                     <input
                       type="checkbox"
-                      checked={a.luConfirmed}
+                      checked={!!a.luConfirmed}
                       onChange={(e) => toggleLU(a.userId, e.target.checked)}
                     />
                     <span>Confirmed</span>
@@ -857,14 +909,11 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* Attendance (fixed) */}
+      {/* Approved + Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
         <div style={{ overflowX: "auto" }}>
-          <table
-            className="table"
-            style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}
-          >
+          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}>
             <thead>
               <tr>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
@@ -1014,16 +1063,10 @@ export default function PMJobDetails({ jobId }) {
               }}
             >
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} />{" "}
-                IN
+                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
               </label>
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input
-                  type="radio"
-                  checked={scanDir === "out"}
-                  onChange={() => setScanDir("out")}
-                />{" "}
-                OUT
+                <input type="radio" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> OUT
               </label>
             </div>
           </div>
@@ -1093,9 +1136,7 @@ export default function PMJobDetails({ jobId }) {
               {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
             </div>
             <div style={{ color: "white", fontSize: 11 }}>
-              {loc
-                ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`
-                : "Getting your location…"}
+              {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
             {scanMsg && (
               <div style={{ color: "white", fontSize: 11 }}>
@@ -1113,9 +1154,7 @@ export default function PMJobDetails({ jobId }) {
                 left: "50%",
                 transform: "translate(-50%, -50%)",
                 background:
-                  scanPopup.kind === "success"
-                    ? "rgba(34,197,94,0.9)"
-                    : "rgba(248,113,113,0.9)",
+                  scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
                 color: "white",
                 padding: "10px 20px",
                 borderRadius: 999,
