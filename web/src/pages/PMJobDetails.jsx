@@ -74,8 +74,7 @@ function extractLatLngFromToken(token) {
   // C) last-two-floats
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
-    const lat = Number(m[1]),
-      lng = Number(m[2]);
+    const lat = Number(m[1]), lng = Number(m[2]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;
@@ -89,6 +88,64 @@ function extractDirFromToken(token) {
     return null;
   }
 }
+
+/* ---------- robust field pickers (fix for phone/discord missing) ---------- */
+const get = (obj, path) =>
+  path.split(".").reduce((o, k) => (o && o[k] != null ? o[k] : undefined), obj);
+
+const pickFirst = (obj, keys) => {
+  for (const k of keys) {
+    const v = get(obj, k);
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+};
+
+// Name candidates
+const pickName = (a) =>
+  pickFirst(a, [
+    "name",
+    "fullName",
+    "displayName",
+    "realName",
+    "user.name",
+    "user.fullName",
+    "user.displayName",
+    "profile.name",
+    "profile.fullName",
+    "contact.name",
+  ]);
+
+// Phone candidates
+const pickPhone = (a) =>
+  pickFirst(a, [
+    "phone",
+    "phoneNumber",
+    "mobile",
+    "mobilePhone",
+    "contact.phone",
+    "contact.mobile",
+    "user.phone",
+    "user.phoneNumber",
+    "profile.phone",
+    "profile.mobile",
+  ]);
+
+// Discord candidates
+const pickDiscord = (a) =>
+  pickFirst(a, [
+    "discord",
+    "discordHandle",
+    "discordId",
+    "discordID",
+    "user.discord",
+    "user.discordHandle",
+    "profile.discord",
+    "contact.discord",
+    // as a last resort, many systems keep their app "username"
+    "username",
+    "user.username",
+  ]);
 
 /* ---------- Applicants grid ---------- */
 const applGrid = {
@@ -612,17 +669,17 @@ export default function PMJobDetails({ jobId }) {
     );
   }
 
-  // display rows
+  // display rows (use robust pickers here)
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
     return {
       userId: uid,
-      email: app.email || uid,
-      name: app.name || app.fullName || app.displayName || "",
-      phone: app.phone || app.phoneNumber || "",
-      discord: app.discord || app.discordHandle || app.username || "",
+      email: pickFirst(app, ["email", "user.email"]) || uid,
+      name: pickName(app),
+      phone: pickPhone(app),
+      discord: pickDiscord(app),
       in: rec.in,
       out: rec.out,
     };
@@ -752,11 +809,13 @@ export default function PMJobDetails({ jobId }) {
           <div style={{ padding: 12, color: "#6b7280" }}>No applicants yet.</div>
         ) : (
           applicants.map((a) => (
-            <div key={a.userId} style={applBodyRow}>
-              <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
-              <div>{a.name || a.fullName || a.displayName || "-"}</div>
-              <div>{a.phone || a.phoneNumber || "-"}</div>
-              <div>{a.discord || a.discordHandle || a.username || "-"}</div>
+            <div key={a.userId || a.email} style={applBodyRow}>
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                {pickFirst(a, ["email", "user.email"]) || "-"}
+              </div>
+              <div>{pickName(a) || "-"}</div>
+              <div>{pickPhone(a) || "-"}</div>
+              <div>{pickDiscord(a) || "-"}</div>
               <div>{a.transport || "-"}</div>
               <div style={{ textTransform: "capitalize" }}>{a.status}</div>
               <div>
@@ -786,14 +845,11 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* Attendance (fixed) */}
+      {/* Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
         <div style={{ overflowX: "auto" }}>
-          <table
-            className="table"
-            style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}
-          >
+          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}>
             <thead>
               <tr>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
@@ -1018,11 +1074,7 @@ export default function PMJobDetails({ jobId }) {
             <div style={{ color: "white", fontSize: 11 }}>
               {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
-            {scanMsg && (
-              <div style={{ color: "white", fontSize: 11 }}>
-                {scanMsg}
-              </div>
-            )}
+            {scanMsg && <div style={{ color: "white", fontSize: 11 }}>{scanMsg}</div>}
           </div>
 
           {/* center popup */}
