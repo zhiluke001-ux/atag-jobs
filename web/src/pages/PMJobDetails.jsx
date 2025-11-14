@@ -74,7 +74,8 @@ function extractLatLngFromToken(token) {
   // C) last-two-floats
   const m = token.match(/(-?\d+(?:\.\d+)?)[:|,](-?\d+(?:\.\d+)?)(?:[^0-9-].*)?$/);
   if (m) {
-    const lat = Number(m[1]), lng = Number(m[2]);
+    const lat = Number(m[1]),
+      lng = Number(m[2]);
     if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng };
   }
   return null;
@@ -88,64 +89,6 @@ function extractDirFromToken(token) {
     return null;
   }
 }
-
-/* ---------- robust field pickers (fix for phone/discord missing) ---------- */
-const get = (obj, path) =>
-  path.split(".").reduce((o, k) => (o && o[k] != null ? o[k] : undefined), obj);
-
-const pickFirst = (obj, keys) => {
-  for (const k of keys) {
-    const v = get(obj, k);
-    if (v != null && String(v).trim() !== "") return String(v).trim();
-  }
-  return "";
-};
-
-// Name candidates
-const pickName = (a) =>
-  pickFirst(a, [
-    "name",
-    "fullName",
-    "displayName",
-    "realName",
-    "user.name",
-    "user.fullName",
-    "user.displayName",
-    "profile.name",
-    "profile.fullName",
-    "contact.name",
-  ]);
-
-// Phone candidates
-const pickPhone = (a) =>
-  pickFirst(a, [
-    "phone",
-    "phoneNumber",
-    "mobile",
-    "mobilePhone",
-    "contact.phone",
-    "contact.mobile",
-    "user.phone",
-    "user.phoneNumber",
-    "profile.phone",
-    "profile.mobile",
-  ]);
-
-// Discord candidates
-const pickDiscord = (a) =>
-  pickFirst(a, [
-    "discord",
-    "discordHandle",
-    "discordId",
-    "discordID",
-    "user.discord",
-    "user.discordHandle",
-    "profile.discord",
-    "contact.discord",
-    // as a last resort, many systems keep their app "username"
-    "username",
-    "user.username",
-  ]);
 
 /* ---------- Applicants grid ---------- */
 const applGrid = {
@@ -204,6 +147,50 @@ function readApiError(err) {
     }
   }
   return {};
+}
+
+/* ----- helper to read phone / discord robustly ----- */
+function getApplicantPhone(a) {
+  if (!a) return "";
+  return (
+    a.phone ||
+    a.phoneNumber ||
+    a.mobile ||
+    a.mobileNumber ||
+    a.user?.phone ||
+    a.user?.phoneNumber ||
+    a.user?.mobile ||
+    a.user?.mobileNumber ||
+    ""
+  );
+}
+
+function getApplicantDiscord(a) {
+  if (!a) return "";
+  return (
+    a.discord ||
+    a.discordHandle ||
+    a.discordTag ||
+    a.user?.discord ||
+    a.user?.discordHandle ||
+    a.user?.discordTag ||
+    a.username ||
+    a.user?.username ||
+    ""
+  );
+}
+
+function getApplicantName(a) {
+  if (!a) return "";
+  return (
+    a.name ||
+    a.fullName ||
+    a.displayName ||
+    a.user?.name ||
+    a.user?.fullName ||
+    a.user?.displayName ||
+    ""
+  );
 }
 
 export default function PMJobDetails({ jobId }) {
@@ -662,24 +649,35 @@ export default function PMJobDetails({ jobId }) {
 
   // helper to find applicant data for an approved id
   function findApplicant(id) {
+    if (!id) return null;
+    const match = (a) =>
+      a.userId === id ||
+      a.id === id ||
+      a.email === id ||
+      a.username === id ||
+      a.user?.id === id ||
+      a.user?.userId === id ||
+      a.user?.email === id ||
+      a.user?.username === id;
+
     return (
-      applicants.find((a) => a.userId === id || a.email === id) ||
-      (job.applications || []).find((a) => a.userId === id || a.email === id) ||
+      applicants.find(match) ||
+      (job.applications || []).find(match) ||
       null
     );
   }
 
-  // display rows (use robust pickers here)
+  // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
     return {
       userId: uid,
-      email: pickFirst(app, ["email", "user.email"]) || uid,
-      name: pickName(app),
-      phone: pickPhone(app),
-      discord: pickDiscord(app),
+      email: app.email || uid,
+      name: getApplicantName(app),
+      phone: getApplicantPhone(app),
+      discord: getApplicantDiscord(app),
       in: rec.in,
       out: rec.out,
     };
@@ -722,12 +720,24 @@ export default function PMJobDetails({ jobId }) {
               </div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
-              <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
-              {isVirtual && <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>}
+              <div>
+                Early call:{" "}
+                {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
+              </div>
+              {isVirtual && (
+                <div style={{ fontWeight: 700, color: "#7c3aed" }}>
+                  Mode: Virtual (no scanning)
+                </div>
+              )}
             </div>
             <div
               className="card"
-              style={{ marginTop: 10, padding: 10, background: "#f8fafc", border: "1px solid #e2e8f0" }}
+              style={{
+                marginTop: 10,
+                padding: 10,
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+              }}
             >
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                 <div>
@@ -743,7 +753,11 @@ export default function PMJobDetails({ jobId }) {
                 <div>
                   <b>OT (rounded hours):</b>
                   <br />
-                  {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
+                  {actualEndDJ
+                    ? otRoundedHours > 0
+                      ? `${otRoundedHours} hour(s)`
+                      : "0 (no OT)"
+                    : "—"}
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
@@ -809,13 +823,11 @@ export default function PMJobDetails({ jobId }) {
           <div style={{ padding: 12, color: "#6b7280" }}>No applicants yet.</div>
         ) : (
           applicants.map((a) => (
-            <div key={a.userId || a.email} style={applBodyRow}>
-              <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                {pickFirst(a, ["email", "user.email"]) || "-"}
-              </div>
-              <div>{pickName(a) || "-"}</div>
-              <div>{pickPhone(a) || "-"}</div>
-              <div>{pickDiscord(a) || "-"}</div>
+            <div key={a.userId || a.id || a.email} style={applBodyRow}>
+              <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
+              <div>{getApplicantName(a) || "-"}</div>
+              <div>{getApplicantPhone(a) || "-"}</div>
+              <div>{getApplicantDiscord(a) || "-"}</div>
               <div>{a.transport || "-"}</div>
               <div style={{ textTransform: "capitalize" }}>{a.status}</div>
               <div>
@@ -845,11 +857,14 @@ export default function PMJobDetails({ jobId }) {
         )}
       </div>
 
-      {/* Attendance */}
+      {/* Attendance (fixed) */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
         <div style={{ overflowX: "auto" }}>
-          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}>
+          <table
+            className="table"
+            style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}
+          >
             <thead>
               <tr>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
@@ -999,10 +1014,16 @@ export default function PMJobDetails({ jobId }) {
               }}
             >
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
+                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} />{" "}
+                IN
               </label>
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="radio" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> OUT
+                <input
+                  type="radio"
+                  checked={scanDir === "out"}
+                  onChange={() => setScanDir("out")}
+                />{" "}
+                OUT
               </label>
             </div>
           </div>
@@ -1072,9 +1093,15 @@ export default function PMJobDetails({ jobId }) {
               {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
             </div>
             <div style={{ color: "white", fontSize: 11 }}>
-              {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
+              {loc
+                ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`
+                : "Getting your location…"}
             </div>
-            {scanMsg && <div style={{ color: "white", fontSize: 11 }}>{scanMsg}</div>}
+            {scanMsg && (
+              <div style={{ color: "white", fontSize: 11 }}>
+                {scanMsg}
+              </div>
+            )}
           </div>
 
           {/* center popup */}
@@ -1086,7 +1113,9 @@ export default function PMJobDetails({ jobId }) {
                 left: "50%",
                 transform: "translate(-50%, -50%)",
                 background:
-                  scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
+                  scanPopup.kind === "success"
+                    ? "rgba(34,197,94,0.9)"
+                    : "rgba(248,113,113,0.9)",
                 color: "white",
                 padding: "10px 20px",
                 borderRadius: 999,
