@@ -1,7 +1,23 @@
-import React, { useState } from "react";
+// web/src/components/Header.jsx
+import React, { useState, useMemo } from "react";
 import { logout } from "../auth";
-import NotificationsBell  from "./NotifyBell"; 
+import NotificationsBell from "./NotifyBell";
 
+// Tiny fallback if user.avatarUrl is missing
+function fallbackAvatar(user) {
+  const base = user?.name || user?.email || user?.username || "User";
+  const initials = base
+    .replace(/[_.-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0])
+    .join("")
+    .toUpperCase() || "U";
+  return `https://ui-avatars.com/api/?name=${encodeURIComponent(
+    initials
+  )}&size=128&background=random&color=fff&bold=true`;
+}
 
 export default function Header({ user, setUser }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -14,9 +30,20 @@ export default function Header({ user, setUser }) {
   }
 
   const role = user?.role || "";
-  const isPMAdmin = role === "admin";
-  // Back-compat: show "My Jobs" to classic "part-timer" AND new tiers role === "pm" || 
-  const isPartTimer = role === "junior" || role === "senior" || role === "part-timer";
+  const grade = user?.grade || "";
+
+  // Admin-only pages stay admin-only in UI
+  const isAdmin = role === "admin";
+
+  // Show "My Jobs" to part-timer role OR anyone who has a staff grade (junior/senior/lead)
+  const isPartTimer =
+    role === "part-timer" || ["junior", "senior", "lead"].includes(grade);
+
+  // Avatar URL (prefer user.avatarUrl if provided by auth.js)
+  const avatarUrl = useMemo(
+    () => (user?.avatarUrl ? user.avatarUrl : fallbackAvatar(user)),
+    [user]
+  );
 
   return (
     <header className="site-header">
@@ -30,7 +57,8 @@ export default function Header({ user, setUser }) {
         <nav className="nav-links">
           <a href="#/">Home</a>
           {isPartTimer && <a href="#/my-jobs">My Jobs</a>}
-          {isPMAdmin && (
+          {!!user && <a href="#/profile">Profile</a>}
+          {isAdmin && (
             <>
               <a href="#/wages">Wages</a>
               <a href="#/admin-users">User Management</a>
@@ -61,9 +89,23 @@ export default function Header({ user, setUser }) {
           </div>
 
           {/* Auth */}
-          <div className="auth">
+          <div className="auth" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {user ? (
               <>
+                <a href="#/profile" className="avatar-link" title="Profile">
+                  <img
+                    src={avatarUrl}
+                    alt="Profile avatar"
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: "50%",
+                      objectFit: "cover",
+                      display: "block",
+                      border: "1px solid rgba(0,0,0,0.1)"
+                    }}
+                  />
+                </a>
                 <span className="hi">
                   Hi, {user.name} <span className="role">· {role}</span>
                 </span>
@@ -84,7 +126,7 @@ export default function Header({ user, setUser }) {
             Menu
           </button>
 
-         <NotificationsBell user={user} />
+          <NotificationsBell user={user} />
         </div>
       </div>
 
@@ -101,7 +143,10 @@ export default function Header({ user, setUser }) {
                   {isPartTimer && (
                     <a className="btn" href="#/my-jobs" onClick={() => setMenuOpen(false)}>My Jobs</a>
                   )}
-                  {isPMAdmin && (
+                  {!!user && (
+                    <a className="btn" href="#/profile" onClick={() => setMenuOpen(false)}>Profile</a>
+                  )}
+                  {isAdmin && (
                     <>
                       <a className="btn" href="#/wages" onClick={() => setMenuOpen(false)}>Wages</a>
                       <a className="btn" href="#/admin-users" onClick={() => setMenuOpen(false)}>Users Management</a>
