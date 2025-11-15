@@ -3,6 +3,9 @@ import { apiPost, apiGet, setToken, clearToken } from "./api";
 
 const TOKEN_KEY = "token";
 
+/* ------------------------------------ */
+/* Token helpers                        */
+/* ------------------------------------ */
 export function getToken() {
   try {
     return localStorage.getItem(TOKEN_KEY) || null;
@@ -15,26 +18,23 @@ export function isLoggedIn() {
   return !!getToken();
 }
 
-export async function login(identifier, password) {
-  const res = await apiPost("/login", { identifier, password });
-  setToken(res.token);
-  // normalize user shape & ensure avatar fallback
-  return withAvatarFallback(res.user);
-}
-
-// Ensure we always return a user object with avatarUrl present
+/* ------------------------------------ */
+/* Avatar fallback utility              */
+/* ------------------------------------ */
 function withAvatarFallback(user) {
   if (!user) return null;
   if (!user.avatarUrl) {
     const base = user.name || user.email || user.username || "User";
-    const initials = String(base)
-      .replace(/[_.-]+/g, " ")
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((s) => s[0])
-      .join("")
-      .toUpperCase() || "U";
+    const initials =
+      String(base)
+        .replace(/[_.-]+/g, " ")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((s) => s[0])
+        .join("")
+        .toUpperCase() || "U";
+    // lightweight CDN avatar
     user.avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(
       initials
     )}&size=128&background=random&color=fff&bold=true`;
@@ -42,11 +42,19 @@ function withAvatarFallback(user) {
   return user;
 }
 
-// call this to see if current token is actually usable
+/* ------------------------------------ */
+/* Auth flows                           */
+/* ------------------------------------ */
+export async function login(identifier, password) {
+  const res = await apiPost("/login", { identifier, password });
+  setToken(res.token);
+  return withAvatarFallback(res.user);
+}
+
+// Always return the user object (not {user})
 export async function fetchCurrentUser() {
   try {
     const me = await apiGet("/me");
-    // Some callers expect {user: {...}}, others the user object:
     const u = me?.user || me;
     return withAvatarFallback(u);
   } catch {
@@ -70,7 +78,7 @@ export async function registerUser({
     email: String(email || "").trim(),
     username: String(username || "").trim(),
     name: String(name || "").trim(),
-    password,
+    password, // server hashes
     phone: String(phone || "").trim(),
     discord: String(discord || "").trim(),
     role: pickedRole,
@@ -93,33 +101,32 @@ export function logout() {
   clearToken();
 }
 
-/* ---------- Profile helpers (NEW) ---------- */
+/* ------------------------------------ */
+/* Profile & security helpers           */
+/* ------------------------------------ */
 
-// Update own profile fields
+// Update own profile fields (email, username, name, phone, discord)
+// Note: sending empty string will clear phone/discord.
 export async function updateProfile({ name, username, email, phone, discord }) {
   const res = await apiPost("/me/profile", {
-    name: String(name ?? "").trim(),
-    username: String(username ?? "").trim(),
-    email: String(email ?? "").trim(),
-    phone: String(phone ?? "").trim(),
-    discord: String(discord ?? "").trim(),
+    // server treats undefined as "don't change"
+    ...(name !== undefined ? { name: String(name).trim() } : {}),
+    ...(username !== undefined ? { username: String(username).trim() } : {}),
+    ...(email !== undefined ? { email: String(email).trim() } : {}),
+    ...(phone !== undefined ? { phone: String(phone).trim() } : {}),
+    ...(discord !== undefined ? { discord: String(discord).trim() } : {}),
   });
-  // server returns {user: {...}}
   return withAvatarFallback(res.user);
 }
 
-// Change password (current -> new)
+// Change password (requires currentPassword)
 export async function changePassword(currentPassword, newPassword) {
-  const res = await apiPost("/me/password", {
-    currentPassword,
-    newPassword,
-  });
+  const res = await apiPost("/me/password", { currentPassword, newPassword });
   return res?.ok === true;
 }
 
-// Upload avatar via data URL (e.g. from <input type="file"> readAsDataURL)
+// Upload avatar via Data URL (from FileReader.readAsDataURL)
 export async function uploadAvatarDataUrl(dataUrl) {
   const res = await apiPost("/me/avatar", { dataUrl });
-  // Expect { ok: true, avatarUrl: "..." }
-  return res.avatarUrl;
+  return res.avatarUrl; // string
 }
