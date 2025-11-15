@@ -1,6 +1,6 @@
 // web/src/App.jsx
 import React, { useEffect, useState } from "react";
-import { apiGet } from "./api";
+import { fetchCurrentUser } from "./auth"; // use auth helper so avatarUrl is attached
 
 /* ---------- Shared UI ---------- */
 import Header from "./components/Header";
@@ -16,6 +16,7 @@ import Admin from "./pages/Admin"; // Wages
 import Scanner from "./components/Scanner";
 import AdminUsers from "./pages/AdminUsers"; // NE
 import AdminAudit from "./pages/AdminAudit";
+import Profile from "./pages/Profile"; // <— NEW
 
 /* ---------- Auth ---------- */
 import Login from "./pages/Login";
@@ -29,8 +30,8 @@ function useAuth() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    apiGet("/me")
-      .then((r) => setUser(r.user))
+    fetchCurrentUser()
+      .then((u) => setUser(u || null))
       .catch(() => {})
       .finally(() => setLoaded(true));
   }, []);
@@ -70,14 +71,20 @@ export default function App() {
     if (path === "my-jobs") return <MyJobs navigate={navigate} user={user} />;
     if (path === "payments") return <Payments navigate={navigate} user={user} />;
 
+    /* -------- Profile (requires login) -------- */
+    if (path === "profile") {
+      if (!user) return <Login navigate={navigate} setUser={setUser} />;
+      return <Profile navigate={navigate} user={user} setUser={setUser} />;
+    }
+
     /* -------- Admin / Wages -------- */
     if (path === "admin-users" || path === "users") {
-  return <AdminUsers user={user} />;
-}
+      return <AdminUsers user={user} />;
+    }
 
     if (path === "admin-audit" || path === "audit")
-      return <AdminAudit user={user} />;    
-    
+      return <AdminAudit user={user} />;
+
     // AdminUsers was removed. Keep legacy routes but redirect them to Wages.
     if (path === "wages" || path === "users-audit") {
       return <Admin navigate={navigate} user={user} />;
