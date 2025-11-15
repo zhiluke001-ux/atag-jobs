@@ -37,7 +37,7 @@ export default function Header({ user, setUser }) {
 
   // Show "My Jobs" to part-timer role OR anyone who has a staff grade (junior/senior/lead)
   const isPartTimer =
-    role === "part-timer" || ["junior", "senior", "lead"].includes(grade);
+    role === "part-timer";
 
   // Avatar URL (prefer user.avatarUrl if provided by auth.js)
   const avatarUrl = useMemo(
