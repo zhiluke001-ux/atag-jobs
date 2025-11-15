@@ -23,6 +23,12 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan("dev"));
 
+/* ---- uploads (images) ---- */
+const uploadsRoot = path.join(__dirname, "data", "uploads");
+const avatarsDir = path.join(uploadsRoot, "avatars");
+fs.ensureDirSync(avatarsDir);
+app.use("/uploads", express.static(uploadsRoot));
+
 /* ---------------- DB + defaults ---------------- */
 let db = await loadDB();
 
@@ -113,6 +119,16 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
 
 const signToken = (payload) =>
   jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+
+function signUserToken(user) {
+  return signToken({
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+    grade: user.grade || "junior"
+  });
+}
 
 function authMiddleware(req, res, next) {
   const h = req.headers.authorization || "";
@@ -445,6 +461,10 @@ for (const u of db.users) {
     u.discord = "";
     mutated = true;
   }
+  if (u.avatarUrl === undefined) {
+    u.avatarUrl = "";
+    mutated = true;
+  }
 }
 if (mutated) await saveDB(db);
 
@@ -642,13 +662,7 @@ app.post("/login", async (req, res) => {
     return res.status(401).json({ error: "invalid_password" });
   }
 
-  const token = signToken({
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    name: user.name,
-    grade: user.grade || "junior"
-  });
+  const token = signUserToken(user);
   addAudit("login", { identifier: id }, { user });
   res.json({
     token,
@@ -657,7 +671,11 @@ app.post("/login", async (req, res) => {
       email: user.email,
       role: user.role,
       name: user.name,
-      grade: user.grade || "junior"
+      grade: user.grade || "junior",
+      username: user.username || "",
+      phone: user.phone || "",
+      discord: user.discord || "",
+      avatarUrl: user.avatarUrl || ""
     }
   });
 });
@@ -704,19 +722,14 @@ app.post("/register", async (req, res) => {
     grade: "junior",
     passwordHash,
     phone: String(phone || ""),
-    discord: String(discord || "")
+    discord: String(discord || ""),
+    avatarUrl: ""
   };
   db.users.push(newUser);
   await saveDB(db);
   addAudit("register", { email, role: pickedRole }, { user: newUser });
 
-  const token = signToken({
-    id,
-    email,
-    role: newUser.role,
-    name: newUser.name,
-    grade: newUser.grade
-  });
+  const token = signUserToken(newUser);
   res.json({
     token,
     user: {
@@ -724,7 +737,11 @@ app.post("/register", async (req, res) => {
       email,
       role: newUser.role,
       name: newUser.name,
-      grade: newUser.grade
+      grade: newUser.grade,
+      username: newUser.username,
+      phone: newUser.phone,
+      discord: newUser.discord,
+      avatarUrl: newUser.avatarUrl
     }
   });
 });
@@ -804,6 +821,7 @@ app.post("/auth/reset", (req, res, next) => {
   app._router.handle(req, res, next);
 });
 
+/* ---- ME (current user) ---- */
 app.get("/me", authMiddleware, (req, res) => {
   const user = db.users.find((u) => u.id === req.user.id);
   res.json({
@@ -812,9 +830,115 @@ app.get("/me", authMiddleware, (req, res) => {
       email: user.email,
       role: user.role,
       name: user.name,
-      grade: user.grade || "junior"
+      grade: user.grade || "junior",
+      username: user.username || "",
+      phone: user.phone || "",
+      discord: user.discord || "",
+      avatarUrl: user.avatarUrl || ""
     }
   });
+});
+
+// Update profile (email, username, name, phone, discord)
+async function handleUpdateMe(req, res) {
+  const user = (db.users || []).find((u) => u.id === req.user.id);
+  if (!user) return res.status(404).json({ error: "user_not_found" });
+
+  const { email, username, name, phone, discord } = req.body || {};
+
+  if (email && String(email).toLowerCase() !== String(user.email).toLowerCase()) {
+    const taken = (db.users || []).some(
+      (u) => u.id !== user.id && String(u.email || "").toLowerCase() === String(email).toLowerCase()
+    );
+    if (taken) return res.status(409).json({ error: "email_taken" });
+    user.email = String(email);
+  }
+  if (username && String(username).toLowerCase() !== String(user.username || "").toLowerCase()) {
+    const takenU = (db.users || []).some(
+      (u) => u.id !== user.id && String(u.username || "").toLowerCase() === String(username).toLowerCase()
+    );
+    if (takenU) return res.status(409).json({ error: "username_taken" });
+    user.username = String(username);
+  }
+  if (name !== undefined) user.name = String(name);
+  if (phone !== undefined) user.phone = String(phone || "");
+  if (discord !== undefined) user.discord = String(discord || "");
+
+  await saveDB(db);
+  addAudit("me_update_profile", { userId: user.id }, req);
+
+  const token = signUserToken(user);
+
+  return res.json({
+    ok: true,
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      grade: user.grade || "junior",
+      phone: user.phone || "",
+      discord: user.discord || "",
+      avatarUrl: user.avatarUrl || ""
+    }
+  });
+}
+app.patch("/me", authMiddleware, handleUpdateMe);
+app.post("/me/update", authMiddleware, handleUpdateMe);
+
+// Change password
+app.post("/me/password", authMiddleware, async (req, res) => {
+  const user = (db.users || []).find((u) => u.id === req.user.id);
+  if (!user) return res.status(404).json({ error: "user_not_found" });
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: "missing_fields" });
+  }
+  if (!verifyPassword(currentPassword, user.passwordHash)) {
+    return res.status(401).json({ error: "invalid_current_password" });
+  }
+  if (String(newPassword).length < 6) {
+    return res.status(400).json({ error: "weak_password" });
+  }
+  user.passwordHash = hashPassword(String(newPassword));
+  await saveDB(db);
+  addAudit("me_change_password", { userId: user.id }, req);
+  return res.json({ ok: true });
+});
+
+// Upload avatar (expects dataUrl: "data:image/...;base64,XXXX")
+app.post("/me/avatar", authMiddleware, async (req, res) => {
+  const user = (db.users || []).find((u) => u.id === req.user.id);
+  if (!user) return res.status(404).json({ error: "user_not_found" });
+
+  const dataUrl = req.body?.dataUrl;
+  if (!dataUrl || typeof dataUrl !== "string") {
+    return res.status(400).json({ error: "dataUrl_required" });
+  }
+
+  const m = dataUrl.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
+  if (!m) return res.status(400).json({ error: "invalid_image_data" });
+
+  const mime = m[1];
+  const ext = m[2] === "jpeg" ? "jpg" : m[2];
+  const b64 = m[3];
+  const buf = Buffer.from(b64, "base64");
+
+  if (buf.length > 2 * 1024 * 1024) {
+    return res.status(400).json({ error: "image_too_large" });
+  }
+
+  const filename = `${user.id}.${ext}`;
+  const abs = path.join(avatarsDir, filename);
+  await fs.writeFile(abs, buf);
+
+  user.avatarUrl = `/uploads/avatars/${filename}?v=${Date.now()}`;
+  await saveDB(db);
+  addAudit("me_update_avatar", { userId: user.id, mime }, req);
+
+  return res.json({ ok: true, avatarUrl: user.avatarUrl });
 });
 
 /* -------- Admin: users -------- */
@@ -831,7 +955,8 @@ app.get(
       role: u.role,
       grade: u.grade || "junior",
       phone: u.phone || "",
-      discord: u.discord || ""
+      discord: u.discord || "",
+      avatarUrl: u.avatarUrl || ""
     }));
     res.json(list);
   }
@@ -887,12 +1012,14 @@ app.patch(
         username: target.username,
         name: target.name,
         role: target.role,
-        grade: target.grade || "junior"
+        grade: target.grade || "junior",
+        phone: target.phone || "",
+        discord: target.discord || "",
+        avatarUrl: target.avatarUrl || ""
       }
     });
   }
 );
-
 
 // DELETE /admin/users/:id  — hard delete a user and purge references
 app.delete(
@@ -938,9 +1065,6 @@ app.delete(
     res.json({ ok: true, removed: { id: user.id, email: user.email } });
   }
 );
-
-
-
 
 /* -------- Config (Admin) -------- */
 app.get(
@@ -1590,7 +1714,8 @@ app.get(
         luConfirmed,
         name: u?.name || "",
         phone: u?.phone || "",
-        discord: u?.discord || ""
+        discord: u?.discord || "",
+        avatarUrl: u?.avatarUrl || ""
       };
     });
     res.json(list);
