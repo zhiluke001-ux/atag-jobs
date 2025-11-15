@@ -893,6 +893,51 @@ app.patch(
   }
 );
 
+
+// DELETE a user (admin only) with full cleanup across jobs
+app.delete(
+  "/admin/users/:id",
+  authMiddleware,
+  requireRole("admin"),
+  async (req, res) => {
+    const uid = String(req.params.id);
+    const target = (db.users || []).find(u => u.id === uid);
+    if (!target) return res.status(404).json({ error: "user_not_found" });
+
+    // Protect against removing the last admin
+    if (target.role === "admin") {
+      const adminCount = (db.users || []).filter(u => u.role === "admin").length;
+      if (adminCount <= 1) {
+        return res.status(400).json({ error: "last_admin" });
+      }
+    }
+
+    // Remove from users
+    db.users = (db.users || []).filter(u => u.id !== uid);
+
+    // Cleanup references in jobs
+    for (const j of db.jobs || []) {
+      j.applications = (j.applications || []).filter(a => a.userId !== uid);
+      j.approved = (j.approved || []).filter(id => id !== uid);
+      j.rejected = (j.rejected || []).filter(id => id !== uid);
+      if (j.attendance) delete j.attendance[uid];
+      if (j.loadingUnload) {
+        j.loadingUnload.applicants = (j.loadingUnload.applicants || []).filter(id => id !== uid);
+        j.loadingUnload.participants = (j.loadingUnload.participants || []).filter(id => id !== uid);
+      }
+    }
+
+    // Cleanup notifications & push subs
+    if (db.notifications) delete db.notifications[uid];
+    if (db.pushSubs) delete db.pushSubs[uid];
+
+    await saveDB(db);
+    addAudit("delete_user", { userId: uid, email: target.email }, req);
+    res.json({ ok: true });
+  }
+);
+
+
 /* -------- Config (Admin) -------- */
 app.get(
   "/config/rates",
