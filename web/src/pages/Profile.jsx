@@ -1,76 +1,113 @@
 // web/src/pages/Profile.jsx
-import React, { useEffect, useState } from "react";
-import { fetchCurrentUser, updateProfile, changePassword, uploadAvatarDataUrl } from "../auth";
+import React, { useEffect, useRef, useState } from "react";
+import {
+  fetchCurrentUser,
+  updateProfile,
+  changePassword,
+  uploadAvatarDataUrl,
+} from "../auth";
 
+/* ---------------- Reusable inline-edit row ---------------- */
+function InlineRow({ label, name, type = "text", value, onSave, disabled }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  const inputRef = useRef(null);
+
+  useEffect(() => setDraft(value ?? ""), [value]);
+  useEffect(() => {
+    if (editing && inputRef.current) inputRef.current.focus();
+  }, [editing]);
+
+  function onKeyDown(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      doSave();
+    }
+    if (e.key === "Escape") {
+      setDraft(value ?? "");
+      setEditing(false);
+    }
+  }
+
+  async function doSave() {
+    if (!editing) return;
+    setEditing(false);
+    const trimmed = typeof draft === "string" ? draft.trim() : draft;
+    if (trimmed === (value ?? "")) return;
+    await onSave(name, trimmed);
+  }
+
+  return (
+    <div className="row-line" style={styles.row}>
+      <div style={styles.label}>{label}</div>
+      {!editing ? (
+        <div style={styles.value}>
+          <span>{value || <span style={styles.muted}>—</span>}</span>
+          {!disabled && (
+            <button
+              className="btn link"
+              type="button"
+              onClick={() => setEditing(true)}
+              style={styles.editBtn}
+            >
+              Edit
+            </button>
+          )}
+        </div>
+      ) : (
+        <div style={styles.value}>
+          <input
+            ref={inputRef}
+            type={type}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            onBlur={doSave}
+            style={styles.input}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Profile page ---------------- */
 export default function Profile() {
   const [me, setMe] = useState(null);
-
-  const [email, setEmail] = useState("");
-  const [username, setUsername] = useState("");
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [discord, setDiscord] = useState("");
-
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-
   const [avatarPreview, setAvatarPreview] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState(null);         // { type: "ok"|"err", msg: string }
 
-  function showToast(msg, type = "ok") {
+  // password section state
+  const [showSecurity, setShowSecurity] = useState(false);
+  const [curPw, setCurPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [newPw2, setNewPw2] = useState("");
+
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null); // {type:'ok'|'err', msg:string}
+
+  function notify(msg, type = "ok") {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 2200);
+    setTimeout(() => setToast(null), 2000);
   }
 
   useEffect(() => {
     (async () => {
       const res = await fetchCurrentUser();
-      if (res?.user) {
-        setMe(res.user);
-        setEmail(res.user.email || "");
-        setUsername(res.user.username || "");
-        setName(res.user.name || "");
-        setPhone(res.user.phone || "");
-        setDiscord(res.user.discord || "");
-      }
+      // res is already the user object (but support {user:...} just in case)
+      const u = res?.user || res;
+      if (u) setMe(u);
     })();
   }, []);
 
-  async function onSaveProfile(e) {
-    e.preventDefault();
+  async function saveField(field, val) {
+    if (!me) return;
     setBusy(true);
     try {
-      const updated = await updateProfile({ email, username, name, phone, discord });
+      const updated = await updateProfile({ [field]: val });
       setMe(updated);
-      showToast("Profile updated ✅", "ok");
+      notify("Saved ✅", "ok");
     } catch (e) {
-      showToast(e?.message || "Update failed", "err");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onChangePassword(e) {
-    e.preventDefault();
-    if (newPassword !== confirm) {
-      showToast("Passwords do not match", "err");
-      return;
-    }
-    if ((newPassword || "").length < 6) {
-      showToast("Password too short (min 6)", "err");
-      return;
-    }
-    setBusy(true);
-    try {
-      await changePassword(currentPassword, newPassword);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirm("");
-      showToast("Password changed ✅", "ok");
-    } catch (e) {
-      showToast(e?.message || "Password change failed", "err");
+      notify(e?.message || "Update failed", "err");
     } finally {
       setBusy(false);
     }
@@ -88,52 +125,80 @@ export default function Profile() {
   async function onPickAvatar(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const okTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
-    if (!okTypes.includes(file.type)) {
-      showToast("Only PNG/JPG/WEBP", "err");
+    const ok = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+    if (!ok.includes(file.type)) {
+      notify("Only PNG/JPG/WEBP", "err");
       return;
     }
     if (file.size > 2 * 1024 * 1024) {
-      showToast("Max 2MB", "err");
+      notify("Max 2MB", "err");
       return;
     }
     try {
       const dataUrl = await fileToDataUrl(file);
-      setAvatarPreview(dataUrl);
-      const resp = await uploadAvatarDataUrl(dataUrl);
-      setMe((m) => ({ ...m, avatarUrl: resp?.avatarUrl || m?.avatarUrl }));
-      showToast("Avatar updated ✅", "ok");
-    } catch (e2) {
-      showToast(e2?.message || "Avatar upload failed", "err");
+      setAvatarPreview(dataUrl); // instant preview
+      const newUrl = await uploadAvatarDataUrl(dataUrl); // <- returns URL string
+      setMe((m) => ({ ...m, avatarUrl: newUrl }));
+      notify("Avatar updated ✅", "ok");
+    } catch (err) {
+      notify(err?.message || "Avatar upload failed", "err");
+      setAvatarPreview(null);
+    } finally {
+      // clear the input value so the same file can be reselected if needed
+      e.target.value = "";
     }
   }
 
+  async function onChangePassword(e) {
+    e.preventDefault();
+    if (newPw.length < 6) {
+      notify("Password too short (min 6)", "err");
+      return;
+    }
+    if (newPw !== newPw2) {
+      notify("Passwords do not match", "err");
+      return;
+    }
+    setBusy(true);
+    try {
+      await changePassword(curPw, newPw);
+      setCurPw("");
+      setNewPw("");
+      setNewPw2("");
+      notify("Password changed ✅", "ok");
+    } catch (e) {
+      notify(e?.message || "Password change failed", "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const avatarSrc =
+    avatarPreview ||
+    me?.avatarUrl ||
+    "https://api.dicebear.com/7.x/initials/svg?seed=" +
+      encodeURIComponent(me?.name || me?.email || "U");
+
   return (
     <div className="container" style={{ maxWidth: 900 }}>
-      {/* Avatar + headline */}
+      {/* Header card */}
       <div className="card" style={{ display: "flex", gap: 16, alignItems: "center" }}>
         <div style={{ position: "relative", width: 96, height: 96 }}>
           <img
-            src={avatarPreview || me?.avatarUrl || "https://api.dicebear.com/7.x/initials/svg?seed=" + encodeURIComponent(me?.name || me?.email || "U")}
+            src={avatarSrc}
             alt="avatar"
             style={{
               width: 96,
               height: 96,
               borderRadius: "9999px",
               objectFit: "cover",
-              border: "2px solid #e5e7eb"
+              border: "2px solid #e5e7eb",
             }}
           />
           <label
             htmlFor="avatarPick"
             className="btn"
-            style={{
-              position: "absolute",
-              bottom: -6,
-              right: -6,
-              fontSize: 12,
-              padding: "6px 10px"
-            }}
+            style={{ position: "absolute", bottom: -6, right: -6, fontSize: 12, padding: "6px 10px" }}
           >
             Change
           </label>
@@ -142,70 +207,83 @@ export default function Profile() {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 18 }}>My Profile</div>
           <div style={{ color: "#666", fontSize: 12 }}>
-            Role: {me?.role} • Grade: {me?.grade}
+            Role: {me?.role || "—"} • Grade: {me?.grade || "—"}
           </div>
         </div>
       </div>
 
-      {/* Profile form */}
-      <form className="card" onSubmit={onSaveProfile}>
-        <div style={{ fontWeight: 600, marginBottom: 10 }}>Account details</div>
+      {/* Account details (view-first, click-to-edit) */}
+      <div className="card">
+        <div style={{ fontWeight: 600, marginBottom: 10 }}>Account</div>
+        <InlineRow
+          label="Email"
+          name="email"
+          type="email"
+          value={me?.email}
+          onSave={saveField}
+        />
+        <InlineRow
+          label="Username"
+          name="username"
+          value={me?.username}
+          onSave={saveField}
+        />
+        <InlineRow
+          label="Full name"
+          name="name"
+          value={me?.name}
+          onSave={saveField}
+        />
+        <InlineRow
+          label="Phone"
+          name="phone"
+          type="tel"
+          value={me?.phone}
+          onSave={saveField}
+        />
+        <InlineRow
+          label="Discord"
+          name="discord"
+          value={me?.discord}
+          onSave={saveField}
+        />
+        {busy && <div style={styles.busyNote}>Saving…</div>}
+      </div>
 
-        <div className="grid grid-2">
-          <div>
-            <div>Email</div>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
-          </div>
-          <div>
-            <div>Username</div>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} required />
-          </div>
-          <div>
-            <div>Full name</div>
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </div>
-          <div>
-            <div>Phone</div>
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
-          </div>
-          <div>
-            <div>Discord</div>
-            <input value={discord} onChange={(e) => setDiscord(e.target.value)} />
-          </div>
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <button className="btn primary" type="submit" disabled={busy}>
-            {busy ? "Saving..." : "Save changes"}
+      {/* Security (collapsible) */}
+      <div className="card">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontWeight: 600 }}>Security</div>
+          <button className="btn" type="button" onClick={() => setShowSecurity((s) => !s)}>
+            {showSecurity ? "Hide" : "Change password"}
           </button>
         </div>
-      </form>
+        {showSecurity && (
+          <form onSubmit={onChangePassword} style={{ marginTop: 12 }}>
+            <div className="grid grid-2">
+              <div>
+                <div>Current password</div>
+                <input type="password" value={curPw} onChange={(e) => setCurPw(e.target.value)} required />
+              </div>
+              <div>
+                <div>New password</div>
+                <input type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} required />
+              </div>
+              <div>
+                <div>Confirm new password</div>
+                <input type="password" value={newPw2} onChange={(e) => setNewPw2(e.target.value)} required />
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <button className="btn" type="submit" disabled={busy}>
+                {busy ? "Updating..." : "Update password"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
 
-      {/* Password form */}
-      <form className="card" onSubmit={onChangePassword}>
-        <div style={{ fontWeight: 600, marginBottom: 10 }}>Change password</div>
-        <div className="grid grid-2">
-          <div>
-            <div>Current password</div>
-            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required />
-          </div>
-          <div>
-            <div>New password</div>
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required />
-          </div>
-          <div>
-            <div>Confirm new password</div>
-            <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
-          </div>
-        </div>
-        <div style={{ marginTop: 12 }}>
-          <button className="btn" type="submit" disabled={busy}>
-            {busy ? "Updating..." : "Update password"}
-          </button>
-        </div>
-      </form>
-
-      {/* Center pop-up toast */}
+      {/* Toast */}
       {toast && (
         <div
           style={{
@@ -219,7 +297,7 @@ export default function Profile() {
             borderRadius: 12,
             zIndex: 9999,
             fontWeight: 600,
-            boxShadow: "0 8px 30px rgba(0,0,0,0.25)"
+            boxShadow: "0 8px 30px rgba(0,0,0,0.25)",
           }}
         >
           {toast.msg}
@@ -228,3 +306,19 @@ export default function Profile() {
     </div>
   );
 }
+
+/* ---------------- tiny inline styles (uses your existing .card/.btn) ---------------- */
+const styles = {
+  row: {
+    display: "flex",
+    alignItems: "center",
+    padding: "10px 0",
+    borderTop: "1px solid #eee",
+  },
+  label: { width: 160, fontSize: 13, color: "#666" },
+  value: { flex: 1, display: "flex", alignItems: "center", gap: 8 },
+  muted: { color: "#9ca3af" },
+  input: { width: "100%" },
+  editBtn: { marginLeft: "auto" },
+  busyNote: { color: "#888", fontSize: 12, marginTop: 8 },
+};
