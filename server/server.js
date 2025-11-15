@@ -894,52 +894,51 @@ app.patch(
 );
 
 
-// Delete a user (admin only) — with cascades to jobs, LU, attendance, etc.
+// DELETE /admin/users/:id  — hard delete a user and purge references
 app.delete(
   "/admin/users/:id",
   authMiddleware,
   requireRole("admin"),
   async (req, res) => {
-    const uid = String(req.params.id);
-    const target = (db.users || []).find(u => String(u.id) === uid);
-    if (!target) return res.status(404).json({ error: "user_not_found" });
+    const uid = req.params.id;
+    const user = (db.users || []).find((u) => u.id === uid);
+    if (!user) return res.status(404).json({ error: "user_not_found" });
 
-    // Protect against deleting the last admin
-    if (target.role === "admin") {
-      const adminCount = (db.users || []).filter(u => u.role === "admin").length;
+    // Don't allow deleting the last admin
+    if (user.role === "admin") {
+      const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
       if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
     }
 
-    // Cascade: remove from all jobs and related structures
-    for (const j of db.jobs || []) {
-      j.applications = (j.applications || []).filter(a => a.userId !== uid);
-      j.approved    = (j.approved    || []).filter(u => u !== uid);
-      j.rejected    = (j.rejected    || []).filter(u => u !== uid);
+    // Remove from users
+    db.users = (db.users || []).filter((u) => u.id !== uid);
 
+    // Purge references across jobs
+    for (const j of db.jobs || []) {
+      j.applications = (j.applications || []).filter((a) => a.userId !== uid);
+      j.approved = (j.approved || []).filter((x) => x !== uid);
+      j.rejected = (j.rejected || []).filter((x) => x !== uid);
       if (j.attendance && j.attendance[uid]) delete j.attendance[uid];
 
       if (j.loadingUnload) {
-        j.loadingUnload.applicants   = (j.loadingUnload.applicants   || []).filter(u => u !== uid);
-        j.loadingUnload.participants = (j.loadingUnload.participants || []).filter(u => u !== uid);
+        j.loadingUnload.applicants = (j.loadingUnload.applicants || []).filter((x) => x !== uid);
+        j.loadingUnload.participants = (j.loadingUnload.participants || []).filter((x) => x !== uid);
         const quota = Number(j.loadingUnload.quota || 0);
-        if (quota > 0 && (j.loadingUnload.participants || []).length < quota) {
-          j.loadingUnload.closed = false; // re-open if quota no longer full
-        }
+        const partCount = (j.loadingUnload.participants || []).length;
+        j.loadingUnload.closed = quota > 0 && partCount >= quota;
       }
     }
 
-    // Remove push subs & notifications
-    if (db.pushSubs) delete db.pushSubs[uid];
-    if (db.notifications) delete db.notifications[uid];
+    // Notifications / push subscriptions
+    delete db.notifications?.[uid];
+    delete db.pushSubs?.[uid];
 
-    // Finally remove the user
-    db.users = (db.users || []).filter(u => String(u.id) !== uid);
     await saveDB(db);
-
-    addAudit("admin_delete_user", { userId: uid, email: target.email }, req);
-    return res.json({ ok: true });
+    addAudit("admin_delete_user", { userId: uid, email: user.email }, req);
+    res.json({ ok: true, removed: { id: user.id, email: user.email } });
   }
 );
+
 
 
 
