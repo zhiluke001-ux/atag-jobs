@@ -10,16 +10,16 @@ export default function NotificationsBell({ user }) {
   const [tab, setTab] = useState("all"); // "all" | "unread"
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const panelRef = useRef(null);
   const pollRef = useRef(null);
+  const wrapRef = useRef(null);
 
-  const unreadCount = useMemo(() => items.filter((i) => !i.read).length, [items]);
+  const unreadCount = useMemo(() => items.filter(i => !i.read).length, [items]);
   const shown = useMemo(
-    () => (tab === "unread" ? items.filter((i) => !i.read) : items),
+    () => (tab === "unread" ? items.filter(i => !i.read) : items),
     [tab, items]
   );
 
-  // Ask permission once
+  // Ask for notification permission once per browser
   useEffect(() => {
     if (!user) return;
     try {
@@ -37,73 +37,79 @@ export default function NotificationsBell({ user }) {
     } catch {}
   }, [user]);
 
-  async function load() {
+  async function loadAll() {
     if (!user) return;
     setLoading(true);
     try {
-      // Always fetch full list so the All tab stays complete.
-      const list = await apiGet("/notifications?limit=100");
-      setItems(Array.isArray(list) ? list : list?.items || []);
+      // IMPORTANT: always load the full list, not unread-only
+      const list = await apiGet(`/notifications?limit=100`);
+      setItems(list || []);
     } catch {
-      /* noop */
+      // ignore
     } finally {
       setLoading(false);
     }
   }
 
-  // Initial + polling (full list, not unread-only)
   useEffect(() => {
     if (!user) return;
-    load();
-    pollRef.current = setInterval(load, 15000);
+    loadAll();
+    // Light polling; keep full list so "All" doesn't disappear
+    pollRef.current = setInterval(loadAll, 15000);
     return () => clearInterval(pollRef.current);
   }, [user]);
 
-  // Close on outside click (desktop flow)
+  // Close when clicking outside
   useEffect(() => {
-    function onDown(e) {
+    function onDocClick(e) {
       if (!open) return;
-      if (!panelRef.current) return;
-      // On mobile we use a backdrop; keep this for desktop only
-      if (window.matchMedia("(max-width: 700px)").matches) return;
-      if (!panelRef.current.contains(e.target)) setOpen(false);
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+      }
     }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
   }, [open]);
 
   async function markRead(id) {
     try {
       await apiPost(`/notifications/${id}/read`, {});
-      setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+      setItems(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
     } catch {}
   }
 
   async function markAllRead() {
+    const unread = items.filter(n => !n.read);
     try {
-      await apiPost("/notifications/mark-all-read", {});
-      setItems((prev) => prev.map((n) => ({ ...n, read: true })));
-      setTab("all");
+      await Promise.all(
+        unread.map(n => apiPost(`/notifications/${n.id}/read`, {}))
+      );
+      setItems(prev => prev.map(n => ({ ...n, read: true })));
     } catch {}
   }
 
-  function openLink(n) {
-    // mark read then go
+  function go(n) {
     markRead(n.id);
-    if (!n.link) return;
-    if (n.link.startsWith("/#")) window.location.hash = n.link.slice(2);
-    else if (n.link.startsWith("#")) window.location.hash = n.link;
-    else window.location.href = n.link;
+    if (n.link) {
+      if (n.link.startsWith("/#")) window.location.hash = n.link.slice(2);
+      else window.location.href = n.link;
+    }
   }
 
   if (!user) return null;
 
   return (
-    <div style={{ position: "relative" }}>
+    <div className="notif-wrap" ref={wrapRef}>
       <button
         className="btn"
         aria-label="Notifications"
-        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="notif-popover"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(v => !v);
+          setTab("all");
+        }}
         style={{ position: "relative" }}
       >
         🔔
@@ -130,70 +136,71 @@ export default function NotificationsBell({ user }) {
       </button>
 
       {open && (
-        <>
-          {/* Mobile backdrop (also fine on desktop) */}
-          <div className="notif-backdrop" onClick={() => setOpen(false)} />
-
-          <div ref={panelRef} className="notif-panel" role="dialog" aria-label="Notifications">
-            {/* Sticky header with tabs & action */}
-            <div className="notif-header">
-              <div className="notif-title">Notifications</div>
-              <div className="notif-tabs">
-                <button
-                  className={`notif-tab ${tab === "all" ? "active" : ""}`}
-                  onClick={() => setTab("all")}
-                >
-                  All {items.length ? `(${items.length})` : ""}
-                </button>
-                <button
-                  className={`notif-tab ${tab === "unread" ? "active" : ""}`}
-                  onClick={() => setTab("unread")}
-                >
-                  Unread {unreadCount ? `(${unreadCount})` : ""}
-                </button>
-              </div>
-              <div className="notif-actions">
-                <button className="btn gray" onClick={markAllRead} disabled={!unreadCount}>
-                  Mark all read
-                </button>
-              </div>
-            </div>
-
-            {/* Scrollable body */}
-            <div className="notif-body">
-              {loading ? (
-                <div className="notif-empty">Loading…</div>
-              ) : shown.length === 0 ? (
-                <div className="notif-empty">You’re all caught up.</div>
-              ) : (
-                <ul className="notif-list">
-                  {shown.map((n) => (
-                    <li key={n.id} className={`notif-item ${n.read ? "" : "unread"}`}>
-                      <button className="notif-item-btn" onClick={() => openLink(n)}>
-                        <div className="notif-item-main">
-                          <div className="notif-item-title">
-                            {!n.read && <span className="dot" />}
-                            {n.title || "Notification"}
-                          </div>
-                          {n.body ? <div className="notif-item-desc">{n.body}</div> : null}
-                          <div className="notif-item-meta">
-                            {dayjs(n.time || n.createdAt).fromNow()}
-                          </div>
-                        </div>
-                      </button>
-                      {!n.read && (
-                        <button className="btn" onClick={() => markRead(n.id)}>
-                          Mark read
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+        <div id="notif-popover" className="notif-popover no-scrollbar" onClick={(e) => e.stopPropagation()}>
+          {/* Tabs / actions */}
+          <div className="notif-tabs">
+            <button
+              className={`btn ${tab === "all" ? "is-active" : ""}`}
+              onClick={() => setTab("all")}
+            >
+              All ({items.length})
+            </button>
+            <button
+              className={`btn ${tab === "unread" ? "is-active" : ""}`}
+              onClick={() => setTab("unread")}
+            >
+              Unread{unreadCount ? ` (${unreadCount})` : ""}
+            </button>
+            <button
+              className="btn gray"
+              onClick={markAllRead}
+              style={{ marginLeft: "auto" }}
+              disabled={unreadCount === 0}
+              title="Mark all as read"
+            >
+              Mark all read
+            </button>
           </div>
-        </>
+
+          {/* List */}
+          <div className="notif-list">
+            {loading && <div className="notif-empty">Loading…</div>}
+            {!loading && shown.length === 0 && (
+              <div className="notif-empty">You’re all caught up.</div>
+            )}
+
+            {shown.map((n) => (
+              <div
+                key={n.id}
+                className={`notif-item ${n.read ? "" : "unread"}`}
+                onClick={() => go(n)}
+              >
+                <div className="ico">{iconFor(n.type)}</div>
+                <div className="meta">
+                  <div className="title">{n.title}</div>
+                  {n.body ? <div className="body">{n.body}</div> : null}
+                  <div className="time">{dayjs(n.time).fromNow()}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
+}
+
+function iconFor(type) {
+  switch (type) {
+    case "job_created":
+      return "🧰";
+    case "approved":
+      return "✅";
+    case "rejected":
+      return "❌";
+    case "account_update":
+      return "👤";
+    default:
+      return "🔔";
+  }
 }
