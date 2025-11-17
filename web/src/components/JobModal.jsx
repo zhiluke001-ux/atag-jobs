@@ -767,12 +767,36 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
   );
 
   /* ---- Early Call & Loading/Unloading (physical only) ---- */
-  const [ecEnabled, setEcEnabled] = useState(!!job?.earlyCall?.enabled);
-  const [ecAmount, setEcAmount] = useState(String(job?.earlyCall?.amount ?? 0));
+  // *** FIXED: pull defaults from global config when creating a new job ***
+  const [ecEnabled, setEcEnabled] = useState(
+    editing ? !!job?.earlyCall?.enabled : false
+  );
+  const [ecAmount, setEcAmount] = useState(
+    String(
+      editing
+        ? job?.earlyCall?.amount ?? gl?.earlyCall?.amount ?? 0
+        : gl?.earlyCall?.amount ?? 0
+    )
+  );
 
-  const [luEnabled, setLuEnabled] = useState(!!job?.loadingUnload?.enabled);
-  const [luPrice, setLuPrice] = useState(String(job?.loadingUnload?.price ?? 0));
-  const [luQuota, setLuQuota] = useState(String(job?.loadingUnload?.quota ?? 0));
+  const [luEnabled, setLuEnabled] = useState(
+    editing ? !!job?.loadingUnload?.enabled : false
+  );
+  const [luPrice, setLuPrice] = useState(
+    String(
+      editing
+        ? job?.loadingUnload?.price ?? gl?.loadingUnload?.price ?? 0
+        : gl?.loadingUnload?.price ?? 0
+    )
+  );
+  const [luQuota, setLuQuota] = useState(
+    String(
+      editing
+        ? job?.loadingUnload?.quota ?? gl?.loadingUnload?.quota ?? 0
+        : gl?.loadingUnload?.quota ?? 0
+    )
+  );
+  // *** END FIX ***
 
   function buildTierRates() {
     const kind = sessionMode === "virtual" ? "virtual" : physicalType;
