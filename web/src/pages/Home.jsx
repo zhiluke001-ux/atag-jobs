@@ -152,74 +152,26 @@ export default function Home({ navigate, user }) {
     }
   }
 
-  /* ---------- Derived UI stats (for the header chips) ---------- */
-  const stats = useMemo(() => {
-    const total = jobs.length || 0;
-    let upcoming = 0,
-      ongoing = 0,
-      ended = 0;
-    for (const j of jobs) {
-      const s = j?.status || "upcoming";
-      if (s === "ongoing") ongoing++;
-      else if (s === "ended") ended++;
-      else upcoming++;
-    }
-    const myApplied = Object.keys(myStatuses || {}).length;
-    const myApproved = Object.values(myStatuses || {}).filter((s) => s === "approved").length;
-    return { total, upcoming, ongoing, ended, myApplied, myApproved };
-  }, [jobs, myStatuses]);
-
   return (
     <div className="container" style={{ paddingTop: 16 }}>
-      {/* Header / toolbar */}
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="row-between" style={{ gap: 12, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ fontSize: 22, fontWeight: 800 }}>Jobs Management</div>
-            {/* small brand underline */}
-            <div
-              aria-hidden
-              style={{ height: 3, width: 36, background: "var(--accent)", borderRadius: 2 }}
-            />
-          </div>
-
-          {canManage && (
-            <div className="actions" style={{ gap: 8 }}>
-              <button className="btn primary" onClick={() => setShowCreate(true)}>
-                + Create Job
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Status chips row */}
-        <div className="row" style={{ flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-          <span className="status" style={{ background: "#111", color: "#fff", borderColor: "#111" }}>
-            Total:&nbsp;{stats.total}
-          </span>
-          <span className="status" style={{ background: "#f3f4f6", color: "#374151" }}>
-            Upcoming:&nbsp;{stats.upcoming}
-          </span>
-          <span className="status" style={{ background: "#d1fae5", color: "#065f46" }}>
-            Ongoing:&nbsp;{stats.ongoing}
-          </span>
-          <span className="status" style={{ background: "#fee2e2", color: "#991b1b" }}>
-            Ended:&nbsp;{stats.ended}
-          </span>
-          {canApply && (
-            <>
-              <span className="status" style={{ background: "#fef3c7", color: "#92400e" }}>
-                My Applied:&nbsp;{stats.myApplied}
-              </span>
-              <span className="status" style={{ background: "#dcfce7", color: "#166534" }}>
-                My Approved:&nbsp;{stats.myApproved}
-              </span>
-            </>
-          )}
-        </div>
+      {/* Top bar */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ fontSize: 22, fontWeight: 800 }}>Jobs Management</div>
+        {canManage && (
+          <button className="btn primary" onClick={() => setShowCreate(true)}>
+            + Create Job
+          </button>
+        )}
       </div>
 
-      {/* Jobs list */}
+      {/* List */}
       <JobList
         jobs={jobs}
         loading={loading}
