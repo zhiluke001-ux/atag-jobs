@@ -354,8 +354,9 @@ input[type="checkbox"]{ border-radius: 4px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;              /* gutter for small screens */
+  padding: 16px;              /* gutter for small screens */
   pointer-events: none;       /* clicks go to card only */
+  overflow-y: auto;           /* allow scrolling if needed */
 }
 
 /* Dialog card */
@@ -369,9 +370,8 @@ input[type="checkbox"]{ border-radius: 4px; }
   display: flex;
   flex-direction: column;
 
-  /* FIX: card height bounded to viewport, body will scroll */
-  height: 90vh;
-  max-height: 90vh;
+  /* card height bounded to viewport, body inside scrolls */
+  max-height: calc(100vh - 32px); /* 32px = 16px top + 16px bottom padding */
   overflow: hidden;           /* header/footer fixed, body scrolls */
 
   transform: translateY(4px);
@@ -425,6 +425,17 @@ body.modal-open { overflow: hidden; }
 /* Subtle pop-in */
 @keyframes modalIn{ to{ transform:none; opacity:1; } }
 
+/* On very small screens, stick modal nearer top with smaller gutter */
+@media (max-width: 640px) {
+  .modal{
+    align-items: flex-start;
+    padding: 8px;
+  }
+  .modal-card{
+    max-height: calc(100vh - 16px);
+  }
+}
+
 /* Transport options layout */
 .transport-options {
   display: flex;
@@ -441,9 +452,6 @@ body.modal-open { overflow: hidden; }
 
 /* Comfortable height for date/time fields */
 input[type="time"], input[type="date"] { min-height: var(--field-min-h); }
-
-/* Ensure modal content scrolls independently and backdrop stays dark */
-.modal { align-items: flex-start; padding-top: 6vh; }
 
 /* Keep transport row tidy */
 .modal .card label { font-weight: 600; }
