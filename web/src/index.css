@@ -17,6 +17,11 @@
   --amber: #f59e0b;
   --blue: #2563eb;
 
+  /* header + safe areas */
+  --header-height: 56px;               /* used by mobile notif sheet */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
   /* form control sizes */
   --control-sm: 16px;         /* checkbox/radio */
   --field-min-h: 40px;        /* text/date/time/select */
@@ -50,7 +55,7 @@ a:hover { text-decoration: underline; }
 .site-header {
   background: #fff;
   border-bottom: 1px solid var(--border);
-  position: sticky; top: 0; z-index: 30;
+  position: sticky; top: 0; z-index: 50; /* keep above content */
 }
 .header-inner {
   display: flex; align-items: center; justify-content: space-between;
@@ -456,3 +461,65 @@ input[type="time"], input[type="date"] { min-height: var(--field-min-h); }
 /* Hide horizontal scrollbar visuals while keeping scrollable area touch-friendly */
 .no-scrollbar::-webkit-scrollbar { display:none; }
 .no-scrollbar { scrollbar-width: none; }
+
+/* ------------------------------
+   Notifications dropdown (works great on mobile)
+   Pair with NotificationsBell using .notif-wrap/.notif-popover/etc.
+------------------------------ */
+
+.notif-wrap { position: relative; }
+
+.notif-popover {
+  position: absolute; right: 0; margin-top: 8px;
+  width: 420px; max-height: 420px; overflow: auto;
+  z-index: 60; /* above sticky header (50) */
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.15);
+}
+
+.notif-tabs {
+  display: flex; gap: 8px;
+  padding: 8px; border-bottom: 1px solid var(--border);
+}
+.notif-tabs .btn {
+  background: #f5f5f5; color:#111; border-color:#e5e7eb;
+}
+.notif-tabs .btn.is-active {
+  background:#111; color:#fff; border-color:#111;
+}
+
+.notif-list { padding: 6px 0; }
+.notif-item {
+  padding: 10px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  display: flex; gap: 10px; cursor: pointer;
+  background: #fff;
+}
+.notif-item.unread { background: #f8fafc; }
+.notif-item .ico {
+  width: 36px; height: 36px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid #eee; flex: 0 0 36px;
+}
+.notif-item .meta { flex: 1 1 auto; min-width: 0; }
+.notif-item .meta .title { font-weight: 700; }
+.notif-item .meta .body { color: #444; margin-top: 2px; }
+.notif-item .meta .time { color:#777; font-size:12px; margin-top:4px; }
+
+.notif-empty {
+  padding: 12px; color: #666;
+}
+
+/* Mobile: convert dropdown to a top sheet that fits below header */
+@media (max-width: 640px) {
+  .notif-popover {
+    position: fixed;
+    left: 8px; right: 8px;
+    top: calc(var(--safe-top) + var(--header-height) + 8px);
+    width: auto;
+    max-height: calc(100vh - var(--safe-top) - var(--header-height) - 24px);
+    margin-top: 0;
+  }
+}
