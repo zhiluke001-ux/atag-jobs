@@ -208,7 +208,7 @@ export default function JobList({
 
               {/* Venue (its own line) */}
               <div style={{ marginTop: 6 }}>
-                <strong>Venues</strong>
+                <strong>Venue</strong>
                 <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
               </div>
 
