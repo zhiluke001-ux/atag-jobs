@@ -362,7 +362,7 @@ input[type="checkbox"]{ border-radius: 4px; }
 .modal-card{
   pointer-events: auto;
   width: 100%;
-  max-width: 760px;
+  max-width: 960px;           /* WIDER so the form feels less cramped */
   background: #fff;
   border-radius: 12px;
   box-shadow: 0 20px 60px rgba(0,0,0,.25);
@@ -375,6 +375,11 @@ input[type="checkbox"]{ border-radius: 4px; }
   animation: modalIn .16s ease-out both;
 }
 
+/* Optional explicit large variant if you use "modal-lg" */
+.modal-card.modal-lg{
+  max-width: 1040px;
+}
+
 /* Small variant */
 .modal-card.modal-sm{ max-width:560px; }
 
@@ -385,8 +390,11 @@ input[type="checkbox"]{ border-radius: 4px; }
   font-weight: 700;
 }
 .modal-body{
-  padding: 12px 16px;
+  padding: 16px 20px;         /* a bit more breathing room */
   overflow: auto;             /* this area scrolls */
+  display: flex;
+  flex-direction: column;
+  gap: 16px;                  /* space between cards/blocks */
 }
 .modal-footer{
   padding: 12px 16px;
@@ -394,6 +402,11 @@ input[type="checkbox"]{ border-radius: 4px; }
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* Make cards inside modals feel less cramped without touching homepage cards */
+.modal-body .card{
+  padding: 16px;
 }
 
 /* Prevent background page from scrolling while modal open */
