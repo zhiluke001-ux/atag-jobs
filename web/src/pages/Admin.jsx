@@ -45,12 +45,6 @@ const Field = ({ label, children, hint }) => (
     {hint ? <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{hint}</div> : null}
   </div>
 );
-const Toggle = ({ id, checked, onChange, text }) => (
-  <label htmlFor={id} style={{ display: "inline-flex", alignItems: "center", gap: 8, userSelect: "none" }}>
-    <input id={id} type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-    <span>{text}</span>
-  </label>
-);
 const Pill = ({ text, color = "#111827", bg = "#E5E7EB" }) => (
   <span style={{ padding: "3px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700, background: bg, color }}>{text}</span>
 );
@@ -117,12 +111,9 @@ export default function Admin({ navigate, user }) {
 
   // top-level simple defaults
   const [gParking, setGParking] = useState(String(globalCfg.parkingAllowance ?? 0));
-  const [gECEnabled, setGECEnabled] = useState(!!globalCfg.earlyCall?.enabled);
+  // Early Call & LDU: only amount needed on this page
   const [gECAmount, setGECAmount] = useState(String(globalCfg.earlyCall?.amount ?? 20));
-  const [gECThreshold, setGECThreshold] = useState(String(globalCfg.earlyCall?.thresholdHours ?? 3));
-  const [gLDUEnabled, setGLDUEnabled] = useState(!!globalCfg.loadingUnload?.enabled);
   const [gLDUPrice, setGLDUPrice] = useState(String(globalCfg.loadingUnload?.price ?? 30));
-  const [gLDUQuota, setGLDUQuota] = useState(String(globalCfg.loadingUnload?.quota ?? 0));
 
   // global hourly (by role)
   const [gHrJr, setGHrJr] = useState(String(globalCfg.hourly_by_role.junior.base));
@@ -151,10 +142,25 @@ export default function Admin({ navigate, user }) {
   const [g3d2nLead, setG3d2nLead] = useState(String(globalCfg.session.threeD2N.lead));
 
   function saveGlobal() {
+    const ecPrev = globalCfg.earlyCall || {};
+    const lduPrev = globalCfg.loadingUnload || {};
+
     const out = {
       parkingAllowance: N(gParking, 0),
-      earlyCall: { enabled: !!gECEnabled, amount: N(gECAmount, 0), thresholdHours: N(gECThreshold, 0) },
-      loadingUnload: { enabled: !!gLDUEnabled, price: N(gLDUPrice, 0), quota: N(gLDUQuota, 0) },
+
+      // Keep enabled / threshold / quota internally for compatibility,
+      // but on this page we only edit the amount / price.
+      earlyCall: {
+        enabled: ecPrev.enabled ?? true,
+        amount: N(gECAmount, 0),
+        thresholdHours: ecPrev.thresholdHours ?? 3,
+      },
+      loadingUnload: {
+        enabled: lduPrev.enabled ?? true,
+        price: N(gLDUPrice, 0),
+        quota: lduPrev.quota ?? 0,
+      },
+
       hourly_by_role: {
         junior: { base: N(gHrJr, 0), otRatePerHour: N(gHrJrOT, 0) },
         senior: { base: N(gHrSr, 0), otRatePerHour: N(gHrSrOT, 0) },
@@ -743,35 +749,20 @@ export default function Admin({ navigate, user }) {
 
           <div className="card" style={{ padding: 12 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div className="card" style={{ padding: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 600 }}>Early Call (default)</div>
-                  <Toggle id="gec" checked={gECEnabled} onChange={setGECEnabled} text="Enabled" />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8, opacity: gECEnabled ? 1 : 0.5 }}>
-                  <Field label="Amount (RM)">
-                    <input inputMode="decimal" value={gECAmount} onChange={(e)=>setGECAmount(e.target.value)} disabled={!gECEnabled} />
-                  </Field>
-                  <Field label="Threshold (hours)">
-                    <input inputMode="decimal" value={gECThreshold} onChange={(e)=>setGECThreshold(e.target.value)} disabled={!gECEnabled} />
-                  </Field>
-                </div>
-              </div>
-
-              <div className="card" style={{ padding: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 600 }}>Loading & Unloading (default)</div>
-                  <Toggle id="gldu" checked={gLDUEnabled} onChange={setGLDUEnabled} text="Enabled" />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8, opacity: gLDUEnabled ? 1 : 0.5 }}>
-                  <Field label="Price (RM / helper)">
-                    <input inputMode="decimal" value={gLDUPrice} onChange={(e)=>setGLDUPrice(e.target.value)} disabled={!gLDUEnabled} />
-                  </Field>
-                  <Field label="Quota (helpers)">
-                    <input inputMode="numeric" value={gLDUQuota} onChange={(e)=>setGLDUQuota(e.target.value)} disabled={!gLDUEnabled} />
-                  </Field>
-                </div>
-              </div>
+              <Field label="Early Call Amount (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gECAmount}
+                  onChange={(e)=>setGECAmount(e.target.value)}
+                />
+              </Field>
+              <Field label="Loading & Unloading (RM / helper)">
+                <input
+                  inputMode="decimal"
+                  value={gLDUPrice}
+                  onChange={(e)=>setGLDUPrice(e.target.value)}
+                />
+              </Field>
             </div>
           </div>
         </div>
