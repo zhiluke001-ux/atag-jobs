@@ -83,7 +83,6 @@ const MAX_DISTANCE_METERS = Number(
     db.config.scanMaxDistanceMeters ||
     500
 );
-const ONE_SHOT_DECISIONS = true;
 const ROLES = ["part-timer", "pm", "admin"];
 const STAFF_ROLES = ["junior", "senior", "lead"];
 
@@ -1732,32 +1731,33 @@ app.post(
   async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
+
     const { userId, approve } = req.body || {};
     if (!userId || typeof approve !== "boolean")
       return res.status(400).json({ error: "bad_request" });
 
-    const alreadyApproved = job.approved.includes(userId);
-    const alreadyRejected = job.rejected.includes(userId);
-    if (ONE_SHOT_DECISIONS && (alreadyApproved || alreadyRejected)) {
-      return res.status(409).json({ error: "decision_locked" });
-    }
+    // We now ALWAYS allow changing decisions (no more one-shot lock)
 
-    if (
-      approve &&
-      (job.approved?.length || 0) >= Number(job.headcount || 0)
-    ) {
-      return res.status(409).json({ error: "job_full" });
+    // If we're trying to approve, make sure we don't exceed headcount
+    // NOTE: we check *other* approved people only.
+    if (approve) {
+      const otherApprovedCount = job.approved.filter((u) => u !== userId).length;
+      if (otherApprovedCount >= Number(job.headcount || 0)) {
+        return res.status(409).json({ error: "job_full" });
+      }
     }
 
     const applied = job.applications.find((a) => a.userId === userId);
     if (!applied) return res.status(400).json({ error: "user_not_applied" });
 
+    // Clear existing decision first
     job.approved = job.approved.filter((u) => u !== userId);
     job.rejected = job.rejected.filter((u) => u !== userId);
 
     if (approve) {
       job.approved.push(userId);
 
+      // Handle L&U participants if they had applied
       job.loadingUnload = job.loadingUnload || {
         enabled: false,
         quota: 0,
@@ -1785,7 +1785,13 @@ app.post(
         }
       }
     } else {
+      // Mark as rejected
       job.rejected.push(userId);
+
+      // Optional: if they were in L&U participants, you might want to remove them:
+      // const parts = new Set(job.loadingUnload?.participants || []);
+      // parts.delete(userId);
+      // job.loadingUnload.participants = Array.from(parts);
     }
 
     await saveDB(db);
@@ -1805,6 +1811,7 @@ app.post(
     res.json({ ok: true });
   }
 );
+
 
 /* ---- L&U manage ---- */
 app.get(
@@ -2335,3 +2342,4 @@ app.listen(PORT, () => {
 setTimeout(() => {
   console.log("Registered routes:\n" + listRoutes(app).join("\n"));
 }, 100);
+  
