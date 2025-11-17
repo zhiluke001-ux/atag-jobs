@@ -968,14 +968,7 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
     <>
       <div className="modal-backdrop" onClick={busy ? undefined : onClose} />
       <div className="modal" role="dialog" aria-modal="true">
-        <div
-          className="modal-card modal-lg"
-          style={{
-            maxHeight: "90vh",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
+        <div className="modal-card modal-lg">
           <div className="modal-header">{editing ? "Edit Job" : "Create Job"}</div>
 
           {/* IMPORTANT: rely on .modal-body CSS (flex column + overflow-y:auto) */}
