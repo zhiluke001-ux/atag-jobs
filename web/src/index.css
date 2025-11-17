@@ -371,6 +371,7 @@ input[type="checkbox"]{ border-radius: 4px; }
   flex-direction: column;
 
   /* card height bounded to viewport, body inside scrolls */
+  height: min(90vh, 640px); 
   max-height: calc(100vh - 32px); /* 32px = 16px top + 16px bottom padding */
   overflow: hidden;           /* header/footer fixed, body scrolls */
 
