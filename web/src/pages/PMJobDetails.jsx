@@ -90,26 +90,6 @@ function extractDirFromToken(token) {
   }
 }
 
-/* ---------- Applicants grid ---------- */
-const applGrid = {
-  display: "grid",
-  gridTemplateColumns:
-    "minmax(220px,1.4fr) minmax(140px,1.1fr) minmax(120px,1fr) minmax(140px,1.1fr) 0.8fr 0.8fr 0.7fr 1fr",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 12px",
-};
-const applHeaderRow = {
-  ...applGrid,
-  fontWeight: 700,
-  borderBottom: "1px solid var(--border, #e5e7eb)",
-  color: "#111827",
-};
-const applBodyRow = {
-  ...applGrid,
-  borderBottom: "1px solid var(--border, #f1f5f9)",
-};
-
 /* robust virtual detector */
 function isVirtualJob(j) {
   if (!j) return false;
@@ -178,6 +158,11 @@ export default function PMJobDetails({ jobId }) {
 
   // geo
   const [loc, setLoc] = useState(null);
+  const locRef = useRef(null);
+  useEffect(() => {
+    locRef.current = loc;
+  }, [loc]);
+
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
   const pendingTokenRef = useRef(null); // for “GPS not ready yet”
@@ -312,9 +297,7 @@ export default function PMJobDetails({ jobId }) {
   }
 
   useEffect(() => {
-    if (scannerOpen && !isVirtual) {
-      startCamera();
-    }
+    if (scannerOpen && !isVirtual) startCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, isVirtual]);
 
@@ -350,9 +333,10 @@ export default function PMJobDetails({ jobId }) {
     rafRef.current = requestAnimationFrame(loop);
   }
 
-  /* geo heartbeat */
+  /* geo heartbeat: watch once; send heartbeat using latest ref */
   useEffect(() => {
     if (!scannerOpen) return;
+
     if ("geolocation" in navigator) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => setLoc({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
@@ -360,18 +344,21 @@ export default function PMJobDetails({ jobId }) {
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
       );
     }
+
     hbTimerRef.current = setInterval(() => {
-      if (loc)
+      const L = locRef.current;
+      if (L)
         apiPost(`/jobs/${jobId}/scanner/heartbeat`, {
-          lat: loc.lat,
-          lng: loc.lng,
+          lat: L.lat,
+          lng: L.lng,
         }).catch(() => {});
     }, 10000);
+
     return () => {
       stopHeartbeat();
     };
-    // eslint-disable-next-line
-  }, [scannerOpen, jobId, loc?.lat, loc?.lng]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scannerOpen, jobId]);
 
   function stopHeartbeat() {
     if (watchIdRef.current != null) {
@@ -435,7 +422,7 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // local distance precheck
+    // local distance precheck (scanner vs applicant)
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -475,8 +462,8 @@ export default function PMJobDetails({ jobId }) {
       vibrateOk();
       setTimeout(() => setScanPopup(null), 1500);
 
-      setToken("");
-      load(true); // silent refresh
+      setToken("");          // allow second scan
+      load(true);            // silent refresh of attendance
     } catch (e) {
       let msg = "Scan failed.";
       const j = readApiError(e);
@@ -637,7 +624,7 @@ export default function PMJobDetails({ jobId }) {
     const bg = s === "ongoing" ? "#d1fae5" : s === "ended" ? "#fee2e2" : "#e5e7eb";
     const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#374151";
     return (
-      <span className="status" style={{ background: bg, color: fg }}>
+      <span className="status" style={{ background: bg, color: fg, borderRadius: 999, padding: "4px 10px", fontWeight: 700 }}>
         {s}
       </span>
     );
@@ -735,58 +722,81 @@ export default function PMJobDetails({ jobId }) {
         </div>
       </div>
 
-      {/* Applicants */}
+      {/* Applicants (now a scroll-friendly table) */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Applicants</div>
-        <div style={applHeaderRow}>
-          <div>Email</div>
-          <div>Name</div>
-          <div>Phone</div>
-          <div>Discord</div>
-          <div>Transport</div>
-          <div>Status</div>
-          <div>L&amp;U</div>
-          <div>Actions</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Email</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Name</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Phone</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Discord</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Transport</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Status</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>L&amp;U</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {applicants.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: 12, color: "#6b7280" }}>
+                    No applicants yet.
+                  </td>
+                </tr>
+              ) : (
+                applicants.map((a) => (
+                  <tr key={a.userId} style={{ borderTop: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "10px 8px", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {a.email}
+                    </td>
+                    <td style={{ padding: "10px 8px" }}>{a.name || a.fullName || a.displayName || "-"}</td>
+                    <td style={{ padding: "10px 8px" }}>{a.phone || a.phoneNumber || "-"}</td>
+                    <td style={{ padding: "10px 8px" }}>{a.discord || a.discordHandle || a.username || "-"}</td>
+                    <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
+                    <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status}</td>
+                    <td style={{ padding: "10px 8px" }}>
+                      {a.luApplied ? (
+                        <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={a.luConfirmed}
+                            onChange={(e) => toggleLU(a.userId, e.target.checked)}
+                          />
+                          <span>Confirmed</span>
+                        </label>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td style={{ padding: "10px 8px" }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          className="btn"
+                          style={{ background: "#22c55e", color: "#fff" }}
+                          onClick={() => setApproval(a.userId, true)}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="btn danger"
+                          onClick={() => setApproval(a.userId, false)}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-        {applicants.length === 0 ? (
-          <div style={{ padding: 12, color: "#6b7280" }}>No applicants yet.</div>
-        ) : (
-          applicants.map((a) => (
-            <div key={a.userId} style={applBodyRow}>
-              <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{a.email}</div>
-              <div>{a.name || a.fullName || a.displayName || "-"}</div>
-              <div>{a.phone || a.phoneNumber || "-"}</div>
-              <div>{a.discord || a.discordHandle || a.username || "-"}</div>
-              <div>{a.transport || "-"}</div>
-              <div style={{ textTransform: "capitalize" }}>{a.status}</div>
-              <div>
-                {a.luApplied ? (
-                  <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                    <input
-                      type="checkbox"
-                      checked={a.luConfirmed}
-                      onChange={(e) => toggleLU(a.userId, e.target.checked)}
-                    />
-                    <span>Confirmed</span>
-                  </label>
-                ) : (
-                  "—"
-                )}
-              </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <button className="btn green" onClick={() => setApproval(a.userId, true)}>
-                  Approve
-                </button>
-                <button className="btn danger" onClick={() => setApproval(a.userId, false)}>
-                  Reject
-                </button>
-              </div>
-            </div>
-          ))
-        )}
       </div>
 
-      {/* Attendance (fixed) */}
+      {/* Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
         <div style={{ overflowX: "auto" }}>
@@ -855,7 +865,7 @@ export default function PMJobDetails({ jobId }) {
             width: "100vw",
             maxWidth: "100vw",
             background: "#000",
-            zIndex: 999,
+            zIndex: 9999,
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
