@@ -368,8 +368,12 @@ input[type="checkbox"]{ border-radius: 4px; }
   box-shadow: 0 20px 60px rgba(0,0,0,.25);
   display: flex;
   flex-direction: column;
-  max-height: 90vh;           /* keeps header/footer visible */
+
+  /* FIX: card height bounded to viewport, body will scroll */
+  height: 90vh;
+  max-height: 90vh;
   overflow: hidden;           /* header/footer fixed, body scrolls */
+
   transform: translateY(4px);
   opacity: .98;
   animation: modalIn .16s ease-out both;
@@ -389,13 +393,19 @@ input[type="checkbox"]{ border-radius: 4px; }
   border-bottom: 1px solid var(--border);
   font-weight: 700;
 }
+
+/* Body is the scroll container */
 .modal-body{
   padding: 16px 20px;         /* a bit more breathing room */
-  overflow: auto;             /* this area scrolls */
   display: flex;
   flex-direction: column;
   gap: 16px;                  /* space between cards/blocks */
+
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;           /* this area scrolls */
 }
+
 .modal-footer{
   padding: 12px 16px;
   border-top: 1px solid var(--border);
