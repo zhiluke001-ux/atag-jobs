@@ -32,6 +32,8 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+/* Prevent media from overflowing cards on mobile */
+img, video, canvas, svg { max-width: 100%; height: auto; display: block; }
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
@@ -118,7 +120,12 @@ a:hover { text-decoration: underline; }
   border-radius: 12px;
   padding: 14px;
   box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+  overflow: hidden;                 /* keep children inside on mobile */
 }
+/* Enable inner horizontal scroll when needed without breaking layout */
+.card.scroll-x,
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
 .grid {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
@@ -137,15 +144,17 @@ a:hover { text-decoration: underline; }
   display:inline-flex; align-items:center; gap:6px;
   padding:2px 8px; border-radius:999px;
   background:#f3f4f6; color:#374151; font-size:12px; font-weight:600;
+  border: 1px solid #e5e7eb;
 }
 
-/* --- NEW utility classes used by components --- */
+/* --- Utilities --- */
 .row { display:flex; gap:8px; align-items:center; }
 .row-between { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .actions { display:flex; gap:8px; flex-wrap:wrap; }
 .cols-2 { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
 .cols-2-16 { display:grid; grid-template-columns: 1fr 1fr; gap:16px; }
 .nowrap { white-space: nowrap; }
+.break-all { word-break: break-word; overflow-wrap: anywhere; }
 
 /* ------------------------------
    Buttons (small & uniform)
@@ -173,28 +182,18 @@ a:hover { text-decoration: underline; }
 .btn:hover { background:#f9fafb; }
 .btn:disabled { opacity:.6; cursor:not-allowed; }
 
-.btn.primary {
-  background: var(--accent); color:#fff; border-color: var(--accent);
-}
+.btn.primary { background: var(--accent); color:#fff; border-color: var(--accent); }
 .btn.primary:hover { filter: brightness(0.95); }
 
-.btn.red {
-  background: var(--red); color:#fff; border-color: var(--red);
-}
+.btn.red { background: var(--red); color:#fff; border-color: var(--red); }
 .btn.red:hover { filter: brightness(0.95); }
 
-.btn.green {
-  background: var(--green); color:#fff; border-color: var(--green);
-}
+.btn.green { background: var(--green); color:#fff; border-color: var(--green); }
 .btn.green:hover { filter: brightness(0.95); }
 
-.btn.gray {
-  background: #e5e7eb; color:#111; border-color: #e5e7eb;
-}
+.btn.gray { background: #e5e7eb; color:#111; border-color: #e5e7eb; }
 
-.btn.danger {
-  background:#fff; border-color: var(--red); color: var(--red);
-}
+.btn.danger { background:#fff; border-color: var(--red); color: var(--red); }
 .btn.danger:hover { background: #fff5f5; }
 
 /* ------------------------------
@@ -209,9 +208,7 @@ input, select, textarea {
   color: var(--fg);
   outline: none;
 }
-/* Keep field height for text/date/time/select, but NOT for checkbox/radio */
-input:not([type="checkbox"]):not([type="radio"]),
-select, textarea {
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
   min-height: var(--field-min-h);
 }
 input:focus, select:focus, textarea:focus {
@@ -243,14 +240,38 @@ input[type="checkbox"]{ border-radius: 4px; }
 .job-meta div { display:flex; align-items:center; gap:6px; }
 
 /* ------------------------------
-   Tables (admin payroll area)
+   Tables
 ------------------------------ */
 .table {
-  width: 100%; border-collapse: collapse;
-  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;           /* keep borders clean in cards */
+  table-layout: auto;
 }
-.table th, .table td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+.table th, .table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;     /* long emails/usernames won’t burst */
+}
 .table thead th { background:#f8fafc; font-weight:700; color: var(--fg-2); }
+
+/* Generic wrapper for horizontal scroll (apply on parent if needed) */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Audit / very wide tables: hide low-priority cols on phones without touching HTML */
+@media (max-width: 640px) {
+  .table.table--audit thead th:nth-child(3),
+  .table.table--audit thead th:nth-child(5),
+  .table.table--audit tbody td:nth-child(3),
+  .table.table--audit tbody td:nth-child(5) { display:none; } /* e.g., hide Role & Details columns */
+
+  /* Compact attendance tables */
+  .table.table--tight th, .table.table--tight td { padding: 8px 8px; }
+}
 
 /* ------------------------------
    Footer / misc
@@ -297,22 +318,16 @@ input[type="checkbox"]{ border-radius: 4px; }
   .actions .btn { flex: 1 1 100%; }
 }
 
-/* --- CTA button like the screenshot --- */
+/* --- CTA button in ATAG brand --- */
 .btn-cta{
   display:inline-flex; align-items:center; gap:8px;
-  background:#000;                 /* was #0ea5e9 */
-  border:1px solid #000;           /* was #0ea5e9 */
+  background:#111;                 /* brand black */
+  border:1px solid #111;
   color:#fff; font-weight:700;
   padding:8px 12px; border-radius:8px;
 }
-.btn-cta:hover{
-  filter:brightness(.92);
-  text-decoration:none;
-}
-.btn-cta .plus{ width:18px; height:18px; display:block;
-  fill: currentColor;
-  stroke: currentColor;   /* covers stroke-based icons like Lucide/Heroicons */
-}
+.btn-cta:hover{ filter:brightness(.92); text-decoration:none; }
+.btn-cta .plus{ width:18px; height:18px; display:block; fill: currentColor; stroke: currentColor; }
 
 /* ------------------------------
    Modal (backdrop, layout, scroll)
@@ -410,3 +425,34 @@ input[type="time"], input[type="date"] { min-height: var(--field-min-h); }
   padding:4px 10px; border-radius:999px; font-weight:600; font-size:12px;
   background:#eef2ff; color:#1f2937;
 }
+
+/* ------------------------------
+   NEW: Page-specific responsive helpers
+------------------------------ */
+
+/* MyJobs cards – comfortable spacing and clean dividers on mobile */
+.jobs-list { display:grid; gap:12px; }
+@media (min-width: 700px){
+  .jobs-list { grid-template-columns: 1fr 1fr; }
+}
+.job-card__meta { display:flex; flex-wrap:wrap; gap:10px; color:var(--fg-2); }
+
+/* Admin two-column forms collapse nicely */
+.admin-grid { display:grid; gap:12px; grid-template-columns: 1fr; }
+@media (min-width: 900px){ .admin-grid { grid-template-columns: 1fr 1fr; } }
+
+/* Keep admin boxes inside cards even with long text */
+.admin-card * { min-width: 0; }
+.admin-card .break { word-break: break-word; overflow-wrap: anywhere; }
+
+/* Audit log list: smaller font + wrap emails on mobile */
+.audit-list { font-size: 13px; }
+.audit-list .email { word-break: break-word; }
+
+/* When a wide table must remain a table, use both: a wrapper + compact mode */
+.table-wrap.-compact .table th,
+.table-wrap.-compact .table td { padding: 8px 10px; }
+
+/* Hide horizontal scrollbar visuals while keeping scrollable area touch-friendly */
+.no-scrollbar::-webkit-scrollbar { display:none; }
+.no-scrollbar { scrollbar-width: none; }
