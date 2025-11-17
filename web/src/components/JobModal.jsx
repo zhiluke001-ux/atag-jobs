@@ -58,28 +58,15 @@ const DatesBlock = memo(function DatesBlock({
     <div className="card" style={{ padding: 12 }}>
       <div style={{ fontWeight: 700, marginBottom: 8 }}>Date &amp; Time</div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: singleDate ? "1fr" : "repeat(2, minmax(0, 1fr))",
-          gap: 12,
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: "#374151",
-              marginBottom: 6,
-            }}
-          >
-            {singleDate ? "Date" : "Start Date"}
-          </div>
-          <input ref={dateStartRef} type="date" defaultValue={dateStart} />
-        </div>
-
-        {!singleDate && (
+      {singleDate ? (
+        // Single-day: everything in ONE line for clarity
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+            gap: 12,
+          }}
+        >
           <div>
             <div
               style={{
@@ -89,48 +76,114 @@ const DatesBlock = memo(function DatesBlock({
                 marginBottom: 6,
               }}
             >
-              End Date
+              Date
             </div>
-            <input ref={dateEndRef} type="date" defaultValue={dateEnd} />
+            <input ref={dateStartRef} type="date" defaultValue={dateStart} />
           </div>
-        )}
-      </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-          gap: 12,
-          marginTop: 12,
-        }}
-      >
-        <div>
+          <div>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#374151",
+                marginBottom: 6,
+              }}
+            >
+              Start Time
+            </div>
+            <input ref={timeStartRef} type="time" defaultValue={timeStart} />
+          </div>
+
+          <div>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#374151",
+                marginBottom: 6,
+              }}
+            >
+              End Time
+            </div>
+            <input ref={timeEndRef} type="time" defaultValue={timeEnd} />
+          </div>
+        </div>
+      ) : (
+        // Multi-day: dates on first row, times on second row
+        <>
           <div
             style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: "#374151",
-              marginBottom: 6,
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 12,
             }}
           >
-            Start Time
+            <div>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#374151",
+                  marginBottom: 6,
+                }}
+              >
+                Start Date
+              </div>
+              <input ref={dateStartRef} type="date" defaultValue={dateStart} />
+            </div>
+            <div>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#374151",
+                  marginBottom: 6,
+                }}
+              >
+                End Date
+              </div>
+              <input ref={dateEndRef} type="date" defaultValue={dateEnd} />
+            </div>
           </div>
-          <input ref={timeStartRef} type="time" defaultValue={timeStart} />
-        </div>
-        <div>
+
           <div
             style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: "#374151",
-              marginBottom: 6,
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: 12,
+              marginTop: 12,
             }}
           >
-            End Time
+            <div>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#374151",
+                  marginBottom: 6,
+                }}
+              >
+                Start Time
+              </div>
+              <input ref={timeStartRef} type="time" defaultValue={timeStart} />
+            </div>
+            <div>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "#374151",
+                  marginBottom: 6,
+                }}
+              >
+                End Time
+              </div>
+              <input ref={timeEndRef} type="time" defaultValue={timeEnd} />
+            </div>
           </div>
-          <input ref={timeEndRef} type="time" defaultValue={timeEnd} />
-        </div>
-      </div>
+        </>
+      )}
 
       <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
         OT is counted for every full hour after the scheduled <b>End Time</b>.
