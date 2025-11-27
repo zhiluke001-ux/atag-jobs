@@ -13,9 +13,9 @@ import React from "react";
  * - showFullDetails?: boolean
  * - viewerUser?: object
  */
-function fmtDateShort(d) { return d.toLocaleDateString("en-US"); }
+function fmtDateShort(d) { return d.toLocaleDateString("en-GB"); }
 function fmtHourCompact(d) {
-  const h = d.toLocaleTimeString("en-US", { hour: "numeric", hour12: true });
+  const h = d.toLocaleTimeString("en-GB", { hour: "numeric", hour12: true });
   return h.replace(" ", "");
 }
 
