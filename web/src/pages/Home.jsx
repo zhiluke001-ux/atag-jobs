@@ -45,6 +45,9 @@ export default function Home({ navigate, user }) {
   const [applyOpen, setApplyOpen] = useState(false);
   const [applyJob, setApplyJob] = useState(null);
 
+  // Present / Past view (for admin/pm only)
+  const [viewMode, setViewMode] = useState("present"); // "present" | "past"
+
   const canManage = useMemo(
     () => !!user && (user.role === "pm" || user.role === "admin"),
     [user]
@@ -94,6 +97,26 @@ export default function Home({ navigate, user }) {
       setMyStatuses({});
     }
   }, [user]);
+
+  // Filter jobs into Present / Past
+  const filteredJobs = useMemo(() => {
+    const now = Date.now();
+
+    return (jobs || []).filter((j) => {
+      // Safely handle missing endTime: treat as present/ongoing
+      const endMs = j?.endTime ? new Date(j.endTime).getTime() : null;
+      const isPast = endMs != null && endMs < now;
+
+      if (canManage) {
+        // Admin / PM: respect Present | Past toggle
+        if (viewMode === "past") return isPast;
+        return !isPast; // "present" view: ongoing or upcoming
+      }
+
+      // Non-admin users: always see only ongoing/upcoming jobs
+      return !isPast;
+    });
+  }, [jobs, canManage, viewMode]);
 
   function onView(j) {
     navigate(`#/jobs/${j.id}`);
@@ -164,16 +187,54 @@ export default function Home({ navigate, user }) {
         }}
       >
         <div style={{ fontSize: 22, fontWeight: 800 }}>Jobs Management</div>
+
         {canManage && (
-          <button className="btn primary" onClick={() => setShowCreate(true)}>
-            + Create Job
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Present / Past toggle (admin/pm only) */}
+            <div
+              style={{
+                display: "inline-flex",
+                borderRadius: 999,
+                border: "1px solid #d1d5db",
+                overflow: "hidden",
+              }}
+            >
+              <button
+                className={`btn ${viewMode === "present" ? "primary" : ""}`}
+                style={{
+                  borderRadius: 0,
+                  padding: "6px 12px",
+                  border: "none",
+                  borderRight: "1px solid #d1d5db",
+                }}
+                onClick={() => setViewMode("present")}
+              >
+                Present
+              </button>
+              <button
+                className={`btn ${viewMode === "past" ? "primary" : ""}`}
+                style={{
+                  borderRadius: 0,
+                  padding: "6px 12px",
+                  border: "none",
+                }}
+                onClick={() => setViewMode("past")}
+              >
+                Past
+              </button>
+            </div>
+
+            {/* Create Job button */}
+            <button className="btn primary" onClick={() => setShowCreate(true)}>
+              + Create Job
+            </button>
+          </div>
         )}
       </div>
 
       {/* List */}
       <JobList
-        jobs={jobs}
+        jobs={filteredJobs}
         loading={loading}
         onApply={onApply}
         onView={onView}
