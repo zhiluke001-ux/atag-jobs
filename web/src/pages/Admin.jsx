@@ -890,15 +890,39 @@ export default function Admin({ navigate, user }) {
 
     const approved = new Set(job.approved || []);
     const apps = job.applications || [];
+    const attendance = job.attendance || {};
+    // Full timers can live on any of these arrays; adjust to your actual backend:
+    const fullTimers = job.fullTimers || job.staff || job.fulltimeStaff || [];
+
     const outRows = [];
 
     const byUserTransport = new Map();
     apps.forEach((a) => {
+      if (!a) return;
+      const uid = a.userId;
+      if (!uid) return;
       const t =
         a.transport === "ATAG Bus"
           ? "ATAG Transport"
           : a.transport || "Own Transport";
-      byUserTransport.set(a.userId, t);
+      byUserTransport.set(uid, t);
+    });
+
+    const getStaffId = (s) =>
+      (s && (s.userId || s.id || s.email || s.phone || s.name)) || "";
+
+    const fullTimerById = new Map();
+    fullTimers.forEach((s) => {
+      const id = getStaffId(s);
+      if (!id) return;
+      fullTimerById.set(id, s);
+      if (s.transport) {
+        const t =
+          s.transport === "ATAG Bus"
+            ? "ATAG Transport"
+            : s.transport || "Own Transport";
+        byUserTransport.set(id, t);
+      }
     });
 
     const scheduledStart = new Date(job.startTime);
@@ -928,10 +952,61 @@ export default function Admin({ navigate, user }) {
 
     const hrs = (a, b) => Math.max(0, (b - a) / HOUR_MS);
 
-    Object.keys(job.attendance || {}).forEach((uid) => {
-      if (!approved.has(uid)) return;
+    const mapRoleToTierKey = (role) => {
+      const v = (role || "").toString().trim().toLowerCase();
+      if (!v) return null;
+      if (["junior", "jr"].includes(v)) return "junior";
+      if (["senior", "sr"].includes(v)) return "senior";
+      if (["lead", "lead host", "leader"].includes(v)) return "lead";
+      if (
+        v === "junior_emcee" ||
+        v === "jr_emcee" ||
+        v.includes("junior emcee") ||
+        v.includes("junior mc")
+      )
+        return "junior_emcee";
+      if (
+        v === "senior_emcee" ||
+        v === "sr_emcee" ||
+        v.includes("senior emcee") ||
+        v.includes("senior mc")
+      )
+        return "senior_emcee";
+      if (v.includes("junior") && v.includes("marshal")) return "junior";
+      if (v.includes("senior") && v.includes("marshal")) return "senior";
+      return null;
+    };
 
-      const rec = job.attendance[uid] || {};
+    const tierKeyForUser = (uid, appRec, staffRec) => {
+      const jobRoles = job.roleByUser || job.tierByUser || {};
+      const raw =
+        (appRec &&
+          (appRec.tier ||
+            appRec.role ||
+            appRec.level ||
+            appRec.position)) ||
+        jobRoles[uid] ||
+        (staffRec &&
+          (staffRec.tier ||
+            staffRec.role ||
+            staffRec.position));
+
+      const mapped = mapRoleToTierKey(raw) || raw;
+      if (
+        mapped === "junior" ||
+        mapped === "senior" ||
+        mapped === "lead" ||
+        mapped === "junior_emcee" ||
+        mapped === "senior_emcee"
+      ) {
+        return mapped;
+      }
+      return "junior";
+    };
+
+    const pushRowForPerson = (uid, { appRec, staffRec } = {}) => {
+      // Attendance (optional) – if none, we fall back to scheduled hours.
+      const rec = attendance[uid] || {};
       const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
 
@@ -953,8 +1028,8 @@ export default function Admin({ navigate, user }) {
       const otWholeHours = Math.floor(otHours + 0.5);
 
       // ---- Which rates apply?
-      const tierKey = "junior"; // TODO: map actual tier if/when available
-      const rr = tierRates[tierKey] || {};
+      const tierKey = tierKeyForUser(uid, appRec, staffRec);
+      const rr = tierRates[tierKey] || tierRates["junior"] || {};
 
       let baseRate = 0;
       let otRate = 0;
@@ -992,9 +1067,10 @@ export default function Admin({ navigate, user }) {
       let allowances = 0;
 
       // Parking/ATAG transport allowance — only if they chose ATAG transport
-      const appRec = apps.find((a) => a.userId === uid) || {};
       const transport =
-        byUserTransport.get(uid) || "Own Transport";
+        byUserTransport.get(uid) ||
+        (staffRec && staffRec.transport) ||
+        "Own Transport";
       if (transport === "ATAG Transport" || transport === "ATAG Bus") {
         allowances += N(parkingAmt, 0);
       }
@@ -1017,23 +1093,45 @@ export default function Admin({ navigate, user }) {
       const deduction = Math.max(0, N(deductions[uid], 0));
       const net = Math.max(0, gross - deduction);
 
-      // best-effort name/phone from application record
+      // best-effort name/phone from staff record first, then application record
       const name =
-        appRec.name ||
-        appRec.fullName ||
-        appRec.displayName ||
-        (appRec.firstName || appRec.lastName
+        (staffRec &&
+          (staffRec.name ||
+            staffRec.fullName ||
+            staffRec.displayName)) ||
+        (appRec &&
+          (appRec.name ||
+            appRec.fullName ||
+            appRec.displayName)) ||
+        (appRec &&
+        (appRec.firstName || appRec.lastName)
           ? `${appRec.firstName || ""} ${
               appRec.lastName || ""
             }`.trim()
-          : "");
+          : "") ||
+        (staffRec && (staffRec.id || staffRec.email)) ||
+        uid;
+
       const phone =
-        appRec.phone || appRec.phoneNumber || appRec.contact || "";
+        (staffRec &&
+          (staffRec.phone ||
+            staffRec.phoneNumber ||
+            staffRec.contact)) ||
+        (appRec &&
+          (appRec.phone ||
+            appRec.phoneNumber ||
+            appRec.contact)) ||
+        "";
+
+      const email =
+        (staffRec && staffRec.email) ||
+        (appRec && appRec.email) ||
+        uid;
 
       outRows.push({
         userId: uid,
         name: name || "-",
-        email: appRec.email || uid,
+        email,
         phone: phone || "-",
         jobTitle: job.title,
         hours: Number(workedHours.toFixed(2)),
@@ -1046,6 +1144,27 @@ export default function Admin({ navigate, user }) {
         _specific: specificPay,
         _allowances: allowances,
       });
+    };
+
+    // ---- PART-TIMERS: approved + optional attendance (no scan required) ----
+    const participants = new Set();
+    approved.forEach((uid) => participants.add(uid));
+    Object.keys(attendance).forEach((uid) => participants.add(uid));
+
+    participants.forEach((uid) => {
+      // Keep same rule: only pay approved part-timers
+      if (!approved.has(uid)) return;
+      // Avoid double-counting full-timers that might also be in approved
+      if (fullTimerById.has(uid)) return;
+      const appRec = apps.find((a) => a.userId === uid) || {};
+      pushRowForPerson(uid, { appRec, staffRec: null });
+    });
+
+    // ---- FULL-TIMERS: always included, no attendance required ----
+    fullTimers.forEach((staffRec) => {
+      const uid = getStaffId(staffRec);
+      if (!uid) return;
+      pushRowForPerson(uid, { appRec: null, staffRec });
     });
 
     const employees = outRows.length;
