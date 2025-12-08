@@ -186,6 +186,9 @@ export default function Admin({ navigate, user }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
 
+  // NEW: central user map (from /admin/users)
+  const [userMap, setUserMap] = useState({});
+
   /* ---------- GLOBAL DEFAULTS STATE ---------- */
   const [globalCfg, setGlobalCfg] = useState(loadGlobalDefaults());
 
@@ -397,6 +400,23 @@ export default function Admin({ navigate, user }) {
     apiGet("/jobs")
       .then((j) => setJobs(j || []))
       .catch((e) => setError(String(e)));
+  }, [user]);
+
+  // NEW: load central users for name/phone/email in wage summary
+  useEffect(() => {
+    if (!user || user.role !== "admin") return; // only admin hits /admin/users
+    apiGet("/admin/users")
+      .then((rows) => {
+        const map = {};
+        (rows || []).forEach((u) => {
+          if (!u || !u.id) return;
+          map[u.id] = u;
+        });
+        setUserMap(map);
+      })
+      .catch((err) => {
+        console.warn("Failed to load user map in Admin wages:", err);
+      });
   }, [user]);
 
   /* ===== Infer helpers (like JobModal) ===== */
@@ -1106,6 +1126,7 @@ export default function Admin({ navigate, user }) {
       // best-effort name/phone/email
       const appUser = (appRec && appRec.user) || {};
       const staffUser = (staffRec && staffRec.user) || {};
+      const coreUser = userMap[uid] || {};
 
       const combinedAppName =
         appRec && (appRec.firstName || appRec.lastName)
@@ -1114,6 +1135,10 @@ export default function Admin({ navigate, user }) {
 
       const name =
         pick(
+          // central user record
+          coreUser.name,
+          coreUser.fullName,
+          coreUser.displayName,
           // full-timer user object
           staffUser.name,
           staffUser.fullName,
@@ -1135,6 +1160,9 @@ export default function Admin({ navigate, user }) {
 
       const phone =
         pick(
+          // central user record
+          coreUser.phone,
+          coreUser.phoneNumber,
           // full-timer user object
           staffUser.phone,
           staffUser.phoneNumber,
@@ -1155,8 +1183,12 @@ export default function Admin({ navigate, user }) {
 
       const email =
         pick(
+          // central user record
+          coreUser.email,
+          // full-timer sources
           staffUser.email,
           staffRec && staffRec.email,
+          // part-timer sources
           appUser.email,
           appRec && appRec.email,
           uid
@@ -1236,11 +1268,11 @@ export default function Admin({ navigate, user }) {
     });
   }
 
-  // AUTO-CALCULATE: whenever job or deductions change
+  // AUTO-CALCULATE: whenever job, deductions, or userMap change
   useEffect(() => {
     calcWages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job, deductions]);
+  }, [job, deductions, userMap]);
 
   async function exportPayrollCSV() {
     if (!rows.length) {
