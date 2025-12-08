@@ -293,6 +293,7 @@ function jobPublicView(job) {
   const approvedCount = Array.isArray(job.approved)
     ? job.approved.length
     : 0;
+  const fullTimers = Array.isArray(job.fullTimers) ? job.fullTimers : [];
 
   return {
     id,
@@ -322,6 +323,7 @@ function jobPublicView(job) {
     },
     appliedCount,
     approvedCount,
+    fullTimersCount: fullTimers.length,
     paySummary: paySummaryFromRate(job.rate || {})
   };
 }
@@ -468,8 +470,6 @@ for (const u of db.users) {
     u.username =
       (u.email && u.email.split("@")[0]) ||
       `user_${u.id || Math.random().toString(36).slice(2, 8)}`;
-
-
     mutated = true;
   }
   if (!u.passwordHash) {
@@ -539,6 +539,12 @@ for (const j of db.jobs) {
   ) {
     j.loadingUnload.closed = true;
   }
+
+  // ✅ ensure fullTimers exists
+  if (!Array.isArray(j.fullTimers)) {
+    j.fullTimers = [];
+    bootMutated = true;
+  }
 }
 if (bootMutated) await saveDB(db);
 
@@ -546,7 +552,7 @@ if (bootMutated) await saveDB(db);
 const NOTIF_CAP = 200;
 
 webpush.setVapidDetails(
-  process.envVAPID_SUBJECT || "mailto:admin@example.com",
+  process.env.VAPID_SUBJECT || "mailto:admin@example.com",
   process.env.VAPID_PUBLIC_KEY || "",
   process.env.VAPID_PRIVATE_KEY || ""
 );
@@ -1093,6 +1099,11 @@ app.delete(
         const partCount = (j.loadingUnload.participants || []).length;
         j.loadingUnload.closed = quota > 0 && partCount >= quota;
       }
+
+      // ✅ also remove from fullTimers
+      if (Array.isArray(j.fullTimers)) {
+        j.fullTimers = j.fullTimers.filter((ft) => ft && ft.userId !== uid);
+      }
     }
 
     // Notifications / push subscriptions
@@ -1260,7 +1271,8 @@ app.post(
       rejected: [],
       attendance: {},
       events: { startedAt: null, endedAt: null, scanner: null },
-      adjustments: {}
+      adjustments: {},
+      fullTimers: [] // ✅ initialise empty full-timer list
     };
 
     db.jobs.push(job);
@@ -1949,6 +1961,96 @@ app.post(
       participants: job.loadingUnload.participants,
       closed: job.loadingUnload.closed
     });
+  }
+);
+
+/* ---- Full-timer assignments ---- */
+app.get(
+  "/jobs/:id/fulltimers",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+
+    const list = Array.isArray(job.fullTimers) ? job.fullTimers : [];
+    const enriched = list.map((ft) => {
+      const u =
+        (db.users || []).find((x) => x.id === ft.userId) || {};
+      return {
+        userId: ft.userId,
+        type: ft.type || ft.kind || ft.grade || "",
+        note: ft.note || "",
+        email: u.email || "",
+        name: u.name || "",
+        phone: u.phone || "",
+        role: u.role || "",
+        grade: u.grade || "junior"
+      };
+    });
+    res.json(enriched);
+  }
+);
+
+app.post(
+  "/jobs/:id/fulltimers",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+
+    let list =
+      req.body?.fullTimers ||
+      req.body?.items ||
+      req.body?.staff ||
+      req.body?.records ||
+      req.body?.assignments ||
+      [];
+
+    if (!Array.isArray(list) && Array.isArray(req.body)) {
+      list = req.body;
+    }
+    if (!Array.isArray(list)) {
+      return res.status(400).json({ error: "fullTimers_array_required" });
+    }
+
+    const normalized = [];
+    for (const item of list) {
+      if (!item || !item.userId) continue;
+      const u = (db.users || []).find((x) => x.id === item.userId);
+      if (!u) continue;
+      normalized.push({
+        userId: u.id,
+        type: String(item.type || item.kind || item.grade || "").toLowerCase(),
+        note: String(item.note || "")
+      });
+    }
+
+    job.fullTimers = normalized;
+    await saveDB(db);
+    addAudit(
+      "update_fulltimers",
+      { jobId: job.id, count: job.fullTimers.length },
+      req
+    );
+
+    const enriched = job.fullTimers.map((ft) => {
+      const u =
+        (db.users || []).find((x) => x.id === ft.userId) || {};
+      return {
+        userId: ft.userId,
+        type: ft.type || "",
+        note: ft.note || "",
+        email: u.email || "",
+        name: u.name || "",
+        phone: u.phone || "",
+        role: u.role || "",
+        grade: u.grade || "junior"
+      };
+    });
+
+    res.json({ ok: true, fullTimers: enriched });
   }
 );
 
