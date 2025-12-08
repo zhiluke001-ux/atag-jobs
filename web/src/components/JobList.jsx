@@ -451,7 +451,7 @@ export default function JobList({
                         {lu?.enabled
                           ? `Yes · RM${Number(
                               lu.price || 0
-                            )} / helper · Quota ${Number(lu.quota || 0)}`
+                            )} {/*/ helper · Quota ${Number(lu.quota || 0)}`*/}
                           : "No"}
                       </div>
                     </div>
