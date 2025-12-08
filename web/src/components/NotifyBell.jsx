@@ -1,3 +1,4 @@
+// web/src/components/NotifyBell.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
@@ -13,9 +14,14 @@ export default function NotificationsBell({ user }) {
   const pollRef = useRef(null);
   const wrapRef = useRef(null);
 
-  const unreadCount = useMemo(() => items.filter(i => !i.read).length, [items]);
+  const isAdminOrPM = user && (user.role === "admin" || user.role === "pm");
+
+  const unreadCount = useMemo(
+    () => items.filter((i) => !i.read).length,
+    [items]
+  );
   const shown = useMemo(
-    () => (tab === "unread" ? items.filter(i => !i.read) : items),
+    () => (tab === "unread" ? items.filter((i) => !i.read) : items),
     [tab, items]
   );
 
@@ -56,7 +62,9 @@ export default function NotificationsBell({ user }) {
     loadAll();
     // Light polling; keep full list so "All" doesn't disappear
     pollRef.current = setInterval(loadAll, 15000);
-    return () => clearInterval(pollRef.current);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, [user]);
 
   // Close when clicking outside
@@ -74,17 +82,19 @@ export default function NotificationsBell({ user }) {
   async function markRead(id) {
     try {
       await apiPost(`/notifications/${id}/read`, {});
-      setItems(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+      setItems((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+      );
     } catch {}
   }
 
   async function markAllRead() {
-    const unread = items.filter(n => !n.read);
+    const unread = items.filter((n) => !n.read);
     try {
       await Promise.all(
-        unread.map(n => apiPost(`/notifications/${n.id}/read`, {}))
+        unread.map((n) => apiPost(`/notifications/${n.id}/read`, {}))
       );
-      setItems(prev => prev.map(n => ({ ...n, read: true })));
+      setItems((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch {}
   }
 
@@ -98,6 +108,47 @@ export default function NotificationsBell({ user }) {
 
   if (!user) return null;
 
+  // Helper: derive "who applied for what job" for admin/pm
+  function getDisplayTitle(n) {
+    // Try to be robust with different payload shapes:
+    const applicantName =
+      n.applicantName ||
+      n.actorName ||
+      n.userName ||
+      n.user_full_name ||
+      (n.data && (n.data.applicantName || n.data.userName || n.data.actorName)) ||
+      (n.meta && (n.meta.applicantName || n.meta.userName || n.meta.actorName));
+
+    const jobTitle =
+      n.jobTitle ||
+      (n.data && (n.data.jobTitle || n.data.job_name || n.data.jobTitle)) ||
+      (n.meta && (n.meta.jobTitle || n.meta.job_name || n.meta.jobTitle));
+
+    // Only override for admin/pm AND when both pieces of info exist
+    if (
+      isAdminOrPM &&
+      applicantName &&
+      jobTitle &&
+      (n.type === "job_applied" ||
+        n.type === "job_application" ||
+        n.type === "application" ||
+        n.type === "job_applied_pm" ||
+        n.type === "job_applied_admin" ||
+        n.type === "approved" ||
+        n.type === "rejected")
+    ) {
+      return `${applicantName} applied for ${jobTitle}`;
+    }
+
+    // fallback to backend-provided title
+    return n.title || "Notification";
+  }
+
+  function getDisplayBody(n) {
+    // You can still show backend body underneath (extra info)
+    return n.body || "";
+  }
+
   return (
     <div className="notif-wrap" ref={wrapRef}>
       <button
@@ -107,7 +158,7 @@ export default function NotificationsBell({ user }) {
         aria-controls="notif-popover"
         onClick={(e) => {
           e.stopPropagation();
-          setOpen(v => !v);
+          setOpen((v) => !v);
           setTab("all");
         }}
         style={{ position: "relative" }}
@@ -136,7 +187,11 @@ export default function NotificationsBell({ user }) {
       </button>
 
       {open && (
-        <div id="notif-popover" className="notif-popover no-scrollbar" onClick={(e) => e.stopPropagation()}>
+        <div
+          id="notif-popover"
+          className="notif-popover no-scrollbar"
+          onClick={(e) => e.stopPropagation()}
+        >
           {/* Tabs / actions */}
           <div className="notif-tabs">
             <button
@@ -177,9 +232,13 @@ export default function NotificationsBell({ user }) {
               >
                 <div className="ico">{iconFor(n.type)}</div>
                 <div className="meta">
-                  <div className="title">{n.title}</div>
-                  {n.body ? <div className="body">{n.body}</div> : null}
-                  <div className="time">{dayjs(n.time).fromNow()}</div>
+                  <div className="title">{getDisplayTitle(n)}</div>
+                  {getDisplayBody(n) ? (
+                    <div className="body">{getDisplayBody(n)}</div>
+                  ) : null}
+                  <div className="time">
+                    {n.time ? dayjs(n.time).fromNow() : ""}
+                  </div>
                 </div>
               </div>
             ))}
@@ -194,6 +253,10 @@ function iconFor(type) {
   switch (type) {
     case "job_created":
       return "🧰";
+    case "job_applied":
+    case "job_application":
+    case "application":
+      return "📨";
     case "approved":
       return "✅";
     case "rejected":
