@@ -468,6 +468,8 @@ for (const u of db.users) {
     u.username =
       (u.email && u.email.split("@")[0]) ||
       `user_${u.id || Math.random().toString(36).slice(2, 8)}`;
+
+
     mutated = true;
   }
   if (!u.passwordHash) {
@@ -544,7 +546,7 @@ if (bootMutated) await saveDB(db);
 const NOTIF_CAP = 200;
 
 webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT || "mailto:admin@example.com",
+  process.envVAPID_SUBJECT || "mailto:admin@example.com",
   process.env.VAPID_PUBLIC_KEY || "",
   process.env.VAPID_PRIVATE_KEY || ""
 );
