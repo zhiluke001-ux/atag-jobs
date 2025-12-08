@@ -422,7 +422,7 @@ export default function JobList({
                           marginTop: 4,
                         }}
                       >
-                        ATAG Transport allowance: RM{pa} per person (if selected)
+                       {/* ATAG Transport allowance: RM{pa} per person (if selected)*/}
                       </div>
                     )}
                   </div>
