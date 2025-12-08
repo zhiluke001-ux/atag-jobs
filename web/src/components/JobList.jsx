@@ -17,7 +17,11 @@ function fmtDateShort(d) {
   return d.toLocaleDateString("en-GB");
 }
 function fmtHourCompact(d) {
-  const h = d.toLocaleTimeString("en-GB", { hour: "numeric", minute: "2-digit", hour12: true });
+  const h = d.toLocaleTimeString("en-GB", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
   return h.replace(" ", "");
 }
 
@@ -32,7 +36,11 @@ const money = (v) => {
 
 // ---- Discord/constants ----
 const DISCORD_URL = "https://discord.gg/ZAeR28z3p2";
-const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000" };
+const BTN_BLACK_STYLE = {
+  background: "#000",
+  color: "#fff",
+  borderColor: "#000",
+};
 // Compact button helper to keep actions on a single line without overflowing
 const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
 
@@ -358,9 +366,7 @@ export default function JobList({
                   )}
                 </div>
                 <div style={{ textAlign: "right" }}>
-                  {j.status && (
-                    <div style={STATUS_BADGE}>{j.status}</div>
-                  )}
+                  {j.status && <div style={STATUS_BADGE}>{j.status}</div>}
                 </div>
               </div>
 
@@ -422,7 +428,7 @@ export default function JobList({
                           marginTop: 4,
                         }}
                       >
-                       {/* ATAG Transport allowance: RM{pa} per person (if selected)*/}
+                        {/* ATAG Transport allowance: RM{pa} per person (if selected)*/}
                       </div>
                     )}
                   </div>
@@ -449,9 +455,7 @@ export default function JobList({
                       <div style={LABEL_SM}>Loading &amp; Unloading</div>
                       <div style={TEXT_MAIN}>
                         {lu?.enabled
-                          ? `Yes · RM${Number(
-                              lu.price || 0
-                            )} `
+                          ? `Yes · RM${Number(lu.price || 0)} `
                           : "No"}
                       </div>
                     </div>
@@ -460,8 +464,7 @@ export default function JobList({
               )}
               {/* / helper · Quota ${Number(lu.quota || 0)}` */}
 
-              
-              {/* Description */}
+              {/* Description – ALWAYS show full description */}
               {hasDescription && (
                 <div style={{ marginTop: 10 }}>
                   <div style={LABEL_SM}>Description</div>
@@ -471,9 +474,7 @@ export default function JobList({
                       marginTop: 4,
                     }}
                   >
-                    {showFullDetails
-                      ? j.description
-                      : truncate(j.description, 160)}
+                    {j.description}
                   </div>
                 </div>
               )}
