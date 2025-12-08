@@ -13,16 +13,21 @@ import React from "react";
  * - showFullDetails?: boolean
  * - viewerUser?: object
  */
-function fmtDateShort(d) { return d.toLocaleDateString("en-GB"); }
+function fmtDateShort(d) {
+  return d.toLocaleDateString("en-GB");
+}
 function fmtHourCompact(d) {
   const h = d.toLocaleTimeString("en-GB", { hour: "numeric", hour12: true });
   return h.replace(" ", "");
 }
 
-const num = (v) => (v === null || v === undefined || v === "" ? null : Number(v));
+const num = (v) =>
+  v === null || v === undefined || v === "" ? null : Number(v);
 const money = (v) => {
   const n = num(v);
-  return Number.isFinite(n) && n > 0 ? `RM${n % 1 === 0 ? n : n.toFixed(2)}` : null;
+  return Number.isFinite(n) && n > 0
+    ? `RM${n % 1 === 0 ? n : n.toFixed(2)}`
+    : null;
 };
 
 // ---- Discord/constants ----
@@ -31,11 +36,86 @@ const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000"
 // Compact button helper to keep actions on a single line without overflowing
 const COMPACT_BTN = { padding: "6px 10px", fontSize: 12, lineHeight: 1.2 };
 
+// ---- Layout / style helpers (visual polish) ----
+const CARD_INNER = {
+  display: "flex",
+  flexDirection: "column",
+  height: "100%",
+};
+
+const HEADER_ROW = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 8,
+};
+
+const TITLE_STYLE = {
+  fontWeight: 600,
+  fontSize: 16,
+  lineHeight: 1.3,
+};
+
+const STATUS_BADGE = {
+  fontSize: 12,
+  padding: "2px 10px",
+  borderRadius: 999,
+  background: "#eef2ff",
+  color: "#4f46e5",
+  fontWeight: 600,
+  textTransform: "capitalize",
+};
+
+const LABEL_SM = {
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "#6b7280",
+};
+
+const TEXT_MAIN = {
+  fontSize: 13,
+  color: "#111827",
+  marginTop: 2,
+};
+
+const TEXT_MUTED = {
+  fontSize: 13,
+  color: "#4b5563",
+};
+
+const PAY_STRONG = {
+  fontSize: 15,
+  fontWeight: 700,
+  color: "#111827",
+};
+
+const SECTION_DIVIDER = {
+  borderTop: "1px solid #e5e7eb",
+  marginTop: 10,
+  paddingTop: 10,
+};
+
+function truncate(text, max = 140) {
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return text.slice(0, max - 1) + "…";
+}
+
 // === EXACTLY MATCH JobDetails helpers ===
 function deriveViewerRank(user) {
   const raw = (
-    user?.ptRole || user?.jobRole || user?.rank || user?.tier || user?.level || user?.roleRank || ""
-  ).toString().toLowerCase();
+    user?.ptRole ||
+    user?.jobRole ||
+    user?.rank ||
+    user?.tier ||
+    user?.level ||
+    user?.roleRank ||
+    ""
+  )
+    .toString()
+    .toLowerCase();
   if (["lead", "leader", "supervisor", "captain"].includes(raw)) return "lead";
   if (["senior", "sr"].includes(raw)) return "senior";
   return "junior";
@@ -48,22 +128,34 @@ function deriveKind(job) {
     job?.session?.physicalType ||
     (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
+  const mode =
+    job?.session?.mode ||
+    job?.sessionMode ||
+    job?.mode ||
+    (kind === "virtual" ? "virtual" : "physical");
   const isVirtual = mode === "virtual" || kind === "virtual";
 
   const resolvedKind = isVirtual
     ? "virtual"
-    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
-      ? kind
-      : "half_day";
+    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(
+        kind
+      )
+    ? kind
+    : "half_day";
 
   const label =
-    resolvedKind === "virtual" ? "Virtual"
-      : resolvedKind === "half_day" ? "Physical — Half Day"
-      : resolvedKind === "full_day" ? "Physical — Full Day"
-      : resolvedKind === "2d1n" ? "Physical — 2D1N"
-      : resolvedKind === "3d2n" ? "Physical — 3D2N"
-      : resolvedKind === "hourly_by_role" ? "Physical — Hourly (by role)"
+    resolvedKind === "virtual"
+      ? "Virtual"
+      : resolvedKind === "half_day"
+      ? "Physical — Half Day"
+      : resolvedKind === "full_day"
+      ? "Physical — Full Day"
+      : resolvedKind === "2d1n"
+      ? "Physical — 2D1N"
+      : resolvedKind === "3d2n"
+      ? "Physical — 3D2N"
+      : resolvedKind === "hourly_by_role"
+      ? "Physical — Hourly (by role)"
       : "Physical — Backend (flat hourly)";
 
   return { isVirtual, kind: resolvedKind, label };
@@ -83,23 +175,25 @@ function buildPayForViewer(job, user) {
 
   if (kind === "hourly_flat") {
     const base = money(flat?.base ?? tier.base);
-    const ot   = money(flat?.otRatePerHour);
-    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    const ot = money(flat?.otRatePerHour);
+    if (base || ot)
+      return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return "-";
   }
 
   if (kind === "virtual" || kind === "hourly_by_role") {
     const base = money(tier.base);
-    const ot   = money(tier.otRatePerHour);
-    if (base || ot) return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    const ot = money(tier.otRatePerHour);
+    if (base || ot)
+      return `${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return "-";
   }
 
   const pick = (k) => {
     if (k === "half_day") return tier?.halfDay ?? tier?.specificPayment ?? null;
     if (k === "full_day") return tier?.fullDay ?? tier?.specificPayment ?? null;
-    if (k === "2d1n")     return tier?.twoD1N ?? tier?.specificPayment ?? null;
-    if (k === "3d2n")     return tier?.threeD2N ?? tier?.specificPayment ?? null;
+    if (k === "2d1n") return tier?.twoD1N ?? tier?.specificPayment ?? null;
+    if (k === "3d2n") return tier?.threeD2N ?? tier?.specificPayment ?? null;
     return null;
   };
   const sessionRM = money(pick(kind));
@@ -108,10 +202,13 @@ function buildPayForViewer(job, user) {
     job?.physicalHourlyEnabled ||
     tier?.payMode === "specific_plus_hourly";
   const base = money(tier.base);
-  const ot   = money(tier.otRatePerHour);
+  const ot = money(tier.otRatePerHour);
 
   if (sessionRM) {
-    if (hasAddon && (base || ot)) return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    if (hasAddon && (base || ot))
+      return `${sessionRM}  +  ${
+        base ? `${base}/hr` : ""
+      }${otSuffix(base, ot)}`;
     return sessionRM;
   }
 
@@ -126,11 +223,26 @@ function TransportBadges({ job }) {
     ...(t.bus ? [{ text: "ATAG Transport", bg: "#eef2ff", color: "#3730a3" }] : []),
     ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
   ];
-  if (!items.length) return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
+  if (!items.length)
+    return (
+      <span style={{ fontSize: 12, color: "#6b7280" }}>
+        No transport option
+      </span>
+    );
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {items.map((it, i) => (
-        <span key={i} style={{ background: it.bg, color: it.color, padding: "2px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+        <span
+          key={i}
+          style={{
+            background: it.bg,
+            color: it.color,
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
           {it.text}
         </span>
       ))}
@@ -171,9 +283,12 @@ export default function JobList({
         // Allowances (for physical transport)
         const pa = (() => {
           const r = j?.rate || {};
-          const v = Number.isFinite(r.parkingAllowance) ? r.parkingAllowance
-            : Number.isFinite(r.transportAllowance) ? r.transportAllowance
-            : Number.isFinite(r.transportBus) ? r.transportBus
+          const v = Number.isFinite(r.parkingAllowance)
+            ? r.parkingAllowance
+            : Number.isFinite(r.transportAllowance)
+            ? r.transportAllowance
+            : Number.isFinite(r.transportBus)
+            ? r.transportBus
             : null;
           return v == null ? null : Math.round(Number(v));
         })();
@@ -181,6 +296,9 @@ export default function JobList({
         const ec = j.earlyCall || {};
         const lu = j.loadingUnload || {};
         const payForViewer = buildPayForViewer(j, viewerUser);
+
+        const hasDescription =
+          typeof j.description === "string" && j.description.trim().length > 0;
 
         // === UPDATED ApplyArea ===
         function ApplyArea() {
@@ -226,79 +344,114 @@ export default function JobList({
         }
 
         return (
-          <div key={j.id} className="card">
-            {/* Title + status */}
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div className="status">{j.status}</div>
-              </div>
-            </div>
-
-            {/* Basics */}
-            <div style={{ marginTop: 8, lineHeight: 1.55 }}>
-              {/* Date / Time side-by-side */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <div key={j.id} className="card" style={CARD_INNER}>
+            {/* Top content */}
+            <div>
+              {/* Title + status */}
+              <div style={HEADER_ROW}>
                 <div>
-                  <strong>Date</strong>
-                  <span style={{ marginLeft: 8 }}>{dateLine}</span>
+                  <div style={TITLE_STYLE}>{j.title || "Untitled job"}</div>
+                  {j.clientName && (
+                    <div style={{ ...TEXT_MUTED, fontSize: 12, marginTop: 4 }}>
+                      {j.clientName}
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <strong>Time</strong>
-                  <span style={{ marginLeft: 8 }}>{timeLine}</span>
+                <div style={{ textAlign: "right" }}>
+                  {j.status && (
+                    <div style={STATUS_BADGE}>{j.status}</div>
+                  )}
                 </div>
               </div>
 
-              {/* Venue (its own line) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Venue</strong>
-                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{j.venue || "-"}</span>
+              {/* Meta: date/time + pay */}
+              <div
+                style={{
+                  marginTop: 10,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div style={LABEL_SM}>Date &amp; Time</div>
+                  <div style={TEXT_MAIN}>
+                    {dateLine} · {timeLine}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={LABEL_SM}>Pay (your tier)</div>
+                  <div style={PAY_STRONG}>{payForViewer}</div>
+                </div>
               </div>
 
-              {/* Session (its own line) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Session</strong>
-                <span style={{ marginLeft: 8, whiteSpace: "nowrap" }}>{label}</span>
+              {/* Venue + session */}
+              <div
+                style={{
+                  marginTop: 10,
+                  display: "grid",
+                  gridTemplateColumns: "minmax(0,1.5fr) minmax(0,1.1fr)",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div style={LABEL_SM}>Venue</div>
+                  <div style={TEXT_MAIN}>{j.venue || "-"}</div>
+                </div>
+                <div>
+                  <div style={LABEL_SM}>Session</div>
+                  <div style={TEXT_MAIN}>{label}</div>
+                </div>
               </div>
 
-              {/* === Physical-only options (ALWAYS visible when physical) === */}
+              {/* Physical-only options */}
               {isPhysical && (
                 <>
-                  <div style={{ marginTop: 6 }}>
-                    <strong>Transport</strong>
-                    <div style={{ marginTop: 6 }}>
+                  {/* Transport */}
+                  <div style={{ marginTop: 10 }}>
+                    <div style={LABEL_SM}>Transport</div>
+                    <div style={{ marginTop: 4 }}>
                       <TransportBadges job={j} />
                     </div>
                     {pa != null && j?.transportOptions?.bus && (
-                      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                      <div
+                        style={{
+                          ...TEXT_MUTED,
+                          fontSize: 12,
+                          marginTop: 4,
+                        }}
+                      >
                         ATAG Transport allowance: RM{pa} per person (if selected)
                       </div>
                     )}
                   </div>
 
+                  {/* Early call / L&U */}
                   <div
                     style={{
+                      marginTop: 10,
                       display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: 8,
-                      marginTop: 6,
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(140px, 1fr))",
+                      gap: 12,
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 600 }}>Early Call</div>
-                      <div style={{ color: "#374151" }}>
-                        {ec?.enabled ? `Yes · RM${Number(ec.amount || 0)}` : "No"}
+                      <div style={LABEL_SM}>Early Call</div>
+                      <div style={TEXT_MAIN}>
+                        {ec?.enabled
+                          ? `Yes · RM${Number(ec.amount || 0)}`
+                          : "No"}
                       </div>
                     </div>
                     <div>
-                      <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
-                      <div style={{ color: "#374151" }}>
+                      <div style={LABEL_SM}>Loading &amp; Unloading</div>
+                      <div style={TEXT_MAIN}>
                         {lu?.enabled
-                          ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(
-                              lu.quota || 0
-                            )}`
+                          ? `Yes · RM${Number(
+                              lu.price || 0
+                            )} / helper · Quota ${Number(lu.quota || 0)}`
                           : "No"}
                       </div>
                     </div>
@@ -306,30 +459,19 @@ export default function JobList({
                 </>
               )}
 
-              {/* Pay (IDENTICAL to JobDetails.jsx) */}
-              <div style={{ marginTop: 6 }}>
-                <strong>Pay</strong>
-                <div
-                  style={{
-                    marginTop: 6,
-                    fontFamily:
-                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                    fontSize: 13,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {payForViewer}
-                </div>
-              </div>
-
-              {/* Optional extra details */}
-              {showFullDetails && (
-                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
-                  <div>
-                    <strong>Description</strong>
-                    <div style={{ marginTop: 4, color: "#374151" }}>
-                      {j.description || "-"}
-                    </div>
+              {/* Description */}
+              {hasDescription && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={LABEL_SM}>Description</div>
+                  <div
+                    style={{
+                      ...TEXT_MUTED,
+                      marginTop: 4,
+                    }}
+                  >
+                    {showFullDetails
+                      ? j.description
+                      : truncate(j.description, 160)}
                   </div>
                 </div>
               )}
@@ -337,76 +479,90 @@ export default function JobList({
               {/* Hiring line */}
               <div
                 style={{
-                  marginTop: 8,
+                  marginTop: 10,
                   display: "flex",
-                  gap: 16,
+                  gap: 12,
                   alignItems: "center",
                   flexWrap: "wrap",
                 }}
               >
-                <div>
-                  <strong>Hiring for</strong>
-                  <span style={{ marginLeft: 8 }}>{total} pax</span>
+                <div style={TEXT_MAIN}>
+                  <strong>Hiring</strong>
+                  <span style={{ marginLeft: 6 }}>{total} pax</span>
                 </div>
-                <div style={{ color: "#667085" }}>
-                  Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
+                <div style={{ ...TEXT_MUTED, fontSize: 12 }}>
+                  Approved: {approved}/{total} · Applied: {applied}
                 </div>
               </div>
             </div>
 
             {/* Actions */}
-            <div
-              style={{
-                marginTop: 10,
-                display: "flex",
-                gap: 8,
-                flexWrap: "wrap",
-                alignItems: "center",
-              }}
-            >
+            <div style={SECTION_DIVIDER}>
               <div
                 style={{
-                  display: "inline-flex",
-                  gap: 6,
+                  display: "flex",
+                  justifyContent: canManage ? "space-between" : "flex-start",
+                  flexWrap: "wrap",
+                  gap: 8,
                   alignItems: "center",
-                  flexShrink: 0,
-                  minWidth: 0,
-                  maxWidth: "100%",
                 }}
               >
-                {canApply && <ApplyArea />}
-
-                <button
-                  className="btn"
-                  style={COMPACT_BTN}
-                  onClick={() => onView && onView(j)}
+                <div
+                  style={{
+                    display: "inline-flex",
+                    gap: 6,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    minWidth: 0,
+                    maxWidth: "100%",
+                  }}
                 >
-                  View details
-                </button>
+                  {canApply && <ApplyArea />}
 
-                {my === "approved" && (
-                  <a
-                    href={DISCORD_URL}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
                     className="btn"
-                    style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
+                    style={COMPACT_BTN}
+                    onClick={() => onView && onView(j)}
                   >
-                    Join Discord Channel
-                  </a>
+                    View details
+                  </button>
+
+                  {my === "approved" && (
+                    <a
+                      href={DISCORD_URL}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn"
+                      style={{ ...BTN_BLACK_STYLE, ...COMPACT_BTN }}
+                    >
+                      Join Discord Channel
+                    </a>
+                  )}
+                </div>
+
+                {canManage && (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 6,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <button
+                      className="btn"
+                      onClick={() => onEdit && onEdit(j)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn red"
+                      onClick={() => onDelete && onDelete(j)}
+                    >
+                      Delete
+                    </button>
+                  </div>
                 )}
               </div>
-
-              {canManage && (
-                <>
-                  <button className="btn" onClick={() => onEdit && onEdit(j)}>
-                    Edit
-                  </button>
-                  <button className="btn red" onClick={() => onDelete && onDelete(j)}>
-                    Delete
-                  </button>
-                </>
-              )}
             </div>
           </div>
         );
