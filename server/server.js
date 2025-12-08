@@ -1,4 +1,3 @@
-// server.js
 // server/server.js
 import express from "express";
 import cors from "cors";
@@ -51,59 +50,41 @@ const DEFAULT_RATES = {
 };
 db.config.rates = db.config.rates || DEFAULT_RATES;
 
-db.config.roleRatesDefaults = db.config.roleRatesDefaults || {
-  junior: {
-    payMode: "hourly",
-    base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
-    specificPayment: null,
-    otMultiplier: 0
-  },
-  senior: {
-    payMode: "hourly",
-    base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
-    specificPayment: null,
-    otMultiplier: 0
-  },
-  lead: {
-    payMode: "hourly",
-    base: Number(db.config.rates?.physicalHourly?.lead ?? 30),
-    specificPayment: null,
-    otMultiplier: 0
-  }
+// ✅ Ensure roleRatesDefaults exists & has all staff grades, including emcees
+db.config.roleRatesDefaults = db.config.roleRatesDefaults || {};
+const rrd = db.config.roleRatesDefaults;
+
+rrd.junior = rrd.junior || {
+  payMode: "hourly",
+  base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
+  specificPayment: null,
+  otMultiplier: 0
 };
-
-// 🔁 Ensure emcee grades exist for full-timers.
-// By default we align them to senior/lead hourly rates, but they can be
-// customised later via the /config/rates admin endpoint.
-{
-  const rrd = db.config.roleRatesDefaults;
-
-  if (!rrd["junior emcee"]) {
-    rrd["junior emcee"] = {
-      payMode: rrd.senior?.payMode || "hourly",
-      base: Number(
-        rrd.senior?.base ??
-          db.config.rates?.physicalHourly?.senior ??
-          30
-      ),
-      specificPayment: null,
-      otMultiplier: 0
-    };
-  }
-
-  if (!rrd["senior emcee"]) {
-    rrd["senior emcee"] = {
-      payMode: rrd.lead?.payMode || "hourly",
-      base: Number(
-        rrd.lead?.base ??
-          db.config.rates?.physicalHourly?.lead ??
-          30
-      ),
-      specificPayment: null,
-      otMultiplier: 0
-    };
-  }
-}
+rrd.senior = rrd.senior || {
+  payMode: "hourly",
+  base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
+  specificPayment: null,
+  otMultiplier: 0
+};
+rrd.lead = rrd.lead || {
+  payMode: "hourly",
+  base: Number(db.config.rates?.physicalHourly?.lead ?? 30),
+  specificPayment: null,
+  otMultiplier: 0
+};
+// ✅ NEW emcee grades
+rrd.junior_emcee = rrd.junior_emcee || {
+  payMode: "hourly",
+  base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
+  specificPayment: null,
+  otMultiplier: 0
+};
+rrd.senior_emcee = rrd.senior_emcee || {
+  payMode: "hourly",
+  base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
+  specificPayment: null,
+  otMultiplier: 0
+};
 
 db.pushSubs = db.pushSubs || {};
 db.notifications = db.notifications || {};
@@ -119,34 +100,20 @@ const MAX_DISTANCE_METERS = Number(
 );
 const ROLES = ["part-timer", "pm", "admin"];
 
-// ✅ Staff grades: used for both part-timers and full-timer marshals/emcees.
-// junior/senior are shared between part-timers and marshals so they always
-// point to the same underlying pay grade.
-const STAFF_ROLES = ["junior", "senior", "lead", "junior emcee", "senior emcee"];
-
-// ✅ Full-timer event roles. These map back to STAFF_ROLES so that
-// - junior_marshal uses the "junior" rate (same as part-timer junior)
-// - senior_marshal uses the "senior" rate (same as part-timer senior)
-// Emcee roles are full-timer only and use their own emcee grades.
-const FULLTIMER_ROLES = [
-  "junior_marshal",
-  "senior_marshal",
-  "junior_emcee",
-  "senior_emcee"
-];
-
-const FULLTIMER_ROLE_TO_GRADE = {
-  junior_marshal: "junior",
-  senior_marshal: "senior",
-  junior_emcee: "junior emcee",
-  senior_emcee: "senior emcee"
-};
+// ✅ extended staff grades to include emcees
+const STAFF_ROLES = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"];
 
 const toRad = (deg) => (deg * Math.PI) / 180;
 const clampRole = (r) =>
   ROLES.includes(String(r)) ? String(r) : "part-timer";
-const clampGrade = (g) =>
-  STAFF_ROLES.includes(String(g)) ? String(g) : "junior";
+
+// ✅ make grade handling more forgiving: spaces → underscore, case-insensitive
+const clampGrade = (g) => {
+  const x = String(g || "")
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+  return STAFF_ROLES.includes(x) ? x : "junior";
+};
 
 function isValidCoord(lat, lng) {
   return (
@@ -345,7 +312,14 @@ function jobPublicView(job) {
       participants: (lu.participants || []).length,
       price: Number(lu.price || db.config.rates.loadingUnloading.amount)
     },
-    roleCounts: roleCounts || { junior: 0, senior: 0, lead: 0 },
+    // ✅ Always include emcee role counts, fallback to 0
+    roleCounts: {
+      junior: Number(roleCounts?.junior ?? 0),
+      senior: Number(roleCounts?.senior ?? 0),
+      lead: Number(roleCounts?.lead ?? 0),
+      junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
+      senior_emcee: Number(roleCounts?.senior_emcee ?? 0)
+    },
     appliedCount,
     approvedCount,
     paySummary: paySummaryFromRate(job.rate || {})
@@ -500,10 +474,14 @@ for (const u of db.users) {
     u.passwordHash = hashPassword("password");
     mutated = true;
   }
-  if (!u.grade || !STAFF_ROLES.includes(u.grade)) {
-    u.grade = "junior";
+
+  // ✅ normalize existing grades using clampGrade (adds emcee support safely)
+  const normGrade = clampGrade(u.grade || "junior");
+  if (u.grade !== normGrade) {
+    u.grade = normGrade;
     mutated = true;
   }
+
   if (u.resetToken && (!u.resetToken.token || !u.resetToken.expiresAt)) {
     delete u.resetToken;
     mutated = true;
@@ -1041,7 +1019,7 @@ app.patch(
     }
 
     if (role !== undefined) target.role = clampRole(role);
-    if (grade !== undefined) target.grade = clampGrade(grade);
+    if (grade !== undefined) target.grade = clampGrade(grade); // ✅ use clampGrade
 
     await saveDB(db);
     addAudit(
@@ -1212,12 +1190,20 @@ app.post(
     const id = "j" + Math.random().toString(36).slice(2, 8);
     const lduBody = ldu || loadingUnload || {};
 
+    // ✅ counts now include emcee grades
     const counts = {
       junior: Number(roleCounts?.junior ?? 0),
       senior: Number(roleCounts?.senior ?? 0),
-      lead: Number(roleCounts?.lead ?? 0)
+      lead: Number(roleCounts?.lead ?? 0),
+      junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
+      senior_emcee: Number(roleCounts?.senior_emcee ?? 0)
     };
-    const countsSum = counts.junior + counts.senior + counts.lead;
+    const countsSum =
+      counts.junior +
+      counts.senior +
+      counts.lead +
+      counts.junior_emcee +
+      counts.senior_emcee;
 
     const rrDef = db.config.roleRatesDefaults || {};
     const roleRatesMerged = {};
@@ -1380,18 +1366,28 @@ app.patch(
       if (lduBody.closed === true) job.loadingUnload.closed = true;
     }
 
+    // ✅ roleCounts with emcee support
     if (roleCounts && typeof roleCounts === "object") {
       job.roleCounts = {
         junior: Number(roleCounts.junior ?? job.roleCounts?.junior ?? 0),
         senior: Number(roleCounts.senior ?? job.roleCounts?.senior ?? 0),
-        lead: Number(roleCounts.lead ?? job.roleCounts?.lead ?? 0)
+        lead: Number(roleCounts.lead ?? job.roleCounts?.lead ?? 0),
+        junior_emcee: Number(
+          roleCounts.junior_emcee ?? job.roleCounts?.junior_emcee ?? 0
+        ),
+        senior_emcee: Number(
+          roleCounts.senior_emcee ?? job.roleCounts?.senior_emcee ?? 0
+        )
       };
       const sum =
         job.roleCounts.junior +
         job.roleCounts.senior +
-        job.roleCounts.lead;
+        job.roleCounts.lead +
+        job.roleCounts.junior_emcee +
+        job.roleCounts.senior_emcee;
       if (!headcount) job.headcount = Number(job.headcount || sum || 5);
     }
+
     if (roleRates && typeof roleRates === "object") {
       job.roleRates = job.roleRates || {};
       for (const r of STAFF_ROLES) {
@@ -1867,7 +1863,6 @@ app.post(
     res.json({ ok: true });
   }
 );
-
 
 /* ---- L&U manage ---- */
 app.get(
