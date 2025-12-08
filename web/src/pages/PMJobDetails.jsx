@@ -129,6 +129,19 @@ function readApiError(err) {
   return {};
 }
 
+/* ---- full-timer roles ---- */
+const FULLTIMER_ROLE_OPTIONS = [
+  { value: "junior_marshal", label: "Junior Marshal" },
+  { value: "senior_marshal", label: "Senior Marshal" },
+  { value: "junior_emcee", label: "Junior Emcee" },
+  { value: "senior_emcee", label: "Senior Emcee" },
+];
+
+function labelRole(role) {
+  const opt = FULLTIMER_ROLE_OPTIONS.find((o) => o.value === role);
+  return opt ? opt.label : role || "-";
+}
+
 export default function PMJobDetails({ jobId }) {
   /* ---------- state ---------- */
   const [job, setJob] = useState(null);
@@ -138,6 +151,14 @@ export default function PMJobDetails({ jobId }) {
 
   const [statusForce, setStatusForce] = useState(null);
   const effectiveStatus = (s) => statusForce ?? s ?? "upcoming";
+
+  // full-timers for this job (internal staff)
+  const [fullTimers, setFullTimers] = useState([]);
+  const [ftEmail, setFtEmail] = useState("");
+  const [ftName, setFtName] = useState("");
+  const [ftPhone, setFtPhone] = useState("");
+  const [ftRole, setFtRole] = useState("junior_marshal");
+  const [ftBusy, setFtBusy] = useState(false);
 
   // scanner
   const [scannerOpen, setScannerOpen] = useState(false);
@@ -206,6 +227,10 @@ export default function PMJobDetails({ jobId }) {
         participants: [],
       }));
       setLU(l);
+
+      // load full-timer assignments (internal staff for this job)
+      const ft = await apiGet(`/jobs/${jobId}/fulltimers${bust}`).catch(() => []);
+      setFullTimers(ft || []);
     } catch (e) {
       if (e && e.status === 401) {
         window.location.replace("#/login");
@@ -222,6 +247,72 @@ export default function PMJobDetails({ jobId }) {
   }, [jobId]);
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
+
+  async function refreshFullTimers() {
+    const bust = `?_=${Date.now()}`;
+    const ft = await apiGet(`/jobs/${jobId}/fulltimers${bust}`).catch(() => []);
+    setFullTimers(ft || []);
+  }
+
+  async function addOrUpdateFullTimer(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    if (!ftEmail.trim()) {
+      alert("Please enter full-timer email / ID.");
+      return;
+    }
+    setFtBusy(true);
+    try {
+      await apiPost(`/jobs/${jobId}/fulltimers/assign`, {
+        userId: ftEmail.trim(),      // can be email or internal ID
+        email: ftEmail.trim(),
+        name: ftName.trim() || null,
+        phone: ftPhone.trim() || null,
+        role: ftRole,
+      });
+      setFtEmail("");
+      setFtName("");
+      setFtPhone("");
+      setFtRole("junior_marshal");
+      await refreshFullTimers();
+    } catch (err) {
+      console.error("assign full-timer failed", err);
+      alert("Failed to assign full-timer. Please check backend / input.");
+    } finally {
+      setFtBusy(false);
+    }
+  }
+
+  async function changeFullTimerRole(ft, role) {
+    setFtBusy(true);
+    try {
+      await apiPost(`/jobs/${jobId}/fulltimers/assign`, {
+        userId: ft.userId || ft.email,
+        role,
+      });
+      await refreshFullTimers();
+    } catch (err) {
+      console.error("update full-timer role failed", err);
+      alert("Failed to update role.");
+    } finally {
+      setFtBusy(false);
+    }
+  }
+
+  async function removeFullTimer(ft) {
+    if (!window.confirm("Remove this full-timer from this job?")) return;
+    setFtBusy(true);
+    try {
+      await apiPost(`/jobs/${jobId}/fulltimers/remove`, {
+        userId: ft.userId || ft.email,
+      });
+      await refreshFullTimers();
+    } catch (err) {
+      console.error("remove full-timer failed", err);
+      alert("Failed to remove full-timer.");
+    } finally {
+      setFtBusy(false);
+    }
+  }
 
   /* lock scroll when scanner open */
   useEffect(() => {
@@ -599,9 +690,17 @@ export default function PMJobDetails({ jobId }) {
     );
   }
 
+  function findFullTimerById(id) {
+    return (
+      fullTimers.find((f) => f.userId === id || f.email === id) ||
+      null
+    );
+  }
+
   // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
+    const ft = findFullTimerById(uid) || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
     return {
@@ -612,6 +711,7 @@ export default function PMJobDetails({ jobId }) {
       discord: app.discord || app.discordHandle || app.username || "",
       in: rec.in,
       out: rec.out,
+      role: ft.role || null, // only for internal full-timer if exists
     };
   });
 
@@ -796,6 +896,131 @@ export default function PMJobDetails({ jobId }) {
         </div>
       </div>
 
+      {/* Full-timer assignments (internal staff, no approve/reject) */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Full-timer Assignments (Internal Team)</div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+          Add your own full-time staff to this job and assign roles (no approval flow needed).
+        </div>
+
+        {/* add form */}
+        <form onSubmit={addOrUpdateFullTimer} style={{ marginBottom: 12 }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(140px, 1.2fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(150px, 1fr) auto",
+              gap: 8,
+              alignItems: "center",
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2 }}>Email / User ID</div>
+              <input
+                type="text"
+                value={ftEmail}
+                onChange={(e) => setFtEmail(e.target.value)}
+                placeholder="e.g. staff@atag.com"
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2 }}>Name</div>
+              <input
+                type="text"
+                value={ftName}
+                onChange={(e) => setFtName(e.target.value)}
+                placeholder="Full-timer name"
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2 }}>Phone</div>
+              <input
+                type="text"
+                value={ftPhone}
+                onChange={(e) => setFtPhone(e.target.value)}
+                placeholder="Phone (optional)"
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 2 }}>Role</div>
+              <select value={ftRole} onChange={(e) => setFtRole(e.target.value)}>
+                {FULLTIMER_ROLE_OPTIONS.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ alignSelf: "flex-end", paddingBottom: 1 }}>
+              <button className="btn primary" type="submit" disabled={ftBusy}>
+                {ftBusy ? "Saving…" : "Add / Update"}
+              </button>
+            </div>
+          </div>
+        </form>
+
+        {/* list */}
+        <div style={{ overflowX: "auto" }}>
+          <table
+            style={{
+              width: "100%",
+              minWidth: 600,
+              borderCollapse: "collapse",
+            }}
+          >
+            <thead>
+              <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+                <th style={{ textAlign: "left", padding: "8px 6px" }}>Email / ID</th>
+                <th style={{ textAlign: "left", padding: "8px 6px" }}>Name</th>
+                <th style={{ textAlign: "left", padding: "8px 6px" }}>Phone</th>
+                <th style={{ textAlign: "left", padding: "8px 6px" }}>Role</th>
+                <th style={{ textAlign: "left", padding: "8px 6px" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fullTimers.length === 0 ? (
+                <tr>
+                  <td colSpan={5} style={{ padding: 10, color: "#6b7280" }}>
+                    No full-timers assigned yet.
+                  </td>
+                </tr>
+              ) : (
+                fullTimers.map((ft) => (
+                  <tr key={ft.userId || ft.email} style={{ borderTop: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "8px 6px" }}>{ft.email || ft.userId}</td>
+                    <td style={{ padding: "8px 6px" }}>{ft.name || "-"}</td>
+                    <td style={{ padding: "8px 6px" }}>{ft.phone || "-"}</td>
+                    <td style={{ padding: "8px 6px" }}>
+                      <select
+                        value={ft.role || ""}
+                        onChange={(e) => changeFullTimerRole(ft, e.target.value)}
+                        style={{ minWidth: 150 }}
+                      >
+                        <option value="">Select role…</option>
+                        {FULLTIMER_ROLE_OPTIONS.map((r) => (
+                          <option key={r.value} value={r.value}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={{ padding: "8px 6px" }}>
+                      <button
+                        className="btn danger"
+                        type="button"
+                        onClick={() => removeFullTimer(ft)}
+                        disabled={ftBusy}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
@@ -810,6 +1035,7 @@ export default function PMJobDetails({ jobId }) {
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Role (if FT)</th>
                 <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
                 <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
               </tr>
@@ -817,7 +1043,7 @@ export default function PMJobDetails({ jobId }) {
             <tbody>
               {approvedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ color: "#6b7280", padding: 8 }}>
+                  <td colSpan={7} style={{ color: "#6b7280", padding: 8 }}>
                     No approved users yet.
                   </td>
                 </tr>
@@ -828,6 +1054,7 @@ export default function PMJobDetails({ jobId }) {
                     <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
                     <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
                     <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.role ? labelRole(r.role) : "-"}</td>
                     <td
                       style={{
                         padding: "8px 4px",
