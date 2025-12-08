@@ -14,7 +14,8 @@ const N = (v, d = 0) => {
 };
 const fmtRange = (start, end) => {
   try {
-    const s = new Date(start), e = new Date(end);
+    const s = new Date(start),
+      e = new Date(end);
     const same = s.toDateString() === e.toDateString();
     const dt = (d) =>
       d.toLocaleString(undefined, {
@@ -24,7 +25,11 @@ const fmtRange = (start, end) => {
         hour: "2-digit",
         minute: "2-digit",
       });
-    const t = (d) => d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const t = (d) =>
+      d.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
     return same ? `${dt(s)} — ${t(e)}` : `${dt(s)} — ${dt(e)}`;
   } catch {
     return "";
@@ -40,13 +45,35 @@ const Section = ({ title, children }) => (
 );
 const Field = ({ label, children, hint }) => (
   <div className="card" style={{ padding: 12 }}>
-    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, color: "#374151" }}>{label}</div>
+    <div
+      style={{
+        fontSize: 12,
+        fontWeight: 600,
+        marginBottom: 6,
+        color: "#374151",
+      }}
+    >
+      {label}
+    </div>
     {children}
-    {hint ? <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{hint}</div> : null}
+    {hint ? (
+      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{hint}</div>
+    ) : null}
   </div>
 );
 const Pill = ({ text, color = "#111827", bg = "#E5E7EB" }) => (
-  <span style={{ padding: "3px 8px", borderRadius: 999, fontSize: 12, fontWeight: 700, background: bg, color }}>{text}</span>
+  <span
+    style={{
+      padding: "3px 8px",
+      borderRadius: 999,
+      fontSize: 12,
+      fontWeight: 700,
+      background: bg,
+      color,
+    }}
+  >
+    {text}
+  </span>
 );
 
 /* ---------------- Global Defaults (local) ---------------- */
@@ -56,24 +83,45 @@ const defaultGlobal = {
   earlyCall: { enabled: false, amount: 20, thresholdHours: 3 },
   loadingUnload: { enabled: false, price: 30, quota: 0 },
 
+  // you can extend hourly_by_role later to include emcee if needed
   hourly_by_role: {
     junior: { base: 20, otRatePerHour: 25 },
     senior: { base: 25, otRatePerHour: 30 },
-    lead:   { base: 30, otRatePerHour: 40 },
+    lead: { base: 30, otRatePerHour: 40 },
   },
   hourly_flat: { base: 20, otRatePerHour: 25 },
 
+  // session per-person defaults
+  // added junior emcee & senior emcee
   session: {
-    half_day: { jr: 60, sr: 80, lead: 100 },
-    full_day: { jr: 120, sr: 160, lead: 200 },
-    twoD1N:   { jr: 300, sr: 400, lead: 500 },
-    threeD2N: { jr: 450, sr: 600, lead: 750 },
-  },
-
-  // ✅ NEW: Emcee additional pay defaults
-  emceeAddon: {
-    half_day: { jr: 44, sr: 88 },   // junior emcee, senior emcee
-    full_day: { jr: 88, sr: 168 },
+    half_day: {
+      jr: 60,
+      sr: 80,
+      lead: 100,
+      jrEmcee: 44,
+      srEmcee: 88,
+    },
+    full_day: {
+      jr: 120,
+      sr: 160,
+      lead: 200,
+      jrEmcee: 88,
+      srEmcee: 168,
+    },
+    twoD1N: {
+      jr: 300,
+      sr: 400,
+      lead: 500,
+      jrEmcee: 0,
+      srEmcee: 0,
+    },
+    threeD2N: {
+      jr: 450,
+      sr: 600,
+      lead: 750,
+      jrEmcee: 0,
+      srEmcee: 0,
+    },
   },
 };
 function loadGlobalDefaults() {
@@ -87,7 +135,9 @@ function loadGlobalDefaults() {
   }
 }
 function saveGlobalDefaults(obj) {
-  try { localStorage.setItem(GLOBAL_KEY, JSON.stringify(obj)); } catch {}
+  try {
+    localStorage.setItem(GLOBAL_KEY, JSON.stringify(obj));
+  } catch {}
 }
 
 /* ------------ mapping helpers to mirror JobModal ------------ */
@@ -101,10 +151,34 @@ const isSessionKind = (k) => ["half_day", "full_day", "2d1n", "3d2n"].includes(k
 
 /* ---- defaults mirroring JobModal fallbacks ---- */
 const DEFAULT_HOURLY = { jr: "15", sr: "20", lead: "25" };
-const DEFAULT_HALF   = { jr: "60", sr: "80", lead: "100" };
-const DEFAULT_FULL   = { jr: "120", sr: "160", lead: "200" };
-const DEFAULT_2D1N   = { jr: "300", sr: "400", lead: "500" };
-const DEFAULT_3D2N   = { jr: "450", sr: "600", lead: "750" };
+const DEFAULT_HALF = {
+  jr: "60",
+  sr: "80",
+  lead: "100",
+  jrEmcee: "44",
+  srEmcee: "88",
+};
+const DEFAULT_FULL = {
+  jr: "120",
+  sr: "160",
+  lead: "200",
+  jrEmcee: "88",
+  srEmcee: "168",
+};
+const DEFAULT_2D1N = {
+  jr: "300",
+  sr: "400",
+  lead: "500",
+  jrEmcee: "0",
+  srEmcee: "0",
+};
+const DEFAULT_3D2N = {
+  jr: "450",
+  sr: "600",
+  lead: "750",
+  jrEmcee: "0",
+  srEmcee: "0",
+};
 
 export default function Admin({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
@@ -118,47 +192,96 @@ export default function Admin({ navigate, user }) {
   // top-level simple defaults
   const [gParking, setGParking] = useState(String(globalCfg.parkingAllowance ?? 0));
   // Early Call & LDU: only amount needed on this page
-  const [gECAmount, setGECAmount] = useState(String(globalCfg.earlyCall?.amount ?? 20));
-  const [gLDUPrice, setGLDUPrice] = useState(String(globalCfg.loadingUnload?.price ?? 30));
+  const [gECAmount, setGECAmount] = useState(
+    String(globalCfg.earlyCall?.amount ?? 20)
+  );
+  const [gLDUPrice, setGLDUPrice] = useState(
+    String(globalCfg.loadingUnload?.price ?? 30)
+  );
 
   // global hourly (by role)
   const [gHrJr, setGHrJr] = useState(String(globalCfg.hourly_by_role.junior.base));
-  const [gHrJrOT, setGHrJrOT] = useState(String(globalCfg.hourly_by_role.junior.otRatePerHour));
+  const [gHrJrOT, setGHrJrOT] = useState(
+    String(globalCfg.hourly_by_role.junior.otRatePerHour)
+  );
   const [gHrSr, setGHrSr] = useState(String(globalCfg.hourly_by_role.senior.base));
-  const [gHrSrOT, setGHrSrOT] = useState(String(globalCfg.hourly_by_role.senior.otRatePerHour));
+  const [gHrSrOT, setGHrSrOT] = useState(
+    String(globalCfg.hourly_by_role.senior.otRatePerHour)
+  );
   const [gHrLead, setGHrLead] = useState(String(globalCfg.hourly_by_role.lead.base));
-  const [gHrLeadOT, setGHrLeadOT] = useState(String(globalCfg.hourly_by_role.lead.otRatePerHour));
+  const [gHrLeadOT, setGHrLeadOT] = useState(
+    String(globalCfg.hourly_by_role.lead.otRatePerHour)
+  );
 
   // global hourly flat
   const [gFlat, setGFlat] = useState(String(globalCfg.hourly_flat.base));
-  const [gFlatOT, setGFlatOT] = useState(String(globalCfg.hourly_flat.otRatePerHour));
+  const [gFlatOT, setGFlatOT] = useState(
+    String(globalCfg.hourly_flat.otRatePerHour)
+  );
 
-  // global session prices
-  const [gHalfJr, setGHalfJr] = useState(String(globalCfg.session.half_day.jr));
-  const [gHalfSr, setGHalfSr] = useState(String(globalCfg.session.half_day.sr));
-  const [gHalfLead, setGHalfLead] = useState(String(globalCfg.session.half_day.lead));
-  const [gFullJr, setGFullJr] = useState(String(globalCfg.session.full_day.jr));
-  const [gFullSr, setGFullSr] = useState(String(globalCfg.session.full_day.sr));
-  const [gFullLead, setGFullLead] = useState(String(globalCfg.session.full_day.lead));
-  const [g2d1nJr, setG2d1nJr] = useState(String(globalCfg.session.twoD1N.jr));
-  const [g2d1nSr, setG2d1nSr] = useState(String(globalCfg.session.twoD1N.sr));
-  const [g2d1nLead, setG2d1nLead] = useState(String(globalCfg.session.twoD1N.lead));
-  const [g3d2nJr, setG3d2nJr] = useState(String(globalCfg.session.threeD2N.jr));
-  const [g3d2nSr, setG3d2nSr] = useState(String(globalCfg.session.threeD2N.sr));
-  const [g3d2nLead, setG3d2nLead] = useState(String(globalCfg.session.threeD2N.lead));
+  // global session prices (host + emcee)
+  const [gHalfJr, setGHalfJr] = useState(
+    String(globalCfg.session.half_day.jr ?? DEFAULT_HALF.jr)
+  );
+  const [gHalfSr, setGHalfSr] = useState(
+    String(globalCfg.session.half_day.sr ?? DEFAULT_HALF.sr)
+  );
+  const [gHalfLead, setGHalfLead] = useState(
+    String(globalCfg.session.half_day.lead ?? DEFAULT_HALF.lead)
+  );
+  const [gHalfJrEmcee, setGHalfJrEmcee] = useState(
+    String(globalCfg.session.half_day.jrEmcee ?? DEFAULT_HALF.jrEmcee)
+  );
+  const [gHalfSrEmcee, setGHalfSrEmcee] = useState(
+    String(globalCfg.session.half_day.srEmcee ?? DEFAULT_HALF.srEmcee)
+  );
 
-  // ✅ NEW: global emcee add-on defaults
-  const [gEmceeHalfJr, setGEmceeHalfJr] = useState(
-    String(globalCfg.emceeAddon?.half_day?.jr ?? 44)
+  const [gFullJr, setGFullJr] = useState(
+    String(globalCfg.session.full_day.jr ?? DEFAULT_FULL.jr)
   );
-  const [gEmceeHalfSr, setGEmceeHalfSr] = useState(
-    String(globalCfg.emceeAddon?.half_day?.sr ?? 88)
+  const [gFullSr, setGFullSr] = useState(
+    String(globalCfg.session.full_day.sr ?? DEFAULT_FULL.sr)
   );
-  const [gEmceeFullJr, setGEmceeFullJr] = useState(
-    String(globalCfg.emceeAddon?.full_day?.jr ?? 88)
+  const [gFullLead, setGFullLead] = useState(
+    String(globalCfg.session.full_day.lead ?? DEFAULT_FULL.lead)
   );
-  const [gEmceeFullSr, setGEmceeFullSr] = useState(
-    String(globalCfg.emceeAddon?.full_day?.sr ?? 168)
+  const [gFullJrEmcee, setGFullJrEmcee] = useState(
+    String(globalCfg.session.full_day.jrEmcee ?? DEFAULT_FULL.jrEmcee)
+  );
+  const [gFullSrEmcee, setGFullSrEmcee] = useState(
+    String(globalCfg.session.full_day.srEmcee ?? DEFAULT_FULL.srEmcee)
+  );
+
+  const [g2d1nJr, setG2d1nJr] = useState(
+    String(globalCfg.session.twoD1N.jr ?? DEFAULT_2D1N.jr)
+  );
+  const [g2d1nSr, setG2d1nSr] = useState(
+    String(globalCfg.session.twoD1N.sr ?? DEFAULT_2D1N.sr)
+  );
+  const [g2d1nLead, setG2d1nLead] = useState(
+    String(globalCfg.session.twoD1N.lead ?? DEFAULT_2D1N.lead)
+  );
+  const [g2d1nJrEmcee, setG2d1nJrEmcee] = useState(
+    String(globalCfg.session.twoD1N.jrEmcee ?? DEFAULT_2D1N.jrEmcee)
+  );
+  const [g2d1nSrEmcee, setG2d1nSrEmcee] = useState(
+    String(globalCfg.session.twoD1N.srEmcee ?? DEFAULT_2D1N.srEmcee)
+  );
+
+  const [g3d2nJr, setG3d2nJr] = useState(
+    String(globalCfg.session.threeD2N.jr ?? DEFAULT_3D2N.jr)
+  );
+  const [g3d2nSr, setG3d2nSr] = useState(
+    String(globalCfg.session.threeD2N.sr ?? DEFAULT_3D2N.sr)
+  );
+  const [g3d2nLead, setG3d2nLead] = useState(
+    String(globalCfg.session.threeD2N.lead ?? DEFAULT_3D2N.lead)
+  );
+  const [g3d2nJrEmcee, setG3d2nJrEmcee] = useState(
+    String(globalCfg.session.threeD2N.jrEmcee ?? DEFAULT_3D2N.jrEmcee)
+  );
+  const [g3d2nSrEmcee, setG3d2nSrEmcee] = useState(
+    String(globalCfg.session.threeD2N.srEmcee ?? DEFAULT_3D2N.srEmcee)
   );
 
   function saveGlobal() {
@@ -184,25 +307,37 @@ export default function Admin({ navigate, user }) {
       hourly_by_role: {
         junior: { base: N(gHrJr, 0), otRatePerHour: N(gHrJrOT, 0) },
         senior: { base: N(gHrSr, 0), otRatePerHour: N(gHrSrOT, 0) },
-        lead:   { base: N(gHrLead, 0), otRatePerHour: N(gHrLeadOT, 0) },
+        lead: { base: N(gHrLead, 0), otRatePerHour: N(gHrLeadOT, 0) },
       },
       hourly_flat: { base: N(gFlat, 0), otRatePerHour: N(gFlatOT, 0) },
       session: {
-        half_day: { jr: N(gHalfJr, 0), sr: N(gHalfSr, 0), lead: N(gHalfLead, 0) },
-        full_day: { jr: N(gFullJr, 0), sr: N(gFullSr, 0), lead: N(gFullLead, 0) },
-        twoD1N:   { jr: N(g2d1nJr, 0), sr: N(g2d1nSr, 0), lead: N(g2d1nLead, 0) },
-        threeD2N: { jr: N(g3d2nJr, 0), sr: N(g3d2nSr, 0), lead: N(g3d2nLead, 0) },
-      },
-
-      // ✅ NEW: store emcee add-on defaults
-      emceeAddon: {
         half_day: {
-          jr: N(gEmceeHalfJr, 0),
-          sr: N(gEmceeHalfSr, 0),
+          jr: N(gHalfJr, 0),
+          sr: N(gHalfSr, 0),
+          lead: N(gHalfLead, 0),
+          jrEmcee: N(gHalfJrEmcee, 0),
+          srEmcee: N(gHalfSrEmcee, 0),
         },
         full_day: {
-          jr: N(gEmceeFullJr, 0),
-          sr: N(gEmceeFullSr, 0),
+          jr: N(gFullJr, 0),
+          sr: N(gFullSr, 0),
+          lead: N(gFullLead, 0),
+          jrEmcee: N(gFullJrEmcee, 0),
+          srEmcee: N(gFullSrEmcee, 0),
+        },
+        twoD1N: {
+          jr: N(g2d1nJr, 0),
+          sr: N(g2d1nSr, 0),
+          lead: N(g2d1nLead, 0),
+          jrEmcee: N(g2d1nJrEmcee, 0),
+          srEmcee: N(g2d1nSrEmcee, 0),
+        },
+        threeD2N: {
+          jr: N(g3d2nJr, 0),
+          sr: N(g3d2nSr, 0),
+          lead: N(g3d2nLead, 0),
+          jrEmcee: N(g3d2nJrEmcee, 0),
+          srEmcee: N(g3d2nSrEmcee, 0),
         },
       },
     };
@@ -231,22 +366,30 @@ export default function Admin({ navigate, user }) {
   const [flatRate, setFlatRate] = useState(DEFAULT_HOURLY.jr);
   const [flatOT, setFlatOT] = useState("0");
 
-  // Session prices
+  // Session prices (per job: host + emcee)
   const [pHalfJr, setPHalfJr] = useState(DEFAULT_HALF.jr);
   const [pHalfSr, setPHalfSr] = useState(DEFAULT_HALF.sr);
   const [pHalfLead, setPHalfLead] = useState(DEFAULT_HALF.lead);
+  const [pHalfJrEmcee, setPHalfJrEmcee] = useState(DEFAULT_HALF.jrEmcee);
+  const [pHalfSrEmcee, setPHalfSrEmcee] = useState(DEFAULT_HALF.srEmcee);
 
   const [pFullJr, setPFullJr] = useState(DEFAULT_FULL.jr);
   const [pFullSr, setPFullSr] = useState(DEFAULT_FULL.sr);
   const [pFullLead, setPFullLead] = useState(DEFAULT_FULL.lead);
+  const [pFullJrEmcee, setPFullJrEmcee] = useState(DEFAULT_FULL.jrEmcee);
+  const [pFullSrEmcee, setPFullSrEmcee] = useState(DEFAULT_FULL.srEmcee);
 
   const [p2d1nJr, setP2d1nJr] = useState(DEFAULT_2D1N.jr);
   const [p2d1nSr, setP2d1nSr] = useState(DEFAULT_2D1N.sr);
   const [p2d1nLead, setP2d1nLead] = useState(DEFAULT_2D1N.lead);
+  const [p2d1nJrEmcee, setP2d1nJrEmcee] = useState(DEFAULT_2D1N.jrEmcee);
+  const [p2d1nSrEmcee, setP2d1nSrEmcee] = useState(DEFAULT_2D1N.srEmcee);
 
   const [p3d2nJr, setP3d2nJr] = useState(DEFAULT_3D2N.jr);
   const [p3d2nSr, setP3d2nSr] = useState(DEFAULT_3D2N.sr);
   const [p3d2nLead, setP3d2nLead] = useState(DEFAULT_3D2N.lead);
+  const [p3d2nJrEmcee, setP3d2nJrEmcee] = useState(DEFAULT_3D2N.jrEmcee);
+  const [p3d2nSrEmcee, setP3d2nSrEmcee] = useState(DEFAULT_3D2N.srEmcee);
 
   /* ===== Load jobs ===== */
   useEffect(() => {
@@ -260,19 +403,37 @@ export default function Admin({ navigate, user }) {
   function inferModeFromJob(j) {
     const kind = j?.rate?.sessionKind;
     if (kind === "virtual") return "virtual";
-    if (["half_day","full_day","2d1n","3d2n","hourly_by_role","hourly_flat"].includes(kind)) return "physical";
+    if (
+      ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(
+        kind
+      )
+    )
+      return "physical";
     return j?.session?.mode || j?.sessionMode || j?.mode || "virtual";
   }
   function inferPhysTypeFromJob(j) {
     const kind = j?.rate?.sessionKind;
-    if (["half_day","full_day","2d1n","3d2n","hourly_by_role","hourly_flat"].includes(kind)) return kind;
-    const legacy = j?.session?.physicalType || j?.physicalType || j?.physicalSubtype;
-    return ["half_day","full_day","2d1n","3d2n","hourly_by_role","hourly_flat"].includes(legacy) ? legacy : "half_day";
+    if (
+      ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(
+        kind
+      )
+    )
+      return kind;
+    const legacy =
+      j?.session?.physicalType || j?.physicalType || j?.physicalSubtype;
+    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(
+      legacy
+    )
+      ? legacy
+      : "half_day";
   }
 
   /* ===== Load selected job details ===== */
   useEffect(() => {
-    if (!selectedId) { setJob(null); return; }
+    if (!selectedId) {
+      setJob(null);
+      return;
+    }
     (async () => {
       try {
         const j = await apiGet(`/jobs/${selectedId}`);
@@ -291,44 +452,217 @@ export default function Admin({ navigate, user }) {
 
         // parking (legacy fields)
         const pa =
-          (Number.isFinite(rate.parkingAllowance) ? rate.parkingAllowance : undefined) ??
-          (Number.isFinite(rate.transportAllowance) ? rate.transportAllowance : undefined) ??
+          (Number.isFinite(rate.parkingAllowance)
+            ? rate.parkingAllowance
+            : undefined) ??
+          (Number.isFinite(rate.transportAllowance)
+            ? rate.transportAllowance
+            : undefined) ??
           (Number.isFinite(rate.transportBus) ? rate.transportBus : 0);
         setParkingAllowance(String(pa ?? 0));
 
         // Hourly addon (session variants)
-        const anyPlusHourly =
-          ["junior","senior","lead"].some((rk) => (tr[rk]?.payMode === "specific_plus_hourly"));
+        const anyPlusHourly = ["junior", "senior", "lead"].some(
+          (rk) => tr[rk]?.payMode === "specific_plus_hourly"
+        );
         setHourlyAddon(!!anyPlusHourly);
 
         // Hourly by role / virtual
-        setHrJr(String(tr.junior?.base ?? gl.hourly_by_role?.junior?.base ?? DEFAULT_HOURLY.jr));
-        setHrSr(String(tr.senior?.base ?? gl.hourly_by_role?.senior?.base ?? DEFAULT_HOURLY.sr));
-        setHrLead(String(tr.lead?.base   ?? gl.hourly_by_role?.lead?.base   ?? DEFAULT_HOURLY.lead));
-        setHrJrOT(String(tr.junior?.otRatePerHour ?? gl.hourly_by_role?.junior?.otRatePerHour ?? "0"));
-        setHrSrOT(String(tr.senior?.otRatePerHour ?? gl.hourly_by_role?.senior?.otRatePerHour ?? "0"));
-        setHrLeadOT(String(tr.lead?.otRatePerHour ?? gl.hourly_by_role?.lead?.otRatePerHour   ?? "0"));
+        setHrJr(
+          String(
+            tr.junior?.base ??
+              gl.hourly_by_role?.junior?.base ??
+              DEFAULT_HOURLY.jr
+          )
+        );
+        setHrSr(
+          String(
+            tr.senior?.base ??
+              gl.hourly_by_role?.senior?.base ??
+              DEFAULT_HOURLY.sr
+          )
+        );
+        setHrLead(
+          String(
+            tr.lead?.base ??
+              gl.hourly_by_role?.lead?.base ??
+              DEFAULT_HOURLY.lead
+          )
+        );
+        setHrJrOT(
+          String(
+            tr.junior?.otRatePerHour ??
+              gl.hourly_by_role?.junior?.otRatePerHour ??
+              "0"
+          )
+        );
+        setHrSrOT(
+          String(
+            tr.senior?.otRatePerHour ??
+              gl.hourly_by_role?.senior?.otRatePerHour ??
+              "0"
+          )
+        );
+        setHrLeadOT(
+          String(
+            tr.lead?.otRatePerHour ??
+              gl.hourly_by_role?.lead?.otRatePerHour ??
+              "0"
+          )
+        );
 
         // Flat hourly
-        setFlatRate(String(flat.base ?? gl.hourly_flat?.base ?? DEFAULT_HOURLY.jr));
-        setFlatOT(String(flat.otRatePerHour ?? gl.hourly_flat?.otRatePerHour ?? "0"));
+        setFlatRate(
+          String(flat.base ?? gl.hourly_flat?.base ?? DEFAULT_HOURLY.jr)
+        );
+        setFlatOT(
+          String(flat.otRatePerHour ?? gl.hourly_flat?.otRatePerHour ?? "0")
+        );
 
-        // Session prices
-        setPHalfJr(String(tr.junior?.halfDay   ?? gl.session?.half_day?.jr   ?? DEFAULT_HALF.jr));
-        setPHalfSr(String(tr.senior?.halfDay   ?? gl.session?.half_day?.sr   ?? DEFAULT_HALF.sr));
-        setPHalfLead(String(tr.lead?.halfDay   ?? gl.session?.half_day?.lead ?? DEFAULT_HALF.lead));
+        // Session prices (host + emcee)
+        setPHalfJr(
+          String(
+            tr.junior?.halfDay ??
+              gl.session?.half_day?.jr ??
+              DEFAULT_HALF.jr
+          )
+        );
+        setPHalfSr(
+          String(
+            tr.senior?.halfDay ??
+              gl.session?.half_day?.sr ??
+              DEFAULT_HALF.sr
+          )
+        );
+        setPHalfLead(
+          String(
+            tr.lead?.halfDay ??
+              gl.session?.half_day?.lead ??
+              DEFAULT_HALF.lead
+          )
+        );
+        setPHalfJrEmcee(
+          String(
+            tr.junior_emcee?.halfDay ??
+              gl.session?.half_day?.jrEmcee ??
+              DEFAULT_HALF.jrEmcee
+          )
+        );
+        setPHalfSrEmcee(
+          String(
+            tr.senior_emcee?.halfDay ??
+              gl.session?.half_day?.srEmcee ??
+              DEFAULT_HALF.srEmcee
+          )
+        );
 
-        setPFullJr(String(tr.junior?.fullDay   ?? gl.session?.full_day?.jr   ?? DEFAULT_FULL.jr));
-        setPFullSr(String(tr.senior?.fullDay   ?? gl.session?.full_day?.sr   ?? DEFAULT_FULL.sr));
-        setPFullLead(String(tr.lead?.fullDay   ?? gl.session?.full_day?.lead ?? DEFAULT_FULL.lead));
+        setPFullJr(
+          String(
+            tr.junior?.fullDay ??
+              gl.session?.full_day?.jr ??
+              DEFAULT_FULL.jr
+          )
+        );
+        setPFullSr(
+          String(
+            tr.senior?.fullDay ??
+              gl.session?.full_day?.sr ??
+              DEFAULT_FULL.sr
+          )
+        );
+        setPFullLead(
+          String(
+            tr.lead?.fullDay ??
+              gl.session?.full_day?.lead ??
+              DEFAULT_FULL.lead
+          )
+        );
+        setPFullJrEmcee(
+          String(
+            tr.junior_emcee?.fullDay ??
+              gl.session?.full_day?.jrEmcee ??
+              DEFAULT_FULL.jrEmcee
+          )
+        );
+        setPFullSrEmcee(
+          String(
+            tr.senior_emcee?.fullDay ??
+              gl.session?.full_day?.srEmcee ??
+              DEFAULT_FULL.srEmcee
+          )
+        );
 
-        setP2d1nJr(String(tr.junior?.twoD1N    ?? gl.session?.twoD1N?.jr     ?? DEFAULT_2D1N.jr));
-        setP2d1nSr(String(tr.senior?.twoD1N    ?? gl.session?.twoD1N?.sr     ?? DEFAULT_2D1N.sr));
-        setP2d1nLead(String(tr.lead?.twoD1N    ?? gl.session?.twoD1N?.lead   ?? DEFAULT_2D1N.lead));
+        setP2d1nJr(
+          String(
+            tr.junior?.twoD1N ??
+              gl.session?.twoD1N?.jr ??
+              DEFAULT_2D1N.jr
+          )
+        );
+        setP2d1nSr(
+          String(
+            tr.senior?.twoD1N ??
+              gl.session?.twoD1N?.sr ??
+              DEFAULT_2D1N.sr
+          )
+        );
+        setP2d1nLead(
+          String(
+            tr.lead?.twoD1N ??
+              gl.session?.twoD1N?.lead ??
+              DEFAULT_2D1N.lead
+          )
+        );
+        setP2d1nJrEmcee(
+          String(
+            tr.junior_emcee?.twoD1N ??
+              gl.session?.twoD1N?.jrEmcee ??
+              DEFAULT_2D1N.jrEmcee
+          )
+        );
+        setP2d1nSrEmcee(
+          String(
+            tr.senior_emcee?.twoD1N ??
+              gl.session?.twoD1N?.srEmcee ??
+              DEFAULT_2D1N.srEmcee
+          )
+        );
 
-        setP3d2nJr(String(tr.junior?.threeD2N  ?? gl.session?.threeD2N?.jr   ?? DEFAULT_3D2N.jr));
-        setP3d2nSr(String(tr.senior?.threeD2N  ?? gl.session?.threeD2N?.sr   ?? DEFAULT_3D2N.sr));
-        setP3d2nLead(String(tr.lead?.threeD2N  ?? gl.session?.threeD2N?.lead ?? DEFAULT_3D2N.lead));
+        setP3d2nJr(
+          String(
+            tr.junior?.threeD2N ??
+              gl.session?.threeD2N?.jr ??
+              DEFAULT_3D2N.jr
+          )
+        );
+        setP3d2nSr(
+          String(
+            tr.senior?.threeD2N ??
+              gl.session?.threeD2N?.sr ??
+              DEFAULT_3D2N.sr
+          )
+        );
+        setP3d2nLead(
+          String(
+            tr.lead?.threeD2N ??
+              gl.session?.threeD2N?.lead ??
+              DEFAULT_3D2N.lead
+          )
+        );
+        setP3d2nJrEmcee(
+          String(
+            tr.junior_emcee?.threeD2N ??
+              gl.session?.threeD2N?.jrEmcee ??
+              DEFAULT_3D2N.jrEmcee
+          )
+        );
+        setP3d2nSrEmcee(
+          String(
+            tr.senior_emcee?.threeD2N ??
+              gl.session?.threeD2N?.srEmcee ??
+              DEFAULT_3D2N.srEmcee
+          )
+        );
       } catch (e) {
         setError(String(e));
       }
@@ -356,38 +690,114 @@ export default function Admin({ navigate, user }) {
   function buildTierRates(kind) {
     if (kind === "virtual" || kind === "hourly_by_role") {
       return {
-        junior: { payMode: "hourly", base: N(hrJr, 15),  otRatePerHour: N(hrJrOT, 0) },
-        senior: { payMode: "hourly", base: N(hrSr, 20),  otRatePerHour: N(hrSrOT, 0) },
-        lead:   { payMode: "hourly", base: N(hrLead, 25), otRatePerHour: N(hrLeadOT, 0) },
+        junior: {
+          payMode: "hourly",
+          base: N(hrJr, 15),
+          otRatePerHour: N(hrJrOT, 0),
+        },
+        senior: {
+          payMode: "hourly",
+          base: N(hrSr, 20),
+          otRatePerHour: N(hrSrOT, 0),
+        },
+        lead: {
+          payMode: "hourly",
+          base: N(hrLead, 25),
+          otRatePerHour: N(hrLeadOT, 0),
+        },
       };
     }
     if (kind === "hourly_flat") {
       const base = N(flatRate, 15);
-      const ot   = N(flatOT, 0);
+      const ot = N(flatOT, 0);
       return {
         junior: { payMode: "hourly", base, otRatePerHour: ot },
         senior: { payMode: "hourly", base, otRatePerHour: ot },
-        lead:   { payMode: "hourly", base, otRatePerHour: ot },
+        lead: { payMode: "hourly", base, otRatePerHour: ot },
       };
     }
 
     // Session variants
     const price = (tier) => {
-      if (kind === "half_day") return tier === "jr" ? N(pHalfJr) : tier === "sr" ? N(pHalfSr) : N(pHalfLead);
-      if (kind === "full_day") return tier === "jr" ? N(pFullJr) : tier === "sr" ? N(pFullSr) : N(pFullLead);
-      if (kind === "2d1n")     return tier === "jr" ? N(p2d1nJr) : tier === "sr" ? N(p2d1nSr) : N(p2d1nLead);
+      if (kind === "half_day") {
+        if (tier === "jr") return N(pHalfJr);
+        if (tier === "sr") return N(pHalfSr);
+        if (tier === "lead") return N(pHalfLead);
+        if (tier === "jrEmcee") return N(pHalfJrEmcee);
+        if (tier === "srEmcee") return N(pHalfSrEmcee);
+      }
+      if (kind === "full_day") {
+        if (tier === "jr") return N(pFullJr);
+        if (tier === "sr") return N(pFullSr);
+        if (tier === "lead") return N(pFullLead);
+        if (tier === "jrEmcee") return N(pFullJrEmcee);
+        if (tier === "srEmcee") return N(pFullSrEmcee);
+      }
+      if (kind === "2d1n") {
+        if (tier === "jr") return N(p2d1nJr);
+        if (tier === "sr") return N(p2d1nSr);
+        if (tier === "lead") return N(p2d1nLead);
+        if (tier === "jrEmcee") return N(p2d1nJrEmcee);
+        if (tier === "srEmcee") return N(p2d1nSrEmcee);
+      }
       // 3d2n
-      return tier === "jr" ? N(p3d2nJr) : tier === "sr" ? N(p3d2nSr) : N(p3d2nLead);
+      if (tier === "jr") return N(p3d2nJr);
+      if (tier === "sr") return N(p3d2nSr);
+      if (tier === "lead") return N(p3d2nLead);
+      if (tier === "jrEmcee") return N(p3d2nJrEmcee);
+      if (tier === "srEmcee") return N(p3d2nSrEmcee);
+      return 0;
     };
     const mode = hourlyAddon ? "specific_plus_hourly" : "specific";
-    const ifHourly = (base, ot) => (hourlyAddon ? { base, otRatePerHour: ot } : {});
+    const ifHourly = (base, ot) =>
+      hourlyAddon ? { base, otRatePerHour: ot } : {};
     return {
-      junior: { payMode: mode, specificPayment: price("jr"), ...ifHourly(N(hrJr, 15), N(hrJrOT, 0)),
-                halfDay:N(pHalfJr), fullDay:N(pFullJr), twoD1N:N(p2d1nJr), threeD2N:N(p3d2nJr) },
-      senior: { payMode: mode, specificPayment: price("sr"), ...ifHourly(N(hrSr, 20), N(hrSrOT, 0)),
-                halfDay:N(pHalfSr), fullDay:N(pFullSr), twoD1N:N(p2d1nSr), threeD2N:N(p3d2nSr) },
-      lead:   { payMode: mode, specificPayment: price("lead"), ...ifHourly(N(hrLead, 25), N(hrLeadOT, 0)),
-                halfDay:N(pHalfLead), fullDay:N(pFullLead), twoD1N:N(p2d1nLead), threeD2N:N(p3d2nLead) },
+      junior: {
+        payMode: mode,
+        specificPayment: price("jr"),
+        ...ifHourly(N(hrJr, 15), N(hrJrOT, 0)),
+        halfDay: N(pHalfJr),
+        fullDay: N(pFullJr),
+        twoD1N: N(p2d1nJr),
+        threeD2N: N(p3d2nJr),
+      },
+      senior: {
+        payMode: mode,
+        specificPayment: price("sr"),
+        ...ifHourly(N(hrSr, 20), N(hrSrOT, 0)),
+        halfDay: N(pHalfSr),
+        fullDay: N(pFullSr),
+        twoD1N: N(p2d1nSr),
+        threeD2N: N(p3d2nSr),
+      },
+      lead: {
+        payMode: mode,
+        specificPayment: price("lead"),
+        ...ifHourly(N(hrLead, 25), N(hrLeadOT, 0)),
+        halfDay: N(pHalfLead),
+        fullDay: N(pFullLead),
+        twoD1N: N(p2d1nLead),
+        threeD2N: N(p3d2nLead),
+      },
+      // NEW: junior & senior emcee
+      junior_emcee: {
+        payMode: mode,
+        specificPayment: price("jrEmcee"),
+        ...ifHourly(N(hrJr, 15), N(hrJrOT, 0)),
+        halfDay: N(pHalfJrEmcee),
+        fullDay: N(pFullJrEmcee),
+        twoD1N: N(p2d1nJrEmcee),
+        threeD2N: N(p3d2nJrEmcee),
+      },
+      senior_emcee: {
+        payMode: mode,
+        specificPayment: price("srEmcee"),
+        ...ifHourly(N(hrSr, 20), N(hrSrOT, 0)),
+        halfDay: N(pHalfSrEmcee),
+        fullDay: N(pFullSrEmcee),
+        twoD1N: N(p2d1nSrEmcee),
+        threeD2N: N(p3d2nSrEmcee),
+      },
     };
   }
 
@@ -422,13 +832,21 @@ export default function Admin({ navigate, user }) {
         sessionKind: kind,
         tierRates,
         ...(physicalType === "hourly_flat"
-          ? { flatHourly: { base: N(flatRate, 15), otRatePerHour: N(flatOT, 0) } }
+          ? {
+              flatHourly: {
+                base: N(flatRate, 15),
+                otRatePerHour: N(flatOT, 0),
+              },
+            }
           : {}),
       },
 
       allowances: {
         ...(job?.allowances || {}),
-        parking: { enabled: !!(job?.transportOptions?.bus !== false), amount: N(parkingAllowance, 0) },
+        parking: {
+          enabled: !!(job?.transportOptions?.bus !== false),
+          amount: N(parkingAllowance, 0),
+        },
       },
     };
 
@@ -444,7 +862,12 @@ export default function Admin({ navigate, user }) {
 
   /* ===== Wage Calculation (reads new schema) ===== */
   const [rows, setRows] = useState([]);
-  const [summary, setSummary] = useState({ employees: 0, hours: 0, wages: 0, jobs: 0 });
+  const [summary, setSummary] = useState({
+    employees: 0,
+    hours: 0,
+    wages: 0,
+    jobs: 0,
+  });
 
   // NEW: per-person deductions (RM)
   const [deductions, setDeductions] = useState({}); // { [userId]: number }
@@ -453,7 +876,11 @@ export default function Admin({ navigate, user }) {
   };
 
   function calcWages() {
-    if (!job) { setRows([]); setSummary({ employees: 0, hours: 0, wages: 0, jobs: 0 }); return; }
+    if (!job) {
+      setRows([]);
+      setSummary({ employees: 0, hours: 0, wages: 0, jobs: 0 });
+      return;
+    }
 
     const HOUR_MS = 3600000;
     const rate = job.rate || {};
@@ -467,13 +894,19 @@ export default function Admin({ navigate, user }) {
 
     const byUserTransport = new Map();
     apps.forEach((a) => {
-      const t = a.transport === "ATAG Bus" ? "ATAG Transport" : (a.transport || "Own Transport");
+      const t =
+        a.transport === "ATAG Bus"
+          ? "ATAG Transport"
+          : a.transport || "Own Transport";
       byUserTransport.set(a.userId, t);
     });
 
     const scheduledStart = new Date(job.startTime);
     const scheduledEnd = new Date(job.endTime);
-    const scheduledHours = Math.max(0, (scheduledEnd - scheduledStart) / HOUR_MS);
+    const scheduledHours = Math.max(
+      0,
+      (scheduledEnd - scheduledStart) / HOUR_MS
+    );
 
     // Allowances
     const ec = job.earlyCall || {};
@@ -482,8 +915,12 @@ export default function Admin({ navigate, user }) {
     const lduPriceNum = N(ldu.price, 0);
     const lduHelpers = new Set(ldu.participants || []);
     const parkingAmt =
-      (Number.isFinite(rate.parkingAllowance) ? rate.parkingAllowance : undefined) ??
-      (Number.isFinite(rate.transportAllowance) ? rate.transportAllowance : undefined) ??
+      (Number.isFinite(rate.parkingAllowance)
+        ? rate.parkingAllowance
+        : undefined) ??
+      (Number.isFinite(rate.transportAllowance)
+        ? rate.transportAllowance
+        : undefined) ??
       (Number.isFinite(rate.transportBus) ? rate.transportBus : 0);
 
     // Helper to pull the effective session price for current kind
@@ -495,7 +932,7 @@ export default function Admin({ navigate, user }) {
       if (!approved.has(uid)) return;
 
       const rec = job.attendance[uid] || {};
-      const inTime  = rec.in  ? new Date(rec.in)  : null;
+      const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
 
       // Worked hours logic:
@@ -515,7 +952,6 @@ export default function Admin({ navigate, user }) {
       // OT rounding: .5 and above -> round up, below .5 -> round down
       const otWholeHours = Math.floor(otHours + 0.5);
 
-
       // ---- Which rates apply?
       const tierKey = "junior"; // TODO: map actual tier if/when available
       const rr = tierRates[tierKey] || {};
@@ -530,7 +966,7 @@ export default function Admin({ navigate, user }) {
         baseRate = N(rr.base, 0);
         otRate = N(rr.otRatePerHour, 0);
       } else if (isSessionKind(kind)) {
-        const hourlyEnabled = (rr.payMode === "specific_plus_hourly");
+        const hourlyEnabled = rr.payMode === "specific_plus_hourly";
         if (hourlyEnabled) {
           baseRate = N(rr.base, 0);
           otRate = N(rr.otRatePerHour, 0);
@@ -538,14 +974,17 @@ export default function Admin({ navigate, user }) {
       }
 
       const basePay = baseRate * baseHours;
-      const otPay   = otRate   * otWholeHours;
-
+      const otPay = otRate * otWholeHours;
 
       // Session specific pay (for session variants)
       let specificPay = 0;
       if (isSessionKind(kind)) {
         const specific =
-          (rr.specificPayment != null ? N(rr.specificPayment, 0) : (priceProp ? N(rr[priceProp], 0) : 0));
+          rr.specificPayment != null
+            ? N(rr.specificPayment, 0)
+            : priceProp
+            ? N(rr[priceProp], 0)
+            : 0;
         specificPay = specific;
       }
 
@@ -554,7 +993,8 @@ export default function Admin({ navigate, user }) {
 
       // Parking/ATAG transport allowance — only if they chose ATAG transport
       const appRec = apps.find((a) => a.userId === uid) || {};
-      const transport = byUserTransport.get(uid) || "Own Transport";
+      const transport =
+        byUserTransport.get(uid) || "Own Transport";
       if (transport === "ATAG Transport" || transport === "ATAG Bus") {
         allowances += N(parkingAmt, 0);
       }
@@ -582,8 +1022,13 @@ export default function Admin({ navigate, user }) {
         appRec.name ||
         appRec.fullName ||
         appRec.displayName ||
-        (appRec.firstName || appRec.lastName ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim() : "");
-      const phone = appRec.phone || appRec.phoneNumber || appRec.contact || "";
+        (appRec.firstName || appRec.lastName
+          ? `${appRec.firstName || ""} ${
+              appRec.lastName || ""
+            }`.trim()
+          : "");
+      const phone =
+        appRec.phone || appRec.phoneNumber || appRec.contact || "";
 
       outRows.push({
         userId: uid,
@@ -607,7 +1052,12 @@ export default function Admin({ navigate, user }) {
     const hoursSum = outRows.reduce((s, r) => s + r.hours, 0);
     const wagesSum = outRows.reduce((s, r) => s + r.wageNet, 0); // sum of NET pay
     setRows(outRows);
-    setSummary({ employees, hours: hoursSum, wages: wagesSum, jobs: job ? 1 : 0 });
+    setSummary({
+      employees,
+      hours: hoursSum,
+      wages: wagesSum,
+      jobs: job ? 1 : 0,
+    });
   }
 
   // AUTO-CALCULATE: whenever job or deductions change
@@ -621,7 +1071,17 @@ export default function Admin({ navigate, user }) {
       alert("No rows to export.");
       return;
     }
-    const headers = ["Name", "Email", "Phone", "Job", "Hours", "Transport", "Gross", "Deduction", "Net"];
+    const headers = [
+      "Name",
+      "Email",
+      "Phone",
+      "Job",
+      "Hours",
+      "Transport",
+      "Gross",
+      "Deduction",
+      "Net",
+    ];
     const lines = [headers.join(",")];
     rows.forEach((r) => {
       const line = [
@@ -658,36 +1118,121 @@ export default function Admin({ navigate, user }) {
   const HourlySimpleGrid = ({ title }) => (
     <div className="card" style={{ padding: 12 }}>
       <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
-        <div>Role</div><div>Rate (RM/hr)</div><div>OT Rate (RM/hr)</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: 8,
+          fontSize: 12,
+          color: "#6b7280",
+          marginBottom: 4,
+        }}
+      >
+        <div>Role</div>
+        <div>Rate (RM/hr)</div>
+        <div>OT Rate (RM/hr)</div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Junior</div>
-        <input value={hrJr} onChange={(e)=>setHrJr(e.target.value)} inputMode="decimal" />
-        <input value={hrJrOT} onChange={(e)=>setHrJrOT(e.target.value)} inputMode="decimal" />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <div
+          style={{ display: "flex", alignItems: "center", fontWeight: 600 }}
+        >
+          Junior
+        </div>
+        <input
+          value={hrJr}
+          onChange={(e) => setHrJr(e.target.value)}
+          inputMode="decimal"
+        />
+        <input
+          value={hrJrOT}
+          onChange={(e) => setHrJrOT(e.target.value)}
+          inputMode="decimal"
+        />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Senior</div>
-        <input value={hrSr} onChange={(e)=>setHrSr(e.target.value)} inputMode="decimal" />
-        <input value={hrSrOT} onChange={(e)=>setHrSrOT(e.target.value)} inputMode="decimal" />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: 8,
+          marginBottom: 8,
+        }}
+      >
+        <div
+          style={{ display: "flex", alignItems: "center", fontWeight: 600 }}
+        >
+          Senior
+        </div>
+        <input
+          value={hrSr}
+          onChange={(e) => setHrSr(e.target.value)}
+          inputMode="decimal"
+        />
+        <input
+          value={hrSrOT}
+          onChange={(e) => setHrSrOT(e.target.value)}
+          inputMode="decimal"
+        />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Lead Host</div>
-        <input value={hrLead} onChange={(e)=>setHrLead(e.target.value)} inputMode="decimal" />
-        <input value={hrLeadOT} onChange={(e)=>setHrLeadOT(e.target.value)} inputMode="decimal" />
+      <div
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}
+      >
+        <div
+          style={{ display: "flex", alignItems: "center", fontWeight: 600 }}
+        >
+          Lead Host
+        </div>
+        <input
+          value={hrLead}
+          onChange={(e) => setHrLead(e.target.value)}
+          inputMode="decimal"
+        />
+        <input
+          value={hrLeadOT}
+          onChange={(e) => setHrLeadOT(e.target.value)}
+          inputMode="decimal"
+        />
       </div>
     </div>
   );
 
   const FlatHourlyBlock = () => (
     <div className="card" style={{ padding: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Backend (flat hourly for everyone)</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
-        <div>Rate (RM/hr)</div><div>OT Rate (RM/hr)</div>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>
+        Backend (flat hourly for everyone)
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <input value={flatRate} onChange={(e)=>setFlatRate(e.target.value)} inputMode="decimal" />
-        <input value={flatOT} onChange={(e)=>setFlatOT(e.target.value)} inputMode="decimal" />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 8,
+          fontSize: 12,
+          color: "#6b7280",
+          marginBottom: 4,
+        }}
+      >
+        <div>Rate (RM/hr)</div>
+        <div>OT Rate (RM/hr)</div>
+      </div>
+      <div
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}
+      >
+        <input
+          value={flatRate}
+          onChange={(e) => setFlatRate(e.target.value)}
+          inputMode="decimal"
+        />
+        <input
+          value={flatOT}
+          onChange={(e) => setFlatOT(e.target.value)}
+          inputMode="decimal"
+        />
       </div>
       <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
         Everyone is paid the same hourly and OT rate regardless of role.
@@ -696,9 +1241,11 @@ export default function Admin({ navigate, user }) {
   );
 
   const PaymentBlock = () => {
-    if (sessionMode === "virtual") return <HourlySimpleGrid title="Hourly (Virtual)" />;
-    if (physicalType === "hourly_by_role") return <HourlySimpleGrid title="Hourly (by role)" />;
-    if (physicalType === "hourly_flat")    return <FlatHourlyBlock />;
+    if (sessionMode === "virtual")
+      return <HourlySimpleGrid title="Hourly (Virtual)" />;
+    if (physicalType === "hourly_by_role")
+      return <HourlySimpleGrid title="Hourly (by role)" />;
+    if (physicalType === "hourly_flat") return <FlatHourlyBlock />;
 
     const showHalf = physicalType === "half_day";
     const showFull = physicalType === "full_day";
@@ -707,59 +1254,282 @@ export default function Admin({ navigate, user }) {
 
     return (
       <div className="card" style={{ padding: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Session payment (Physical)</div>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>
+          Session payment (Physical)
+        </div>
 
         {showHalf && (
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>Half Day (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div><input value={pHalfJr} onChange={(e)=>setPHalfJr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div><input value={pHalfSr} onChange={(e)=>setPHalfSr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div><input value={pHalfLead} onChange={(e)=>setPHalfLead(e.target.value)} inputMode="decimal" /></div>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>
+              Half Day (per person)
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+                <input
+                  value={pHalfJr}
+                  onChange={(e) => setPHalfJr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+                <input
+                  value={pHalfSr}
+                  onChange={(e) => setPHalfSr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Lead Host (RM)
+                </div>
+                <input
+                  value={pHalfLead}
+                  onChange={(e) => setPHalfLead(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Junior Emcee (RM)
+                </div>
+                <input
+                  value={pHalfJrEmcee}
+                  onChange={(e) => setPHalfJrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Senior Emcee (RM)
+                </div>
+                <input
+                  value={pHalfSrEmcee}
+                  onChange={(e) => setPHalfSrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
             </div>
           </div>
         )}
         {showFull && (
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>Full Day (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div><input value={pFullJr} onChange={(e)=>setPFullJr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div><input value={pFullSr} onChange={(e)=>setPFullSr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div><input value={pFullLead} onChange={(e)=>setPFullLead(e.target.value)} inputMode="decimal" /></div>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>
+              Full Day (per person)
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+                <input
+                  value={pFullJr}
+                  onChange={(e) => setPFullJr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+                <input
+                  value={pFullSr}
+                  onChange={(e) => setPFullSr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Lead Host (RM)
+                </div>
+                <input
+                  value={pFullLead}
+                  onChange={(e) => setPFullLead(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Junior Emcee (RM)
+                </div>
+                <input
+                  value={pFullJrEmcee}
+                  onChange={(e) => setPFullJrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Senior Emcee (RM)
+                </div>
+                <input
+                  value={pFullSrEmcee}
+                  onChange={(e) => setPFullSrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
             </div>
           </div>
         )}
         {show2d1n && (
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>2D1N (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div><input value={p2d1nJr} onChange={(e)=>setP2d1nJr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div><input value={p2d1nSr} onChange={(e)=>setP2d1nSr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div><input value={p2d1nLead} onChange={(e)=>setP2d1nLead(e.target.value)} inputMode="decimal" /></div>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>
+              2D1N (per person)
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+                <input
+                  value={p2d1nJr}
+                  onChange={(e) => setP2d1nJr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+                <input
+                  value={p2d1nSr}
+                  onChange={(e) => setP2d1nSr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Lead Host (RM)
+                </div>
+                <input
+                  value={p2d1nLead}
+                  onChange={(e) => setP2d1nLead(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Junior Emcee (RM)
+                </div>
+                <input
+                  value={p2d1nJrEmcee}
+                  onChange={(e) => setP2d1nJrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Senior Emcee (RM)
+                </div>
+                <input
+                  value={p2d1nSrEmcee}
+                  onChange={(e) => setP2d1nSrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
             </div>
           </div>
         )}
         {show3d2n && (
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>3D2N (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div><input value={p3d2nJr} onChange={(e)=>setP3d2nJr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div><input value={p3d2nSr} onChange={(e)=>setP3d2nSr(e.target.value)} inputMode="decimal" /></div>
-              <div><div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div><input value={p3d2nLead} onChange={(e)=>setP3d2nLead(e.target.value)} inputMode="decimal" /></div>
+            <div style={{ marginBottom: 8, fontWeight: 600 }}>
+              3D2N (per person)
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
+                <input
+                  value={p3d2nJr}
+                  onChange={(e) => setP3d2nJr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
+                <input
+                  value={p3d2nSr}
+                  onChange={(e) => setP3d2nSr(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Lead Host (RM)
+                </div>
+                <input
+                  value={p3d2nLead}
+                  onChange={(e) => setP3d2nLead(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Junior Emcee (RM)
+                </div>
+                <input
+                  value={p3d2nJrEmcee}
+                  onChange={(e) => setP3d2nJrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>
+                  Senior Emcee (RM)
+                </div>
+                <input
+                  value={p3d2nSrEmcee}
+                  onChange={(e) => setP3d2nSrEmcee(e.target.value)}
+                  inputMode="decimal"
+                />
+              </div>
             </div>
           </div>
         )}
 
         {/* Optional hourly add-on for session variants */}
-        <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", gap: 10, alignItems: "center" }}>
-          <input id="hourlyToggle" type="checkbox" checked={hourlyAddon} onChange={(e)=>setHourlyAddon(e.target.checked)} />
+        <div
+          className="card"
+          style={{
+            marginTop: 12,
+            padding: 12,
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+          }}
+        >
+          <input
+            id="hourlyToggle"
+            type="checkbox"
+            checked={hourlyAddon}
+            onChange={(e) => setHourlyAddon(e.target.checked)}
+          />
           <label htmlFor="hourlyToggle" style={{ userSelect: "none" }}>
             Enable hourly add-on (in addition to session price)
           </label>
         </div>
 
         {hourlyAddon && (
-          <div className="card" style={{ marginTop: 12, padding: 12, background: "#f8fafc" }}>
+          <div
+            className="card"
+            style={{ marginTop: 12, padding: 12, background: "#f8fafc" }}
+          >
             <HourlySimpleGrid title="Hourly add-on (Physical)" />
           </div>
         )}
@@ -769,30 +1539,53 @@ export default function Admin({ navigate, user }) {
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
-      {error && <div className="card" style={{ background: "#fff4f4", color: "#b00" }}>{String(error)}</div>}
+      {error && (
+        <div
+          className="card"
+          style={{ background: "#fff4f4", color: "#b00" }}
+        >
+          {String(error)}
+        </div>
+      )}
 
       {/* ---------------- GLOBAL WAGE DEFAULTS ---------------- */}
       <Section title="Global Wage Defaults (used by JobModal as starting values)">
         {/* Parking + EC / LDU */}
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 3fr", gap: 12 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "2fr 3fr",
+            gap: 12,
+          }}
+        >
           <Field label="Default Parking Allowance (RM)">
-            <input inputMode="decimal" value={gParking} onChange={(e)=>setGParking(e.target.value)} />
+            <input
+              inputMode="decimal"
+              value={gParking}
+              onChange={(e) => setGParking(e.target.value)}
+            />
           </Field>
 
           <div className="card" style={{ padding: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 12,
+              }}
+            >
               <Field label="Early Call Amount (RM)">
                 <input
                   inputMode="decimal"
                   value={gECAmount}
-                  onChange={(e)=>setGECAmount(e.target.value)}
+                  onChange={(e) => setGECAmount(e.target.value)}
                 />
               </Field>
               <Field label="Loading & Unloading (RM / helper)">
                 <input
                   inputMode="decimal"
                   value={gLDUPrice}
-                  onChange={(e)=>setGLDUPrice(e.target.value)}
+                  onChange={(e) => setGLDUPrice(e.target.value)}
                 />
               </Field>
             </div>
@@ -801,34 +1594,133 @@ export default function Admin({ navigate, user }) {
 
         {/* Hourly by role defaults */}
         <Section title="Hourly (by role) — Defaults">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
-            <div>Role</div><div>Rate (RM/hr)</div><div>OT Rate (RM/hr)</div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 8,
+              fontSize: 12,
+              color: "#6b7280",
+              marginBottom: 6,
+            }}
+          >
+            <div>Role</div>
+            <div>Rate (RM/hr)</div>
+            <div>OT Rate (RM/hr)</div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontWeight: 600, display: "flex", alignItems: "center" }}>Junior</div>
-            <input inputMode="decimal" value={gHrJr} onChange={(e)=>setGHrJr(e.target.value)} />
-            <input inputMode="decimal" value={gHrJrOT} onChange={(e)=>setGHrJrOT(e.target.value)} />
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 8,
+              marginBottom: 6,
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              Junior
+            </div>
+            <input
+              inputMode="decimal"
+              value={gHrJr}
+              onChange={(e) => setGHrJr(e.target.value)}
+            />
+            <input
+              inputMode="decimal"
+              value={gHrJrOT}
+              onChange={(e) => setGHrJrOT(e.target.value)}
+            />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontWeight: 600, display: "flex", alignItems: "center" }}>Senior</div>
-            <input inputMode="decimal" value={gHrSr} onChange={(e)=>setGHrSr(e.target.value)} />
-            <input inputMode="decimal" value={gHrSrOT} onChange={(e)=>setGHrSrOT(e.target.value)} />
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 8,
+              marginBottom: 6,
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              Senior
+            </div>
+            <input
+              inputMode="decimal"
+              value={gHrSr}
+              onChange={(e) => setGHrSr(e.target.value)}
+            />
+            <input
+              inputMode="decimal"
+              value={gHrSrOT}
+              onChange={(e) => setGHrSrOT(e.target.value)}
+            />
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-            <div style={{ fontWeight: 600, display: "flex", alignItems: "center" }}>Lead Host</div>
-            <input inputMode="decimal" value={gHrLead} onChange={(e)=>setGHrLead(e.target.value)} />
-            <input inputMode="decimal" value={gHrLeadOT} onChange={(e)=>setGHrLeadOT(e.target.value)} />
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              Lead Host
+            </div>
+            <input
+              inputMode="decimal"
+              value={gHrLead}
+              onChange={(e) => setGHrLead(e.target.value)}
+            />
+            <input
+              inputMode="decimal"
+              value={gHrLeadOT}
+              onChange={(e) => setGHrLeadOT(e.target.value)}
+            />
           </div>
         </Section>
 
         {/* Backend flat defaults */}
         <Section title="Backend (flat hourly for all) — Defaults">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
-            <div>Rate (RM/hr)</div><div>OT Rate (RM/hr)</div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 8,
+              fontSize: 12,
+              color: "#6b7280",
+              marginBottom: 6,
+            }}
+          >
+            <div>Rate (RM/hr)</div>
+            <div>OT Rate (RM/hr)</div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <input inputMode="decimal" value={gFlat} onChange={(e)=>setGFlat(e.target.value)} />
-            <input inputMode="decimal" value={gFlatOT} onChange={(e)=>setGFlatOT(e.target.value)} />
+          <div
+            style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}
+          >
+            <input
+              inputMode="decimal"
+              value={gFlat}
+              onChange={(e) => setGFlat(e.target.value)}
+            />
+            <input
+              inputMode="decimal"
+              value={gFlatOT}
+              onChange={(e) => setGFlatOT(e.target.value)}
+            />
           </div>
         </Section>
 
@@ -836,87 +1728,207 @@ export default function Admin({ navigate, user }) {
         <Section title="Session (specific payment per person) — Defaults">
           <div className="card" style={{ padding: 10, marginBottom: 8 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Half Day</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)"><input inputMode="decimal" value={gHalfJr} onChange={(e)=>setGHalfJr(e.target.value)} /></Field>
-              <Field label="Senior (RM)"><input inputMode="decimal" value={gHalfSr} onChange={(e)=>setGHalfSr(e.target.value)} /></Field>
-              <Field label="Lead Host (RM)"><input inputMode="decimal" value={gHalfLead} onChange={(e)=>setGHalfLead(e.target.value)} /></Field>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 8,
+              }}
+            >
+              <Field label="Junior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gHalfJr}
+                  onChange={(e) => setGHalfJr(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gHalfSr}
+                  onChange={(e) => setGHalfSr(e.target.value)}
+                />
+              </Field>
+              <Field label="Lead Host (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gHalfLead}
+                  onChange={(e) => setGHalfLead(e.target.value)}
+                />
+              </Field>
+              <Field label="Junior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gHalfJrEmcee}
+                  onChange={(e) => setGHalfJrEmcee(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gHalfSrEmcee}
+                  onChange={(e) => setGHalfSrEmcee(e.target.value)}
+                />
+              </Field>
             </div>
           </div>
           <div className="card" style={{ padding: 10, marginBottom: 8 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>Full Day</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)"><input inputMode="decimal" value={gFullJr} onChange={(e)=>setGFullJr(e.target.value)} /></Field>
-              <Field label="Senior (RM)"><input inputMode="decimal" value={gFullSr} onChange={(e)=>setGFullSr(e.target.value)} /></Field>
-              <Field label="Lead Host (RM)"><input inputMode="decimal" value={gFullLead} onChange={(e)=>setGFullLead(e.target.value)} /></Field>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 8,
+              }}
+            >
+              <Field label="Junior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gFullJr}
+                  onChange={(e) => setGFullJr(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gFullSr}
+                  onChange={(e) => setGFullSr(e.target.value)}
+                />
+              </Field>
+              <Field label="Lead Host (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gFullLead}
+                  onChange={(e) => setGFullLead(e.target.value)}
+                />
+              </Field>
+              <Field label="Junior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gFullJrEmcee}
+                  onChange={(e) => setGFullJrEmcee(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gFullSrEmcee}
+                  onChange={(e) => setGFullSrEmcee(e.target.value)}
+                />
+              </Field>
             </div>
           </div>
           <div className="card" style={{ padding: 10, marginBottom: 8 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>2D1N</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)"><input inputMode="decimal" value={g2d1nJr} onChange={(e)=>setG2d1nJr(e.target.value)} /></Field>
-              <Field label="Senior (RM)"><input inputMode="decimal" value={g2d1nSr} onChange={(e)=>setG2d1nSr(e.target.value)} /></Field>
-              <Field label="Lead Host (RM)"><input inputMode="decimal" value={g2d1nLead} onChange={(e)=>setG2d1nLead(e.target.value)} /></Field>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 8,
+              }}
+            >
+              <Field label="Junior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g2d1nJr}
+                  onChange={(e) => setG2d1nJr(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g2d1nSr}
+                  onChange={(e) => setG2d1nSr(e.target.value)}
+                />
+              </Field>
+              <Field label="Lead Host (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g2d1nLead}
+                  onChange={(e) => setG2d1nLead(e.target.value)}
+                />
+              </Field>
+              <Field label="Junior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g2d1nJrEmcee}
+                  onChange={(e) => setG2d1nJrEmcee(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g2d1nSrEmcee}
+                  onChange={(e) => setG2d1nSrEmcee(e.target.value)}
+                />
+              </Field>
             </div>
           </div>
           <div className="card" style={{ padding: 10 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>3D2N</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)"><input inputMode="decimal" value={g3d2nJr} onChange={(e)=>setG3d2nJr(e.target.value)} /></Field>
-              <Field label="Senior (RM)"><input inputMode="decimal" value={g3d2nSr} onChange={(e)=>setG3d2nSr(e.target.value)} /></Field>
-              <Field label="Lead Host (RM)"><input inputMode="decimal" value={g3d2nLead} onChange={(e)=>setG3d2nLead(e.target.value)} /></Field>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(5, 1fr)",
+                gap: 8,
+              }}
+            >
+              <Field label="Junior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g3d2nJr}
+                  onChange={(e) => setG3d2nJr(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g3d2nSr}
+                  onChange={(e) => setG3d2nSr(e.target.value)}
+                />
+              </Field>
+              <Field label="Lead Host (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g3d2nLead}
+                  onChange={(e) => setG3d2nLead(e.target.value)}
+                />
+              </Field>
+              <Field label="Junior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g3d2nJrEmcee}
+                  onChange={(e) => setG3d2nJrEmcee(e.target.value)}
+                />
+              </Field>
+              <Field label="Senior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={g3d2nSrEmcee}
+                  onChange={(e) => setG3d2nSrEmcee(e.target.value)}
+                />
+              </Field>
             </div>
           </div>
-
-          {/* ✅ NEW: Emcee additional pay defaults */}
-          <div className="card" style={{ padding: 10, marginTop: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Emcee Add-on (per person)</div>
-            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
-              Used when a Junior/Senior Host is also assigned as Emcee (junior / senior emcee).
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginBottom: 8 }}>
-              <Field label="Half Day — Junior Emcee (RM)">
-                <input
-                  inputMode="decimal"
-                  value={gEmceeHalfJr}
-                  onChange={(e)=>setGEmceeHalfJr(e.target.value)}
-                />
-              </Field>
-              <Field label="Half Day — Senior Emcee (RM)">
-                <input
-                  inputMode="decimal"
-                  value={gEmceeHalfSr}
-                  onChange={(e)=>setGEmceeHalfSr(e.target.value)}
-                />
-              </Field>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
-              <Field label="Full Day — Junior Emcee (RM)">
-                <input
-                  inputMode="decimal"
-                  value={gEmceeFullJr}
-                  onChange={(e)=>setGEmceeFullJr(e.target.value)}
-                />
-              </Field>
-              <Field label="Full Day — Senior Emcee (RM)">
-                <input
-                  inputMode="decimal"
-                  value={gEmceeFullSr}
-                  onChange={(e)=>setGEmceeFullSr(e.target.value)}
-                />
-              </Field>
-            </div>
-          </div>
-
         </Section>
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn primary" onClick={saveGlobal}>Save Defaults</button>
+          <button className="btn primary" onClick={saveGlobal}>
+            Save Defaults
+          </button>
         </div>
       </Section>
 
       {/* ---------------- RATE & JOB CONFIG (updated to mirror JobModal) ---------------- */}
       <Section title="Rate & Job Configuration">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
           <div style={{ display: "grid", gap: 6 }}>
             <select
               value={selectedId}
@@ -932,14 +1944,22 @@ export default function Admin({ navigate, user }) {
             </select>
             {job && (
               <div style={{ fontSize: 12, color: "#6b7280" }}>
-                <div><b>Venue:</b> {job.venue || "-"}</div>
-                <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
+                <div>
+                  <b>Venue:</b> {job.venue || "-"}
+                </div>
+                <div>
+                  <b>When:</b> {fmtRange(job.startTime, job.endTime)}
+                </div>
               </div>
             )}
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {headerPills}
-            <button className="btn primary" onClick={saveConfig} disabled={!job}>
+            <button
+              className="btn primary"
+              onClick={saveConfig}
+              disabled={!job}
+            >
               Save Configuration
             </button>
           </div>
@@ -949,24 +1969,45 @@ export default function Admin({ navigate, user }) {
           <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
             {/* Session type (same controls as JobModal for consistency) */}
             <div className="card" style={{ padding: 12 }}>
-              <div style={{ display: "grid", gridTemplateColumns: sessionMode === "physical" ? "1fr 1fr" : "1fr", gap: 12 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    sessionMode === "physical" ? "1fr 1fr" : "1fr",
+                  gap: 12,
+                }}
+              >
                 <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Session Type</div>
-                  <select value={sessionMode} onChange={(e)=>setSessionMode(e.target.value)}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>
+                    Session Type
+                  </div>
+                  <select
+                    value={sessionMode}
+                    onChange={(e) => setSessionMode(e.target.value)}
+                  >
                     <option value="virtual">Virtual</option>
                     <option value="physical">Physical</option>
                   </select>
                 </div>
                 {sessionMode === "physical" && (
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>Physical Subtype</div>
-                    <select value={physicalType} onChange={(e)=>setPhysicalType(e.target.value)}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>
+                      Physical Subtype
+                    </div>
+                    <select
+                      value={physicalType}
+                      onChange={(e) => setPhysicalType(e.target.value)}
+                    >
                       <option value="half_day">Half Day</option>
                       <option value="full_day">Full Day</option>
                       <option value="2d1n">2D1N</option>
                       <option value="3d2n">3D2N</option>
-                      <option value="hourly_by_role">Hourly (by role)</option>
-                      <option value="hourly_flat">Backend (flat hourly for all)</option>
+                      <option value="hourly_by_role">
+                        Hourly (by role)
+                      </option>
+                      <option value="hourly_flat">
+                        Backend (flat hourly for all)
+                      </option>
                     </select>
                   </div>
                 )}
@@ -974,7 +2015,13 @@ export default function Admin({ navigate, user }) {
             </div>
 
             {/* Parking Allowance */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr",
+                gap: 12,
+              }}
+            >
               <Field
                 label="Parking Allowance (RM, when ATAG Transport is selected)"
                 hint={
@@ -987,7 +2034,9 @@ export default function Admin({ navigate, user }) {
                   type="text"
                   inputMode="decimal"
                   value={parkingAllowance}
-                  onChange={(e) => setParkingAllowance(e.target.value)}
+                  onChange={(e) =>
+                    setParkingAllowance(e.target.value)
+                  }
                 />
               </Field>
             </div>
@@ -1002,16 +2051,36 @@ export default function Admin({ navigate, user }) {
 
       {/* Wage Calculation (AUTO) */}
       <div className="card" style={{ marginTop: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontWeight: 700 }}>Wage Summary (auto-calculated)</div>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <div style={{ fontWeight: 700 }}>
+            Wage Summary (auto-calculated)
+          </div>
           <div style={{ display: "flex", gap: 8 }}>
             {/* Removed "Calculate Wages" per request */}
-            {job && (<button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>Export to CSV</button>)}
+            {job && (
+              <button
+                className="btn"
+                onClick={exportPayrollCSV}
+                disabled={!rows.length}
+              >
+                Export to CSV
+              </button>
+            )}
           </div>
         </div>
 
         <div style={{ overflowX: "auto", marginTop: 8 }}>
-          <table width="100%" cellPadding="8" style={{ borderCollapse: "collapse" }}>
+          <table
+            width="100%"
+            cellPadding="8"
+            style={{ borderCollapse: "collapse" }}
+          >
             <thead>
               <tr style={{ borderBottom: "1px solid #ddd" }}>
                 <th align="left">Name</th>
@@ -1030,7 +2099,10 @@ export default function Admin({ navigate, user }) {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.userId} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                <tr
+                  key={r.userId}
+                  style={{ borderBottom: "1px solid #f0f0f0" }}
+                >
                   <td>{r.name}</td>
                   <td>{r.email}</td>
                   <td>{r.phone}</td>
@@ -1045,15 +2117,23 @@ export default function Admin({ navigate, user }) {
                     <input
                       inputMode="decimal"
                       value={String(deductions[r.userId] ?? 0)}
-                      onChange={(e) => setDeduction(r.userId, e.target.value)}
+                      onChange={(e) =>
+                        setDeduction(r.userId, e.target.value)
+                      }
                       style={{ width: 90, textAlign: "right" }}
                     />
                   </td>
-                  <td align="right"><b>{money(r.wageNet)}</b></td>
+                  <td align="right">
+                    <b>{money(r.wageNet)}</b>
+                  </td>
                 </tr>
               ))}
               {!rows.length && (
-                <tr><td colSpan={12} style={{ opacity: 0.6 }}>Select a job to view auto-calculated wages.</td></tr>
+                <tr>
+                  <td colSpan={12} style={{ opacity: 0.6 }}>
+                    Select a job to view auto-calculated wages.
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
@@ -1061,7 +2141,9 @@ export default function Admin({ navigate, user }) {
 
         {/* Totals */}
         <div style={{ marginTop: 10, fontSize: 14, opacity: 0.9 }}>
-          <div><strong>Totals</strong></div>
+          <div>
+            <strong>Totals</strong>
+          </div>
           <div>Total Employees: {summary.employees}</div>
           <div>Total Hours: {summary.hours.toFixed(2)}</div>
           <div>Total Net Wages: {money(summary.wages)}</div>
