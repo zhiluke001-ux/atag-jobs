@@ -182,28 +182,73 @@ export default function JobList({
         const lu = j.loadingUnload || {};
         const payForViewer = buildPayForViewer(j, viewerUser);
 
+        // === UPDATED ApplyArea ===
         function ApplyArea() {
           if (!canApply) return null;
-          if (my === "approved") return <button className="btn green" style={COMPACT_BTN} disabled>Approved</button>;
-          if (my === "applied")  return <button className="btn gray"  style={COMPACT_BTN} disabled>Applied</button>;
-          if (my === "rejected") return <button className="btn gray"  style={COMPACT_BTN} disabled>Full</button>;
-          return <button className="btn red" style={COMPACT_BTN} onClick={() => onApply && onApply(j)}>Apply</button>;
+
+          const isFull = total > 0 && approved >= total;
+
+          // Job-level status should not override the user's own status
+          if (my === "approved") {
+            return (
+              <button className="btn green" style={COMPACT_BTN} disabled>
+                Approved
+              </button>
+            );
+          }
+
+          if (my === "applied") {
+            return (
+              <button className="btn gray" style={COMPACT_BTN} disabled>
+                Applied
+              </button>
+            );
+          }
+
+          // Either the job is full OR user previously rejected because quota full
+          if (my === "rejected" || isFull) {
+            return (
+              <button className="btn gray" style={COMPACT_BTN} disabled>
+                Full
+              </button>
+            );
+          }
+
+          return (
+            <button
+              className="btn red"
+              style={COMPACT_BTN}
+              onClick={() => onApply && onApply(j)}
+            >
+              Apply
+            </button>
+          );
         }
 
         return (
           <div key={j.id} className="card">
             {/* Title + status */}
             <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <div><div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div></div>
-              <div style={{ textAlign: "right" }}><div className="status">{j.status}</div></div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 16 }}>{j.title}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div className="status">{j.status}</div>
+              </div>
             </div>
 
             {/* Basics */}
             <div style={{ marginTop: 8, lineHeight: 1.55 }}>
               {/* Date / Time side-by-side */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <div><strong>Date</strong><span style={{ marginLeft: 8 }}>{dateLine}</span></div>
-                <div><strong>Time</strong><span style={{ marginLeft: 8 }}>{timeLine}</span></div>
+                <div>
+                  <strong>Date</strong>
+                  <span style={{ marginLeft: 8 }}>{dateLine}</span>
+                </div>
+                <div>
+                  <strong>Time</strong>
+                  <span style={{ marginLeft: 8 }}>{timeLine}</span>
+                </div>
               </div>
 
               {/* Venue (its own line) */}
@@ -223,7 +268,9 @@ export default function JobList({
                 <>
                   <div style={{ marginTop: 6 }}>
                     <strong>Transport</strong>
-                    <div style={{ marginTop: 6 }}><TransportBadges job={j} /></div>
+                    <div style={{ marginTop: 6 }}>
+                      <TransportBadges job={j} />
+                    </div>
                     {pa != null && j?.transportOptions?.bus && (
                       <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
                         ATAG Transport allowance: RM{pa} per person (if selected)
@@ -231,7 +278,14 @@ export default function JobList({
                     )}
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 8,
+                      marginTop: 6,
+                    }}
+                  >
                     <div>
                       <div style={{ fontWeight: 600 }}>Early Call</div>
                       <div style={{ color: "#374151" }}>
@@ -241,7 +295,11 @@ export default function JobList({
                     <div>
                       <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
                       <div style={{ color: "#374151" }}>
-                        {lu?.enabled ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(lu.quota || 0)}` : "No"}
+                        {lu?.enabled
+                          ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(
+                              lu.quota || 0
+                            )}`
+                          : "No"}
                       </div>
                     </div>
                   </div>
@@ -269,14 +327,27 @@ export default function JobList({
                 <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
                   <div>
                     <strong>Description</strong>
-                    <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
+                    <div style={{ marginTop: 4, color: "#374151" }}>
+                      {j.description || "-"}
+                    </div>
                   </div>
                 </div>
               )}
 
               {/* Hiring line */}
-              <div style={{ marginTop: 8, display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-                <div><strong>Hiring for</strong><span style={{ marginLeft: 8 }}>{total} pax</span></div>
+              <div
+                style={{
+                  marginTop: 8,
+                  display: "flex",
+                  gap: 16,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <strong>Hiring for</strong>
+                  <span style={{ marginLeft: 8 }}>{total} pax</span>
+                </div>
                 <div style={{ color: "#667085" }}>
                   Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
                 </div>
@@ -284,7 +355,15 @@ export default function JobList({
             </div>
 
             {/* Actions */}
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <div
+              style={{
+                marginTop: 10,
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
               <div
                 style={{
                   display: "inline-flex",
@@ -297,7 +376,11 @@ export default function JobList({
               >
                 {canApply && <ApplyArea />}
 
-                <button className="btn" style={COMPACT_BTN} onClick={() => onView && onView(j)}>
+                <button
+                  className="btn"
+                  style={COMPACT_BTN}
+                  onClick={() => onView && onView(j)}
+                >
                   View details
                 </button>
 
@@ -316,8 +399,12 @@ export default function JobList({
 
               {canManage && (
                 <>
-                  <button className="btn" onClick={() => onEdit && onEdit(j)}>Edit</button>
-                  <button className="btn red" onClick={() => onDelete && onDelete(j)}>Delete</button>
+                  <button className="btn" onClick={() => onEdit && onEdit(j)}>
+                    Edit
+                  </button>
+                  <button className="btn red" onClick={() => onDelete && onDelete(j)}>
+                    Delete
+                  </button>
                 </>
               )}
             </div>
