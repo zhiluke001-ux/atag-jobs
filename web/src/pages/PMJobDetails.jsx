@@ -141,6 +141,54 @@ const FT_ROLE_LABEL = FT_ROLES.reduce((acc, r) => {
   return acc;
 }, {});
 
+/**
+ * Normalise whatever comes back from the backend into:
+ * { userId, role, name, phone }
+ *
+ * Supports:
+ * - string: "userId"
+ * - string: "userId:roleId"
+ * - object: { userId, role, ... }
+ * - object: { id, duty, ... }   (fallbacks)
+ */
+function normaliseFullTimer(ft) {
+  if (!ft) return null;
+
+  // string formats
+  if (typeof ft === "string") {
+    const parts = ft.split(":");
+    const userId = parts[0]?.trim();
+    if (!userId) return null;
+    const rawRole = parts[1]?.trim();
+    const validRole =
+      FT_ROLES.find((r) => r.id === rawRole)?.id || "junior_marshal";
+    return { userId, role: validRole, name: "", phone: "" };
+  }
+
+  if (typeof ft === "object") {
+    const userId = ft.userId || ft.id || ft.email || null;
+    if (!userId) return null;
+
+    const rawRole = ft.role || ft.duty || ft.fullTimerRole || ft.position || "junior_marshal";
+    const role =
+      FT_ROLES.find((r) => r.id === rawRole)?.id || "junior_marshal";
+
+    const name =
+      ft.name ||
+      ft.fullName ||
+      ft.displayName ||
+      ft.username ||
+      ft.email ||
+      "";
+
+    const phone = ft.phone || ft.phoneNumber || "";
+
+    return { userId, role, name, phone };
+  }
+
+  return null;
+}
+
 export default function PMJobDetails({ jobId }) {
   /* ---------- state ---------- */
   const [job, setJob] = useState(null);
@@ -217,8 +265,12 @@ export default function PMJobDetails({ jobId }) {
       }
       setJob(merged);
 
-      // full-timers from job
-      setFullTimers(Array.isArray(merged.fullTimers) ? merged.fullTimers : []);
+      // normalise full-timers from job
+      const rawFT = Array.isArray(merged.fullTimers) ? merged.fullTimers : [];
+      const normalisedFT = rawFT
+        .map((ft) => normaliseFullTimer(ft))
+        .filter(Boolean);
+      setFullTimers(normalisedFT);
 
       const a = await apiGet(`/jobs/${jobId}/applicants${bust}`).catch(() => []);
       setApplicants(a);
@@ -602,6 +654,29 @@ export default function PMJobDetails({ jobId }) {
       const rows = Array.isArray(users) ? users : [];
       const filtered = rows.filter((u) => u.role === "pm" || u.role === "admin");
       setFtCandidates(filtered);
+
+      // hydrate any existing fullTimers with name/phone if missing
+      setFullTimers((prev) => {
+        if (!prev.length) return prev;
+        const next = prev.map((ft) => {
+          if (!ft || !ft.userId) return ft;
+          const u =
+            filtered.find((x) => x.id === ft.userId || x.email === ft.userId) || null;
+          if (!u) return ft;
+          const name =
+            ft.name ||
+            u.name ||
+            u.fullName ||
+            u.displayName ||
+            u.username ||
+            u.email ||
+            "";
+          const phone = ft.phone || u.phone || u.phoneNumber || "";
+          if (name === ft.name && phone === ft.phone) return ft;
+          return { ...ft, name, phone };
+        });
+        return next;
+      });
     } catch (e) {
       console.error("load full-timers failed", e);
     } finally {
@@ -649,9 +724,13 @@ export default function PMJobDetails({ jobId }) {
   async function saveFullTimers() {
     try {
       setFtSaving(true);
-      // Backend should accept and persist this structure on the job:
-      // { fullTimers: [{ userId, role, name, phone }, ...] }
-      await apiPost(`/jobs/${jobId}/fulltimers`, { fullTimers });
+      const payload = fullTimers.map((ft) => ({
+        userId: ft.userId,
+        role: ft.role,
+        name: ft.name || "",
+        phone: ft.phone || "",
+      }));
+      await apiPost(`/jobs/${jobId}/fulltimers`, { fullTimers: payload });
       setFtModalOpen(false);
       await load(true);
     } catch (e) {
@@ -754,9 +833,14 @@ export default function PMJobDetails({ jobId }) {
               </div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
-              <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
+              <div>
+                Early call:{" "}
+                {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
+              </div>
               {isVirtual && (
-                <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>
+                <div style={{ fontWeight: 700, color: "#7c3aed" }}>
+                  Mode: Virtual (no scanning)
+                </div>
               )}
             </div>
             <div
@@ -863,11 +947,16 @@ export default function PMJobDetails({ jobId }) {
                 </tr>
               </thead>
               <tbody>
-                {fullTimers.map((ft) => (
-                  <tr key={`${ft.userId}-${ft.role}`} style={{ borderTop: "1px solid #f1f5f9" }}>
+                {fullTimers.map((ft, idx) => (
+                  <tr
+                    key={`${ft.userId || "unknown"}-${ft.role || "none"}-${idx}`}
+                    style={{ borderTop: "1px solid #f1f5f9" }}
+                  >
                     <td style={{ padding: "8px 4px" }}>{ft.name || "-"}</td>
                     <td style={{ padding: "8px 4px" }}>{ft.phone || "-"}</td>
-                    <td style={{ padding: "8px 4px" }}>{FT_ROLE_LABEL[ft.role] || ft.role}</td>
+                    <td style={{ padding: "8px 4px" }}>
+                      {FT_ROLE_LABEL[ft.role] || ft.role || "-"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -889,7 +978,9 @@ export default function PMJobDetails({ jobId }) {
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Discord</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Transport</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Status</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>L&amp;U</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>
+                  L&amp;U
+                </th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Actions</th>
               </tr>
             </thead>
@@ -917,15 +1008,30 @@ export default function PMJobDetails({ jobId }) {
                     <td style={{ padding: "10px 8px" }}>
                       {a.name || a.fullName || a.displayName || "-"}
                     </td>
-                    <td style={{ padding: "10px 8px" }}>{a.phone || a.phoneNumber || "-"}</td>
+                    <td style={{ padding: "10px 8px" }}>
+                      {a.phone || a.phoneNumber || "-"}
+                    </td>
                     <td style={{ padding: "10px 8px" }}>
                       {a.discord || a.discordHandle || a.username || "-"}
                     </td>
                     <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
-                    <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status}</td>
+                    <td
+                      style={{
+                        padding: "10px 8px",
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      {a.status}
+                    </td>
                     <td style={{ padding: "10px 8px" }}>
                       {a.luApplied ? (
-                        <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        <label
+                          style={{
+                            display: "inline-flex",
+                            gap: 6,
+                            alignItems: "center",
+                          }}
+                        >
                           <input
                             type="checkbox"
                             checked={a.luConfirmed}
@@ -964,7 +1070,9 @@ export default function PMJobDetails({ jobId }) {
 
       {/* Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>
+          Approved List & Attendance
+        </div>
         <div style={{ overflowX: "auto" }}>
           <table
             className="table"
@@ -976,8 +1084,24 @@ export default function PMJobDetails({ jobId }) {
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
+                <th
+                  style={{
+                    textAlign: "center",
+                    padding: "8px 4px",
+                    width: 120,
+                  }}
+                >
+                  In
+                </th>
+                <th
+                  style={{
+                    textAlign: "center",
+                    padding: "8px 4px",
+                    width: 120,
+                  }}
+                >
+                  Out
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -989,7 +1113,10 @@ export default function PMJobDetails({ jobId }) {
                 </tr>
               ) : (
                 approvedRows.map((r) => (
-                  <tr key={r.userId || r.email} style={{ borderTop: "1px solid #f1f5f9" }}>
+                  <tr
+                    key={r.userId || r.email}
+                    style={{ borderTop: "1px solid #f1f5f9" }}
+                  >
                     <td style={{ padding: "8px 4px" }}>{r.email}</td>
                     <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
                     <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
@@ -1049,7 +1176,8 @@ export default function PMJobDetails({ jobId }) {
               Assign full-timers
             </div>
             <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 10 }}>
-              Step 1: Choose a duty role. Step 2: Tick full-timers (PM / Admin) to assign.
+              Step 1: Choose a duty role. Step 2: Tick full-timers (PM / Admin) to
+              assign.
             </div>
 
             {/* Role selector */}
@@ -1107,7 +1235,9 @@ export default function PMJobDetails({ jobId }) {
               }}
             >
               {ftLoadingUsers ? (
-                <div style={{ padding: 8, color: "#6b7280" }}>Loading full-timers…</div>
+                <div style={{ padding: 8, color: "#6b7280" }}>
+                  Loading full-timers…
+                </div>
               ) : ftCandidates.length === 0 ? (
                 <div style={{ padding: 8, color: "#6b7280" }}>
                   No PM / Admin accounts found.
@@ -1136,12 +1266,16 @@ export default function PMJobDetails({ jobId }) {
                           <td style={{ padding: "6px 4px" }}>
                             <input
                               type="checkbox"
-                              checked={checked}
+                              checked={!!checked}
                               onChange={() => toggleFullTimerForCurrentRole(u)}
                             />
                           </td>
-                          <td style={{ padding: "6px 4px" }}>{u.name || u.username || "-"}</td>
-                          <td style={{ padding: "6px 4px" }}>{u.phone || "-"}</td>
+                          <td style={{ padding: "6px 4px" }}>
+                            {u.name || u.username || "-"}
+                          </td>
+                          <td style={{ padding: "6px 4px" }}>
+                            {u.phone || u.phoneNumber || "-"}
+                          </td>
                           <td style={{ padding: "6px 4px" }}>{u.email || "-"}</td>
                         </tr>
                       );
@@ -1163,7 +1297,11 @@ export default function PMJobDetails({ jobId }) {
               <button className="btn" onClick={closeFullTimerModal} disabled={ftSaving}>
                 Cancel
               </button>
-              <button className="btn primary" onClick={saveFullTimers} disabled={ftSaving}>
+              <button
+                className="btn primary"
+                onClick={saveFullTimers}
+                disabled={ftSaving}
+              >
                 {ftSaving ? "Saving…" : "Save"}
               </button>
             </div>
@@ -1268,7 +1406,12 @@ export default function PMJobDetails({ jobId }) {
               }}
             >
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
+                <input
+                  type="radio"
+                  checked={scanDir === "in"}
+                  onChange={() => setScanDir("in")}
+                />{" "}
+                IN
               </label>
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 <input
@@ -1366,7 +1509,9 @@ export default function PMJobDetails({ jobId }) {
                 left: "50%",
                 transform: "translate(-50%, -50%)",
                 background:
-                  scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
+                  scanPopup.kind === "success"
+                    ? "rgba(34,197,94,0.9)"
+                    : "rgba(248,113,113,0.9)",
                 color: "white",
                 padding: "10px 20px",
                 borderRadius: 999,
