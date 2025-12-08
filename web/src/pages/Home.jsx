@@ -23,7 +23,9 @@ function deriveKind(job) {
   const isVirtual = mode === "virtual" || kind === "virtual";
   const resolvedKind = isVirtual
     ? "virtual"
-    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)
+    : ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(
+        kind
+      )
     ? kind
     : "half_day";
 
@@ -98,6 +100,21 @@ export default function Home({ navigate, user }) {
     }
   }, [user]);
 
+  // Stats for header (present vs past)
+  const jobStats = useMemo(() => {
+    const now = Date.now();
+    let present = 0;
+    let past = 0;
+
+    for (const j of jobs || []) {
+      const endMs = j?.endTime ? new Date(j.endTime).getTime() : null;
+      const isPast = endMs != null && endMs < now;
+      if (isPast) past += 1;
+      else present += 1;
+    }
+    return { present, past };
+  }, [jobs]);
+
   // Filter jobs into Present / Past
   const filteredJobs = useMemo(() => {
     const now = Date.now();
@@ -134,7 +151,10 @@ export default function Home({ navigate, user }) {
     try {
       // Server requires a valid transport string even for virtual jobs.
       const tx = transport || "Own Transport";
-      await apiPost(`/jobs/${applyJob.id}/apply`, { transport: tx, wantsLU: !!wantsLU });
+      await apiPost(`/jobs/${applyJob.id}/apply`, {
+        transport: tx,
+        wantsLU: !!wantsLU,
+      });
 
       const list = await apiGet("/me/jobs");
       const map = {};
@@ -175,64 +195,45 @@ export default function Home({ navigate, user }) {
     }
   }
 
-  return (
-    <div className="container" style={{ paddingTop: 16 }}>
-      {/* Top bar */}
+  // ---- Main list content (loading / empty / list) ----
+  let mainContent;
+  if (loading) {
+    mainContent = (
       <div
         style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 10,
+          padding: "40px 0",
+          textAlign: "center",
+          color: "#6b7280",
+          fontSize: 14,
         }}
       >
-        <div style={{ fontSize: 22, fontWeight: 800 }}>Jobs Management</div>
-
-        {canManage && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {/* Present / Past toggle (admin/pm only) */}
-            <div
-              style={{
-                display: "inline-flex",
-                borderRadius: 999,
-                border: "1px solid #d1d5db",
-                overflow: "hidden",
-              }}
-            >
-              <button
-                className={`btn ${viewMode === "present" ? "primary" : ""}`}
-                style={{
-                  borderRadius: 0,
-                  padding: "6px 12px",
-                  border: "none",
-                  borderRight: "1px solid #d1d5db",
-                }}
-                onClick={() => setViewMode("present")}
-              >
-                Present
-              </button>
-              <button
-                className={`btn ${viewMode === "past" ? "primary" : ""}`}
-                style={{
-                  borderRadius: 0,
-                  padding: "6px 12px",
-                  border: "none",
-                }}
-                onClick={() => setViewMode("past")}
-              >
-                Past
-              </button>
-            </div>
-
-            {/* Create Job button */}
-            <button className="btn primary" onClick={() => setShowCreate(true)}>
-              + Create Job
-            </button>
-          </div>
+        Loading jobs…
+      </div>
+    );
+  } else if (!filteredJobs.length) {
+    mainContent = (
+      <div
+        style={{
+          padding: "40px 0",
+          textAlign: "center",
+          color: "#6b7280",
+          fontSize: 14,
+        }}
+      >
+        {canManage ? (
+          <>
+            No jobs in this view yet.
+            <br />
+            Switch between <strong>Present</strong> and <strong>Past</strong>{" "}
+            above, or create a new job.
+          </>
+        ) : (
+          <>No upcoming jobs available at the moment. Please check back later.</>
         )}
       </div>
-
-      {/* List */}
+    );
+  } else {
+    mainContent = (
       <JobList
         jobs={filteredJobs}
         loading={loading}
@@ -245,9 +246,107 @@ export default function Home({ navigate, user }) {
         onApplyAgain={onApply}
         onEdit={handleEdit}
         onDelete={handleDelete}
-        showFullDetails
+        // Admin/PM sees full details; part-timer sees compact card
+        showFullDetails={canManage}
         viewerUser={user} // role-based display
       />
+    );
+  }
+
+  return (
+    <div className="container" style={{ paddingTop: 16 }}>
+      {/* Top bar */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          marginBottom: 16,
+          gap: 12,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>Jobs Management</div>
+          <div
+            style={{
+              marginTop: 4,
+              fontSize: 13,
+              color: "#6b7280",
+            }}
+          >
+            {canManage ? (
+              <>
+                Present: <strong>{jobStats.present}</strong> · Past:{" "}
+                <strong>{jobStats.past}</strong>
+              </>
+            ) : (
+              <>
+                Showing{" "}
+                <strong>{filteredJobs.length}</strong> upcoming job
+                {filteredJobs.length === 1 ? "" : "s"} for you.
+              </>
+            )}
+          </div>
+        </div>
+
+        {canManage && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Present / Past toggle (admin/pm only) */}
+            <div
+              style={{
+                display: "inline-flex",
+                borderRadius: 999,
+                border: "1px solid #d1d5db",
+                overflow: "hidden",
+                background: "#f9fafb",
+              }}
+            >
+              <button
+                className={`btn ${viewMode === "present" ? "primary" : ""}`}
+                style={{
+                  borderRadius: 0,
+                  padding: "6px 12px",
+                  border: "none",
+                  borderRight: "1px solid #d1d5db",
+                  fontSize: 13,
+                  background:
+                    viewMode === "present" ? "#111827" : "transparent",
+                  color: viewMode === "present" ? "#ffffff" : "#374151",
+                }}
+                onClick={() => setViewMode("present")}
+              >
+                Present
+              </button>
+              <button
+                className={`btn ${viewMode === "past" ? "primary" : ""}`}
+                style={{
+                  borderRadius: 0,
+                  padding: "6px 12px",
+                  border: "none",
+                  fontSize: 13,
+                  background: viewMode === "past" ? "#111827" : "transparent",
+                  color: viewMode === "past" ? "#ffffff" : "#374151",
+                }}
+                onClick={() => setViewMode("past")}
+              >
+                Past
+              </button>
+            </div>
+
+            {/* Create Job button */}
+            <button
+              className="btn primary"
+              onClick={() => setShowCreate(true)}
+              style={{ paddingInline: 14 }}
+            >
+              + Create Job
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* List / Empty / Loading */}
+      {mainContent}
 
       {/* Create Job Modal */}
       {canManage && showCreate && (
