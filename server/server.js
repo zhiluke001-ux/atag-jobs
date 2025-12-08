@@ -1,3 +1,4 @@
+// server.js
 // server/server.js
 import express from "express";
 import cors from "cors";
@@ -71,6 +72,39 @@ db.config.roleRatesDefaults = db.config.roleRatesDefaults || {
   }
 };
 
+// 🔁 Ensure emcee grades exist for full-timers.
+// By default we align them to senior/lead hourly rates, but they can be
+// customised later via the /config/rates admin endpoint.
+{
+  const rrd = db.config.roleRatesDefaults;
+
+  if (!rrd["junior emcee"]) {
+    rrd["junior emcee"] = {
+      payMode: rrd.senior?.payMode || "hourly",
+      base: Number(
+        rrd.senior?.base ??
+          db.config.rates?.physicalHourly?.senior ??
+          30
+      ),
+      specificPayment: null,
+      otMultiplier: 0
+    };
+  }
+
+  if (!rrd["senior emcee"]) {
+    rrd["senior emcee"] = {
+      payMode: rrd.lead?.payMode || "hourly",
+      base: Number(
+        rrd.lead?.base ??
+          db.config.rates?.physicalHourly?.lead ??
+          30
+      ),
+      specificPayment: null,
+      otMultiplier: 0
+    };
+  }
+}
+
 db.pushSubs = db.pushSubs || {};
 db.notifications = db.notifications || {};
 
@@ -85,8 +119,28 @@ const MAX_DISTANCE_METERS = Number(
 );
 const ROLES = ["part-timer", "pm", "admin"];
 
-// ✅ extended to support full-timer staff grades (emcee) as well
+// ✅ Staff grades: used for both part-timers and full-timer marshals/emcees.
+// junior/senior are shared between part-timers and marshals so they always
+// point to the same underlying pay grade.
 const STAFF_ROLES = ["junior", "senior", "lead", "junior emcee", "senior emcee"];
+
+// ✅ Full-timer event roles. These map back to STAFF_ROLES so that
+// - junior_marshal uses the "junior" rate (same as part-timer junior)
+// - senior_marshal uses the "senior" rate (same as part-timer senior)
+// Emcee roles are full-timer only and use their own emcee grades.
+const FULLTIMER_ROLES = [
+  "junior_marshal",
+  "senior_marshal",
+  "junior_emcee",
+  "senior_emcee"
+];
+
+const FULLTIMER_ROLE_TO_GRADE = {
+  junior_marshal: "junior",
+  senior_marshal: "senior",
+  junior_emcee: "junior emcee",
+  senior_emcee: "senior emcee"
+};
 
 const toRad = (deg) => (deg * Math.PI) / 180;
 const clampRole = (r) =>
