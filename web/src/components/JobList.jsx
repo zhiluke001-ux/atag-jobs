@@ -163,15 +163,15 @@ function deriveKind(job) {
       : resolvedKind === "3d2n"
       ? "Physical — 3D2N"
       : resolvedKind === "hourly_by_role"
-      ? "Physical — Hourly (by role)"
-      : "Physical — Backend (flat hourly)";
+      ? "Physical — Hourly"
+      : "Physical — Backend";
 
   return { isVirtual, kind: resolvedKind, label };
 }
 function otSuffix(hourlyRM, otRM) {
   // New OT policy: billed per full hour after event end; show explicit rate if provided.
   if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
-  if (hourlyRM) return ` (OT billed hourly after end)`;
+  //if (hourlyRM) return ` (OT billed hourly after end)`;
   return "";
 }
 function buildPayForViewer(job, user) {
