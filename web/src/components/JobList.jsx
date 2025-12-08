@@ -17,7 +17,7 @@ function fmtDateShort(d) {
   return d.toLocaleDateString("en-GB");
 }
 function fmtHourCompact(d) {
-  const h = d.toLocaleTimeString("en-GB", { hour: "numeric", hour12: true });
+  const h = d.toLocaleTimeString("en-GB", { hour: "numeric", minute: "2-digit", hour12: true });
   return h.replace(" ", "");
 }
 
@@ -381,7 +381,7 @@ export default function JobList({
                   </div>
                 </div>
                 <div style={{ textAlign: "right" }}>
-                  <div style={LABEL_SM}>Pay (your tier)</div>
+                  <div style={LABEL_SM}>Pay</div>
                   <div style={PAY_STRONG}>{payForViewer}</div>
                 </div>
               </div>
