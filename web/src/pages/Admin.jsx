@@ -882,6 +882,16 @@ export default function Admin({ navigate, user }) {
       return;
     }
 
+    // helper to pick first non-empty value
+    const pick = (...vals) => {
+      for (const v of vals) {
+        if (v === undefined || v === null) continue;
+        if (typeof v === "string" && v.trim() === "") continue;
+        return v;
+      }
+      return "";
+    };
+
     const HOUR_MS = 3600000;
     const rate = job.rate || {};
     const tierRates = rate.tierRates || {};
@@ -1004,7 +1014,7 @@ export default function Admin({ navigate, user }) {
       return "junior";
     };
 
-    const pushRowForPerson = (uid, { appRec, staffRec } = {}) => {
+    const pushRowForPerson = (uid, { appRec, staffRec, type } = {}) => {
       // Attendance (optional) – if none, we fall back to scheduled hours.
       const rec = attendance[uid] || {};
       const inTime = rec.in ? new Date(rec.in) : null;
@@ -1093,40 +1103,73 @@ export default function Admin({ navigate, user }) {
       const deduction = Math.max(0, N(deductions[uid], 0));
       const net = Math.max(0, gross - deduction);
 
-      // best-effort name/phone from staff record first, then application record
+      // best-effort name/phone/email
+      const appUser = (appRec && appRec.user) || {};
+      const staffUser = (staffRec && staffRec.user) || {};
+
+      const combinedAppName =
+        appRec && (appRec.firstName || appRec.lastName)
+          ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim()
+          : "";
+
       const name =
-        (staffRec &&
-          (staffRec.name ||
-            staffRec.fullName ||
-            staffRec.displayName)) ||
-        (appRec &&
-          (appRec.name ||
-            appRec.fullName ||
-            appRec.displayName)) ||
-        (appRec &&
-        (appRec.firstName || appRec.lastName)
-          ? `${appRec.firstName || ""} ${
-              appRec.lastName || ""
-            }`.trim()
-          : "") ||
-        (staffRec && (staffRec.id || staffRec.email)) ||
-        uid;
+        pick(
+          // full-timer user object
+          staffUser.name,
+          staffUser.fullName,
+          staffUser.displayName,
+          // full-timer record
+          staffRec && staffRec.name,
+          staffRec && staffRec.fullName,
+          staffRec && staffRec.displayName,
+          // part-timer user object on application
+          appUser.name,
+          appUser.fullName,
+          appUser.displayName,
+          // part-timer record
+          appRec && appRec.name,
+          appRec && appRec.fullName,
+          appRec && appRec.displayName,
+          combinedAppName
+        ) || (staffRec && (staffRec.id || staffRec.email)) || uid;
 
       const phone =
-        (staffRec &&
-          (staffRec.phone ||
-            staffRec.phoneNumber ||
-            staffRec.contact)) ||
-        (appRec &&
-          (appRec.phone ||
-            appRec.phoneNumber ||
-            appRec.contact)) ||
-        "";
+        pick(
+          // full-timer user object
+          staffUser.phone,
+          staffUser.phoneNumber,
+          staffUser.contact,
+          // full-timer record
+          staffRec && staffRec.phone,
+          staffRec && staffRec.phoneNumber,
+          staffRec && staffRec.contact,
+          // part-timer user object
+          appUser.phone,
+          appUser.phoneNumber,
+          appUser.contact,
+          // part-timer record
+          appRec && appRec.phone,
+          appRec && appRec.phoneNumber,
+          appRec && appRec.contact
+        ) || "";
 
       const email =
-        (staffRec && staffRec.email) ||
-        (appRec && appRec.email) ||
-        uid;
+        pick(
+          staffUser.email,
+          staffRec && staffRec.email,
+          appUser.email,
+          appRec && appRec.email,
+          uid
+        ) || uid;
+
+      const employmentType =
+        type === "full-timer"
+          ? "full-timer"
+          : type === "part-timer"
+          ? "part-timer"
+          : staffRec
+          ? "full-timer"
+          : "part-timer";
 
       outRows.push({
         userId: uid,
@@ -1143,6 +1186,7 @@ export default function Admin({ navigate, user }) {
         _otPay: otPay,
         _specific: specificPay,
         _allowances: allowances,
+        _employmentType: employmentType,
       });
     };
 
@@ -1157,20 +1201,33 @@ export default function Admin({ navigate, user }) {
       // Avoid double-counting full-timers that might also be in approved
       if (fullTimerById.has(uid)) return;
       const appRec = apps.find((a) => a.userId === uid) || {};
-      pushRowForPerson(uid, { appRec, staffRec: null });
+      pushRowForPerson(uid, { appRec, staffRec: null, type: "part-timer" });
     });
 
     // ---- FULL-TIMERS: always included, no attendance required ----
     fullTimers.forEach((staffRec) => {
       const uid = getStaffId(staffRec);
       if (!uid) return;
-      pushRowForPerson(uid, { appRec: null, staffRec });
+      pushRowForPerson(uid, { appRec: null, staffRec, type: "full-timer" });
     });
 
-    const employees = outRows.length;
-    const hoursSum = outRows.reduce((s, r) => s + r.hours, 0);
-    const wagesSum = outRows.reduce((s, r) => s + r.wageNet, 0); // sum of NET pay
-    setRows(outRows);
+    // sort rows: full-timers first, then part-timers, then by name
+    const sortedRows = [...outRows].sort((a, b) => {
+      const order = (t) => (t === "full-timer" ? 0 : 1);
+      const at = order(a._employmentType);
+      const bt = order(b._employmentType);
+      if (at !== bt) return at - bt;
+      const an = (a.name || "").toLowerCase();
+      const bn = (b.name || "").toLowerCase();
+      if (an < bn) return -1;
+      if (an > bn) return 1;
+      return 0;
+    });
+
+    const employees = sortedRows.length;
+    const hoursSum = sortedRows.reduce((s, r) => s + r.hours, 0);
+    const wagesSum = sortedRows.reduce((s, r) => s + r.wageNet, 0); // sum of NET pay
+    setRows(sortedRows);
     setSummary({
       employees,
       hours: hoursSum,
