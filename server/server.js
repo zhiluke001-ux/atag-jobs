@@ -84,7 +84,9 @@ const MAX_DISTANCE_METERS = Number(
     500
 );
 const ROLES = ["part-timer", "pm", "admin"];
-const STAFF_ROLES = ["junior", "senior", "lead"];
+
+// ✅ extended to support full-timer staff grades (emcee) as well
+const STAFF_ROLES = ["junior", "senior", "lead", "junior emcee", "senior emcee"];
 
 const toRad = (deg) => (deg * Math.PI) / 180;
 const clampRole = (r) =>
@@ -2342,4 +2344,3 @@ app.listen(PORT, () => {
 setTimeout(() => {
   console.log("Registered routes:\n" + listRoutes(app).join("\n"));
 }, 100);
-  
