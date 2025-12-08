@@ -69,6 +69,12 @@ const defaultGlobal = {
     twoD1N:   { jr: 300, sr: 400, lead: 500 },
     threeD2N: { jr: 450, sr: 600, lead: 750 },
   },
+
+  // ✅ NEW: Emcee additional pay defaults
+  emceeAddon: {
+    half_day: { jr: 44, sr: 88 },   // junior emcee, senior emcee
+    full_day: { jr: 88, sr: 168 },
+  },
 };
 function loadGlobalDefaults() {
   try {
@@ -141,6 +147,20 @@ export default function Admin({ navigate, user }) {
   const [g3d2nSr, setG3d2nSr] = useState(String(globalCfg.session.threeD2N.sr));
   const [g3d2nLead, setG3d2nLead] = useState(String(globalCfg.session.threeD2N.lead));
 
+  // ✅ NEW: global emcee add-on defaults
+  const [gEmceeHalfJr, setGEmceeHalfJr] = useState(
+    String(globalCfg.emceeAddon?.half_day?.jr ?? 44)
+  );
+  const [gEmceeHalfSr, setGEmceeHalfSr] = useState(
+    String(globalCfg.emceeAddon?.half_day?.sr ?? 88)
+  );
+  const [gEmceeFullJr, setGEmceeFullJr] = useState(
+    String(globalCfg.emceeAddon?.full_day?.jr ?? 88)
+  );
+  const [gEmceeFullSr, setGEmceeFullSr] = useState(
+    String(globalCfg.emceeAddon?.full_day?.sr ?? 168)
+  );
+
   function saveGlobal() {
     const ecPrev = globalCfg.earlyCall || {};
     const lduPrev = globalCfg.loadingUnload || {};
@@ -172,6 +192,18 @@ export default function Admin({ navigate, user }) {
         full_day: { jr: N(gFullJr, 0), sr: N(gFullSr, 0), lead: N(gFullLead, 0) },
         twoD1N:   { jr: N(g2d1nJr, 0), sr: N(g2d1nSr, 0), lead: N(g2d1nLead, 0) },
         threeD2N: { jr: N(g3d2nJr, 0), sr: N(g3d2nSr, 0), lead: N(g3d2nLead, 0) },
+      },
+
+      // ✅ NEW: store emcee add-on defaults
+      emceeAddon: {
+        half_day: {
+          jr: N(gEmceeHalfJr, 0),
+          sr: N(gEmceeHalfSr, 0),
+        },
+        full_day: {
+          jr: N(gEmceeFullJr, 0),
+          sr: N(gEmceeFullSr, 0),
+        },
       },
     };
     setGlobalCfg(out);
@@ -832,6 +864,46 @@ export default function Admin({ navigate, user }) {
               <Field label="Junior (RM)"><input inputMode="decimal" value={g3d2nJr} onChange={(e)=>setG3d2nJr(e.target.value)} /></Field>
               <Field label="Senior (RM)"><input inputMode="decimal" value={g3d2nSr} onChange={(e)=>setG3d2nSr(e.target.value)} /></Field>
               <Field label="Lead Host (RM)"><input inputMode="decimal" value={g3d2nLead} onChange={(e)=>setG3d2nLead(e.target.value)} /></Field>
+            </div>
+          </div>
+
+          {/* ✅ NEW: Emcee additional pay defaults */}
+          <div className="card" style={{ padding: 10, marginTop: 8 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Emcee Add-on (per person)</div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
+              Used when a Junior/Senior Host is also assigned as Emcee (junior / senior emcee).
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, marginBottom: 8 }}>
+              <Field label="Half Day — Junior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gEmceeHalfJr}
+                  onChange={(e)=>setGEmceeHalfJr(e.target.value)}
+                />
+              </Field>
+              <Field label="Half Day — Senior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gEmceeHalfSr}
+                  onChange={(e)=>setGEmceeHalfSr(e.target.value)}
+                />
+              </Field>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
+              <Field label="Full Day — Junior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gEmceeFullJr}
+                  onChange={(e)=>setGEmceeFullJr(e.target.value)}
+                />
+              </Field>
+              <Field label="Full Day — Senior Emcee (RM)">
+                <input
+                  inputMode="decimal"
+                  value={gEmceeFullSr}
+                  onChange={(e)=>setGEmceeFullSr(e.target.value)}
+                />
+              </Field>
             </div>
           </div>
 
