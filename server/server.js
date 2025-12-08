@@ -328,6 +328,38 @@ function jobPublicView(job) {
   };
 }
 
+/* ===== full-timer helpers ===== */
+// Join job.fullTimers with db.users so API always returns name/phone/etc.
+function hydrateJobFullTimers(job) {
+  if (!job || !Array.isArray(job.fullTimers)) return job;
+
+  const enriched = job.fullTimers.map((ft) => {
+    if (!ft || !ft.userId) return ft;
+    const u = (db.users || []).find((x) => x.id === ft.userId) || {};
+
+    // "role" here is the staff role for this job (junior/senior/lead/etc.),
+    // not the account role (part-timer/pm/admin).
+    const role =
+      ft.role ||
+      ft.type ||
+      ft.grade ||
+      "junior";
+
+    return {
+      ...ft,
+      role,
+      name: u.name || ft.name || "",
+      email: u.email || ft.email || "",
+      phone: u.phone || ft.phone || "",
+      grade: u.grade || ft.grade || "junior",
+      // user-level account role: part-timer / pm / admin
+      accountRole: u.role || ft.accountRole || ""
+    };
+  });
+
+  return { ...job, fullTimers: enriched };
+}
+
 /* ---- adjustments normalizer ---- */
 function normalizeAdjustments(obj, actor) {
   const out = {};
@@ -1174,7 +1206,8 @@ app.get("/jobs", (_req, res) => {
 app.get("/jobs/:id", (req, res) => {
   const job = db.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
-  res.json({ ...job, status: computeStatus(job) });
+  const hydrated = hydrateJobFullTimers(job);
+  res.json({ ...hydrated, status: computeStatus(hydrated) });
 });
 
 app.post(
@@ -1549,9 +1582,10 @@ app.post(
       req
     );
 
+    const hydrated = hydrateJobFullTimers(job);
     return res.json({
       ok: true,
-      job: { ...job, status: computeStatus(job) }
+      job: { ...hydrated, status: computeStatus(hydrated) }
     });
   }
 );
@@ -1973,22 +2007,20 @@ app.get(
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    const list = Array.isArray(job.fullTimers) ? job.fullTimers : [];
-    const enriched = list.map((ft) => {
-      const u =
-        (db.users || []).find((x) => x.id === ft.userId) || {};
-      return {
-        userId: ft.userId,
-        type: ft.type || ft.kind || ft.grade || "",
-        note: ft.note || "",
-        email: u.email || "",
-        name: u.name || "",
-        phone: u.phone || "",
-        role: u.role || "",
-        grade: u.grade || "junior"
-      };
-    });
-    res.json(enriched);
+    const hydrated = hydrateJobFullTimers(job);
+    const list = Array.isArray(hydrated.fullTimers)
+      ? hydrated.fullTimers.map((ft) => ({
+          userId: ft.userId,
+          role: ft.role || "junior",       // job-specific role (junior, senior, etc.)
+          note: ft.note || "",
+          name: ft.name || "",
+          email: ft.email || "",
+          phone: ft.phone || "",
+          grade: ft.grade || "junior",     // staff grade
+          accountRole: ft.accountRole || "" // account-level role (part-timer/pm/admin)
+        }))
+      : [];
+    res.json(list);
   }
 );
 
@@ -2020,9 +2052,17 @@ app.post(
       if (!item || !item.userId) continue;
       const u = (db.users || []).find((x) => x.id === item.userId);
       if (!u) continue;
+
+      // Accept both new shape (role) and old shape (type/grade)
+      const role =
+        item.role ||
+        item.type ||
+        item.grade ||
+        "junior";
+
       normalized.push({
         userId: u.id,
-        type: String(item.type || item.kind || item.grade || "").toLowerCase(),
+        role: String(role),
         note: String(item.note || "")
       });
     }
@@ -2035,22 +2075,21 @@ app.post(
       req
     );
 
-    const enriched = job.fullTimers.map((ft) => {
-      const u =
-        (db.users || []).find((x) => x.id === ft.userId) || {};
-      return {
-        userId: ft.userId,
-        type: ft.type || "",
-        note: ft.note || "",
-        email: u.email || "",
-        name: u.name || "",
-        phone: u.phone || "",
-        role: u.role || "",
-        grade: u.grade || "junior"
-      };
-    });
+    const hydrated = hydrateJobFullTimers(job);
+    const responseList = Array.isArray(hydrated.fullTimers)
+      ? hydrated.fullTimers.map((ft) => ({
+          userId: ft.userId,
+          role: ft.role || "junior",
+          note: ft.note || "",
+          name: ft.name || "",
+          email: ft.email || "",
+          phone: ft.phone || "",
+          grade: ft.grade || "junior",
+          accountRole: ft.accountRole || ""
+        }))
+      : [];
 
-    res.json({ ok: true, fullTimers: enriched });
+    res.json({ ok: true, fullTimers: responseList });
   }
 );
 
@@ -2157,8 +2196,9 @@ async function handleReset(req, res) {
   await saveDB(db);
   exportJobCSV(job);
   addAudit("reset_event", { jobId: job.id, keepAttendance }, req);
-  const status = computeStatus(job);
-  res.json({ ok: true, job: { ...job, status } });
+  const hydrated = hydrateJobFullTimers(job);
+  const status = computeStatus(hydrated);
+  res.json({ ok: true, job: { ...hydrated, status } });
 }
 app.post(
   "/jobs/:id/reset",
