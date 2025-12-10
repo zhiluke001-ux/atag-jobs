@@ -155,6 +155,38 @@ function buildPayForViewer(job, user) {
   return "-";
 }
 
+/* ---- visual helpers (aligned with JobList style) ---- */
+const LABEL_SM = {
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "#6b7280",
+};
+
+const TEXT_MAIN = {
+  fontSize: 13,
+  color: "#111827",
+  marginTop: 2,
+};
+
+const TEXT_MUTED = {
+  fontSize: 13,
+  color: "#4b5563",
+};
+
+const PAY_STRONG = {
+  fontSize: 15,
+  fontWeight: 700,
+  color: "#111827",
+};
+
+const SECTION_DIVIDER = {
+  borderTop: "1px solid #e5e7eb",
+  marginTop: 12,
+  paddingTop: 12,
+};
+
 export default function JobDetails({ navigate, params, user }) {
   const id =
     params?.id ||
@@ -168,7 +200,7 @@ export default function JobDetails({ navigate, params, user }) {
     let mounted = true;
     (async () => {
       try {
-        // Fetch full job + list so counts match Home.jsx
+        // Fetch full job + list so counts match Home / JobList
         const [fullJob, list] = await Promise.all([
           apiGet(`/jobs/${id}`),
           apiGet("/jobs"),
@@ -233,8 +265,16 @@ export default function JobDetails({ navigate, params, user }) {
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
-      <div className="card" style={{ display: "grid", gap: 10 }}>
-        <div className="row-between">
+      <div className="card" style={{ display: "grid", gap: 14 }}>
+        {/* Header */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 12,
+          }}
+        >
           <div>
             <div style={{ fontWeight: 800, fontSize: 20 }}>{job.title}</div>
             {job.status && (
@@ -248,34 +288,52 @@ export default function JobDetails({ navigate, params, user }) {
           </button>
         </div>
 
-        <div className="cols-2">
+        {/* Summary panel */}
+        <div
+          style={{
+            marginTop: 4,
+            padding: "12px 14px",
+            background: "#f9fafb",
+            borderRadius: 12,
+            border: "1px solid #e5e7eb",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
+            gap: 12,
+          }}
+        >
           <div>
-            <strong>Start</strong>
-            <span style={{ marginLeft: 8 }}>{fmt(job.startTime)}</span>
+            <div style={LABEL_SM}>Start</div>
+            <div style={TEXT_MAIN}>{fmt(job.startTime)}</div>
           </div>
           <div>
-            <strong>End</strong>
-            <span style={{ marginLeft: 8 }}>{fmt(job.endTime)}</span>
+            <div style={LABEL_SM}>End</div>
+            <div style={TEXT_MAIN}>{fmt(job.endTime)}</div>
           </div>
           <div>
-            <strong>Venue</strong>
-            <span style={{ marginLeft: 8 }}>{job.venue || "-"}</span>
+            <div style={LABEL_SM}>Venue</div>
+            <div style={TEXT_MAIN}>{job.venue || "-"}</div>
           </div>
           <div>
-            <strong>Session</strong>
-            <span style={{ marginLeft: 8 }}>{label}</span>
+            <div style={LABEL_SM}>Session</div>
+            <div style={TEXT_MAIN}>{label}</div>
+          </div>
+          <div>
+            <div style={LABEL_SM}>Pay (your tier)</div>
+            <div style={PAY_STRONG}>{payForViewer}</div>
           </div>
         </div>
 
-        <div>
-          <strong>Description</strong>
-          <div style={{ marginTop: 6, color: "#374151" }}>
+        {/* Description */}
+        <div style={SECTION_DIVIDER}>
+          <div style={LABEL_SM}>Description</div>
+          <div style={{ ...TEXT_MUTED, marginTop: 4 }}>
             {job.description || "-"}
           </div>
         </div>
 
-        <div>
-          <strong>Transport</strong>
+        {/* Transport */}
+        <div style={SECTION_DIVIDER}>
+          <div style={LABEL_SM}>Transport</div>
           <div style={{ marginTop: 6 }}>
             {job.transportOptions?.bus || job.transportOptions?.own ? (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -323,60 +381,57 @@ export default function JobDetails({ navigate, params, user }) {
           )}
         </div>
 
-        <div className="cols-2">
-          <div>
-            <div style={{ fontWeight: 600 }}>Early Call</div>
-            <div style={{ color: "#374151" }}>
-              {ec?.enabled
-                ? `Yes · RM${Number(ec.amount || 0)}${
-                    ec.thresholdHours
-                      ? ` (≥ ${Number(ec.thresholdHours || 0)}h)`
-                      : ""
-                  }`
-                : "No"}
-            </div>
-          </div>
-          <div>
-            <div style={{ fontWeight: 600 }}>Loading & Unloading</div>
-            <div style={{ color: "#374151" }}>
-              {lu?.enabled
-                ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(
-                    lu.quota || 0
-                  )}`
-                : "No"}
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <strong>Pay</strong>
+        {/* Early Call / Loading & Unloading */}
+        <div style={SECTION_DIVIDER}>
           <div
             style={{
-              marginTop: 6,
-              fontFamily:
-                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-              fontSize: 13,
-              lineHeight: 1.5,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
+              gap: 16,
             }}
           >
-            {payForViewer}
+            <div>
+              <div style={LABEL_SM}>Early Call</div>
+              <div style={{ ...TEXT_MAIN, marginTop: 4 }}>
+                {ec?.enabled
+                  ? `Yes · RM${Number(ec.amount || 0)}${
+                      ec.thresholdHours
+                        ? ` (≥ ${Number(ec.thresholdHours || 0)}h)`
+                        : ""
+                    }`
+                  : "No"}
+              </div>
+            </div>
+            <div>
+              <div style={LABEL_SM}>Loading & Unloading</div>
+              <div style={{ ...TEXT_MAIN, marginTop: 4 }}>
+                {lu?.enabled
+                  ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(
+                      lu.quota || 0
+                    )}`
+                  : "No"}
+              </div>
+            </div>
           </div>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 16,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <strong>Hiring for</strong>
-            <span style={{ marginLeft: 8 }}>{total} pax</span>
-          </div>
-          <div style={{ color: "#667085" }}>
-            Approved: {approved}/{total} &nbsp;·&nbsp; Applied: {applied}
+        {/* Team status */}
+        <div style={SECTION_DIVIDER}>
+          <div
+            style={{
+              display: "flex",
+              gap: 16,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <div style={TEXT_MAIN}>
+              <strong>Hiring for</strong>
+              <span style={{ marginLeft: 6 }}>{total} pax</span>
+            </div>
+            <div style={{ ...TEXT_MUTED, fontSize: 12 }}>
+              Approved: {approved}/{total} · Applied: {applied}
+            </div>
           </div>
         </div>
       </div>
