@@ -100,7 +100,6 @@ function parkingRM(job) {
 }
 
 function otSuffix(hourlyRM, otRM) {
-  // New OT policy: billed per full hour after event end; show explicit rate if provided.
   if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
   if (hourlyRM) return ` (OT billed hourly after end)`;
   return "";
@@ -169,10 +168,32 @@ export default function JobDetails({ navigate, params, user }) {
     let mounted = true;
     (async () => {
       try {
-        const j = await apiGet(`/jobs/${id}`);
-        if (mounted) setJob(j);
+        // Fetch full job + list so counts match Home.jsx
+        const [fullJob, list] = await Promise.all([
+          apiGet(`/jobs/${id}`),
+          apiGet("/jobs"),
+        ]);
+
+        let merged = fullJob;
+        if (Array.isArray(list)) {
+          const fromList =
+            list.find((x) => x.id === fullJob.id) ||
+            list.find((x) => String(x.id) === String(id));
+          if (fromList) {
+            merged = {
+              ...fullJob,
+              appliedCount:
+                fromList.appliedCount ?? fullJob.appliedCount,
+              approvedCount:
+                fromList.approvedCount ?? fullJob.approvedCount,
+              headcount: fromList.headcount ?? fullJob.headcount,
+            };
+          }
+        }
+
+        if (mounted) setJob(merged);
       } catch (e) {
-        setErr(String(e));
+        if (mounted) setErr(String(e));
       }
     })();
     return () => {
