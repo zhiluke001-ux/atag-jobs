@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { apiGet } from "../api";
 
-function fmt(dt) {
+function fmtDateTime(dt) {
   if (!dt) return "";
   try {
     const s = new Date(dt);
@@ -16,6 +16,30 @@ function fmt(dt) {
   } catch {
     return "";
   }
+}
+
+function fmtDateRange(startDt, endDt) {
+  if (!startDt) return "-";
+  const s = new Date(startDt);
+  const sDate = s.toLocaleDateString("en-GB");
+  if (!endDt) return sDate;
+
+  const e = new Date(endDt);
+  const sameDay = s.toDateString() === e.toDateString();
+  if (sameDay) return sDate;
+
+  const eDate = e.toLocaleDateString("en-GB");
+  return `${sDate} – ${eDate}`;
+}
+
+function fmtTimeRange(startDt, endDt) {
+  if (!startDt && !endDt) return "-";
+  const opts = { hour: "numeric", minute: "2-digit", hour12: true };
+
+  const s = startDt ? new Date(startDt).toLocaleTimeString("en-US", opts) : "";
+  const e = endDt ? new Date(endDt).toLocaleTimeString("en-US", opts) : "";
+  if (s && e) return `${s} — ${e}`;
+  return s || e || "-";
 }
 
 /* ---- shared helpers (kept in sync with JobList.jsx) ---- */
@@ -155,9 +179,9 @@ function buildPayForViewer(job, user) {
   return "-";
 }
 
-/* ---- visual helpers (aligned with JobList style) ---- */
+/* ---- visual helpers ---- */
 const LABEL_SM = {
-  fontSize: 11,
+  fontSize: 12,
   fontWeight: 600,
   letterSpacing: "0.04em",
   textTransform: "uppercase",
@@ -165,26 +189,26 @@ const LABEL_SM = {
 };
 
 const TEXT_MAIN = {
-  fontSize: 13,
+  fontSize: 14,
   color: "#111827",
   marginTop: 2,
 };
 
 const TEXT_MUTED = {
-  fontSize: 13,
+  fontSize: 14,
   color: "#4b5563",
 };
 
 const PAY_STRONG = {
-  fontSize: 15,
+  fontSize: 17,
   fontWeight: 700,
   color: "#111827",
 };
 
 const SECTION_DIVIDER = {
   borderTop: "1px solid #e5e7eb",
-  marginTop: 12,
-  paddingTop: 12,
+  marginTop: 16,
+  paddingTop: 14,
 };
 
 export default function JobDetails({ navigate, params, user }) {
@@ -263,9 +287,12 @@ export default function JobDetails({ navigate, params, user }) {
   const applied = Number(job.appliedCount || 0);
   const total = Number(job.headcount || 0);
 
+  const dateLine = fmtDateRange(job.startTime, job.endTime);
+  const timeLine = fmtTimeRange(job.startTime, job.endTime);
+
   return (
     <div className="container" style={{ paddingTop: 16 }}>
-      <div className="card" style={{ display: "grid", gap: 14 }}>
+      <div className="card" style={{ display: "grid", gap: 16 }}>
         {/* Header */}
         <div
           style={{
@@ -276,9 +303,9 @@ export default function JobDetails({ navigate, params, user }) {
           }}
         >
           <div>
-            <div style={{ fontWeight: 800, fontSize: 20 }}>{job.title}</div>
+            <div style={{ fontWeight: 800, fontSize: 22 }}>{job.title}</div>
             {job.status && (
-              <div className="status" style={{ marginTop: 6 }}>
+              <div className="status" style={{ marginTop: 8 }}>
                 {job.status}
               </div>
             )}
@@ -292,22 +319,22 @@ export default function JobDetails({ navigate, params, user }) {
         <div
           style={{
             marginTop: 4,
-            padding: "12px 14px",
+            padding: "14px 16px",
             background: "#f9fafb",
             borderRadius: 12,
             border: "1px solid #e5e7eb",
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
-            gap: 12,
+            gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))",
+            gap: 14,
           }}
         >
           <div>
-            <div style={LABEL_SM}>Start</div>
-            <div style={TEXT_MAIN}>{fmt(job.startTime)}</div>
+            <div style={LABEL_SM}>Date</div>
+            <div style={TEXT_MAIN}>{dateLine}</div>
           </div>
           <div>
-            <div style={LABEL_SM}>End</div>
-            <div style={TEXT_MAIN}>{fmt(job.endTime)}</div>
+            <div style={LABEL_SM}>Time</div>
+            <div style={TEXT_MAIN}>{timeLine}</div>
           </div>
           <div>
             <div style={LABEL_SM}>Venue</div>
@@ -326,7 +353,7 @@ export default function JobDetails({ navigate, params, user }) {
         {/* Description */}
         <div style={SECTION_DIVIDER}>
           <div style={LABEL_SM}>Description</div>
-          <div style={{ ...TEXT_MUTED, marginTop: 4 }}>
+          <div style={{ ...TEXT_MUTED, marginTop: 6 }}>
             {job.description || "-"}
           </div>
         </div>
@@ -334,7 +361,7 @@ export default function JobDetails({ navigate, params, user }) {
         {/* Transport */}
         <div style={SECTION_DIVIDER}>
           <div style={LABEL_SM}>Transport</div>
-          <div style={{ marginTop: 6 }}>
+          <div style={{ marginTop: 8 }}>
             {job.transportOptions?.bus || job.transportOptions?.own ? (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {job.transportOptions?.bus && (
@@ -344,7 +371,7 @@ export default function JobDetails({ navigate, params, user }) {
                       color: "#3730a3",
                       padding: "2px 8px",
                       borderRadius: 999,
-                      fontSize: 12,
+                      fontSize: 13,
                       fontWeight: 700,
                     }}
                   >
@@ -358,7 +385,7 @@ export default function JobDetails({ navigate, params, user }) {
                       color: "#155e75",
                       padding: "2px 8px",
                       borderRadius: 999,
-                      fontSize: 12,
+                      fontSize: 13,
                       fontWeight: 700,
                     }}
                   >
@@ -376,7 +403,7 @@ export default function JobDetails({ navigate, params, user }) {
             <div
               style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}
             >
-              ATAG Transport allowance: RM{pa} per person (if selected)
+              {/*ATAG Transport allowance: RM{pa} per person (if selected)*/}
             </div>
           )}
         </div>
@@ -386,13 +413,13 @@ export default function JobDetails({ navigate, params, user }) {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
-              gap: 16,
+              gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))",
+              gap: 18,
             }}
           >
             <div>
               <div style={LABEL_SM}>Early Call</div>
-              <div style={{ ...TEXT_MAIN, marginTop: 4 }}>
+              <div style={{ ...TEXT_MAIN, marginTop: 6 }}>
                 {ec?.enabled
                   ? `Yes · RM${Number(ec.amount || 0)}${
                       ec.thresholdHours
@@ -404,12 +431,11 @@ export default function JobDetails({ navigate, params, user }) {
             </div>
             <div>
               <div style={LABEL_SM}>Loading & Unloading</div>
-              <div style={{ ...TEXT_MAIN, marginTop: 4 }}>
+              <div style={{ ...TEXT_MAIN, marginTop: 6 }}>
                 {lu?.enabled
-                  ? `Yes · RM${Number(lu.price || 0)} / helper · Quota ${Number(
-                      lu.quota || 0
-                    )}`
+                  ? `Yes · RM${Number(lu.price || 0)}`
                   : "No"}
+                                 {/* / helper · Quota ${Number(lu.quota || 0)} */}
               </div>
             </div>
           </div>
@@ -420,7 +446,7 @@ export default function JobDetails({ navigate, params, user }) {
           <div
             style={{
               display: "flex",
-              gap: 16,
+              gap: 18,
               alignItems: "center",
               flexWrap: "wrap",
             }}
@@ -429,7 +455,7 @@ export default function JobDetails({ navigate, params, user }) {
               <strong>Hiring for</strong>
               <span style={{ marginLeft: 6 }}>{total} pax</span>
             </div>
-            <div style={{ ...TEXT_MUTED, fontSize: 12 }}>
+            <div style={{ ...TEXT_MUTED, fontSize: 13 }}>
               Approved: {approved}/{total} · Applied: {applied}
             </div>
           </div>
