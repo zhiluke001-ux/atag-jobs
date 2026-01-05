@@ -1,5 +1,5 @@
 // web/src/pages/Admin.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { apiGet, apiPost, apiGetBlob, apiPatch } from "../api";
 
 /* ---------------- helpers ---------------- */
@@ -36,44 +36,104 @@ const fmtRange = (start, end) => {
   }
 };
 
-/* ---- tiny UI helpers ---- */
-const Section = ({ title, children }) => (
-  <div className="card" style={{ padding: 14, borderRadius: 12 }}>
-    <div style={{ fontWeight: 800, marginBottom: 8 }}>{title}</div>
-    {children}
-  </div>
-);
-const Field = ({ label, children, hint }) => (
-  <div className="card" style={{ padding: 12 }}>
-    <div
-      style={{
-        fontSize: 12,
-        fontWeight: 600,
-        marginBottom: 6,
-        color: "#374151",
-      }}
-    >
-      {label}
+/* ---------------- UI (cleaner + less boxy) ---------------- */
+const styles = {
+  page: { paddingTop: 12, paddingBottom: 24 },
+  panel: {
+    background: "#fff",
+    border: "1px solid #e5e7eb",
+    borderRadius: 16,
+    padding: 16,
+    boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+  },
+  panelHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  h2: { fontWeight: 900, fontSize: 16, margin: 0, color: "#111827" },
+  sub: { fontSize: 12, color: "#6b7280", marginTop: 4 },
+  divider: { height: 1, background: "#eef2f7", margin: "14px 0" },
+  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
+  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 },
+  grid5: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 },
+  label: { fontSize: 12, fontWeight: 700, color: "#374151" },
+  input: {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #e5e7eb",
+    outline: "none",
+    background: "#fff",
+  },
+  select: {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #e5e7eb",
+    outline: "none",
+    background: "#fff",
+  },
+  tabRow: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 12,
+  },
+  tab: (active) => ({
+    padding: "8px 12px",
+    borderRadius: 999,
+    border: "1px solid " + (active ? "#111827" : "#e5e7eb"),
+    background: active ? "#111827" : "#fff",
+    color: active ? "#fff" : "#111827",
+    fontWeight: 800,
+    fontSize: 12,
+    cursor: "pointer",
+  }),
+  pill: (bg, color) => ({
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 800,
+    background: bg,
+    color,
+    border: "1px solid rgba(0,0,0,0.05)",
+  }),
+  details: {
+    border: "1px solid #eef2f7",
+    borderRadius: 14,
+    padding: 12,
+    background: "#fafafa",
+  },
+  summary: {
+    cursor: "pointer",
+    fontWeight: 900,
+    color: "#111827",
+    listStyle: "none",
+  },
+};
+
+const Panel = ({ title, subtitle, right, children }) => (
+  <div style={styles.panel}>
+    <div style={styles.panelHeader}>
+      <div>
+        <h2 style={styles.h2}>{title}</h2>
+        {subtitle ? <div style={styles.sub}>{subtitle}</div> : null}
+      </div>
+      {right || null}
     </div>
+    <div style={styles.divider} />
     {children}
-    {hint ? (
-      <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>{hint}</div>
-    ) : null}
   </div>
 );
-const Pill = ({ text, color = "#111827", bg = "#E5E7EB" }) => (
-  <span
-    style={{
-      padding: "3px 8px",
-      borderRadius: 999,
-      fontSize: 12,
-      fontWeight: 700,
-      background: bg,
-      color,
-    }}
-  >
-    {text}
-  </span>
+
+const Field = ({ label, hint, children }) => (
+  <div style={{ display: "grid", gap: 6 }}>
+    <div style={styles.label}>{label}</div>
+    {children}
+    {hint ? <div style={{ fontSize: 12, color: "#6b7280" }}>{hint}</div> : null}
+  </div>
 );
 
 /* ---------------- Global Defaults (local) ---------------- */
@@ -82,14 +142,12 @@ const defaultGlobal = {
   parkingAllowance: 0,
   earlyCall: { enabled: false, amount: 20, thresholdHours: 3 },
   loadingUnload: { enabled: false, price: 30, quota: 0 },
-
   hourly_by_role: {
     junior: { base: 20, otRatePerHour: 25 },
     senior: { base: 25, otRatePerHour: 30 },
     lead: { base: 30, otRatePerHour: 40 },
   },
   hourly_flat: { base: 20, otRatePerHour: 25 },
-
   session: {
     half_day: { jr: 60, sr: 80, lead: 100, jrEmcee: 44, srEmcee: 88 },
     full_day: { jr: 120, sr: 160, lead: 200, jrEmcee: 88, srEmcee: 168 },
@@ -130,23 +188,22 @@ const DEFAULT_2D1N = { jr: "300", sr: "400", lead: "500", jrEmcee: "0", srEmcee:
 const DEFAULT_3D2N = { jr: "450", sr: "600", lead: "750", jrEmcee: "0", srEmcee: "0" };
 
 export default function Admin({ navigate, user }) {
+  const [tab, setTab] = useState("defaults"); // defaults | job | payroll
+
   const [jobs, setJobs] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
 
-  // NEW: central user map (from /admin/users)
+  // Central user map (from /admin/users)
   const [userMap, setUserMap] = useState({});
 
   /* ---------- GLOBAL DEFAULTS STATE ---------- */
   const [globalCfg, setGlobalCfg] = useState(loadGlobalDefaults());
-
-  // top-level simple defaults
   const [gParking, setGParking] = useState(String(globalCfg.parkingAllowance ?? 0));
   const [gECAmount, setGECAmount] = useState(String(globalCfg.earlyCall?.amount ?? 20));
   const [gLDUPrice, setGLDUPrice] = useState(String(globalCfg.loadingUnload?.price ?? 30));
 
-  // global hourly (by role)
   const [gHrJr, setGHrJr] = useState(String(globalCfg.hourly_by_role.junior.base));
   const [gHrJrOT, setGHrJrOT] = useState(String(globalCfg.hourly_by_role.junior.otRatePerHour));
   const [gHrSr, setGHrSr] = useState(String(globalCfg.hourly_by_role.senior.base));
@@ -154,11 +211,9 @@ export default function Admin({ navigate, user }) {
   const [gHrLead, setGHrLead] = useState(String(globalCfg.hourly_by_role.lead.base));
   const [gHrLeadOT, setGHrLeadOT] = useState(String(globalCfg.hourly_by_role.lead.otRatePerHour));
 
-  // global hourly flat
   const [gFlat, setGFlat] = useState(String(globalCfg.hourly_flat.base));
   const [gFlatOT, setGFlatOT] = useState(String(globalCfg.hourly_flat.otRatePerHour));
 
-  // global session prices (host + emcee)
   const [gHalfJr, setGHalfJr] = useState(String(globalCfg.session.half_day.jr ?? DEFAULT_HALF.jr));
   const [gHalfSr, setGHalfSr] = useState(String(globalCfg.session.half_day.sr ?? DEFAULT_HALF.sr));
   const [gHalfLead, setGHalfLead] = useState(String(globalCfg.session.half_day.lead ?? DEFAULT_HALF.lead));
@@ -199,7 +254,6 @@ export default function Admin({ navigate, user }) {
         price: N(gLDUPrice, 0),
         quota: lduPrev.quota ?? 0,
       },
-
       hourly_by_role: {
         junior: { base: N(gHrJr, 0), otRatePerHour: N(gHrJrOT, 0) },
         senior: { base: N(gHrSr, 0), otRatePerHour: N(gHrSrOT, 0) },
@@ -295,7 +349,7 @@ export default function Admin({ navigate, user }) {
       .catch((e) => setError(String(e)));
   }, [user]);
 
-  // load central users for name/phone/email in wage summary
+  // Load central users for name/phone/email in wage summary
   useEffect(() => {
     if (!user || user.role !== "admin") return;
     apiGet("/admin/users")
@@ -307,7 +361,9 @@ export default function Admin({ navigate, user }) {
         });
         setUserMap(map);
       })
-      .catch((err) => console.warn("Failed to load user map in Admin wages:", err));
+      .catch((err) => {
+        console.warn("Failed to load user map in Admin wages:", err);
+      });
   }, [user]);
 
   /* ===== Infer helpers (like JobModal) ===== */
@@ -320,12 +376,9 @@ export default function Admin({ navigate, user }) {
   }
   function inferPhysTypeFromJob(j) {
     const kind = j?.rate?.sessionKind;
-    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind))
-      return kind;
+    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)) return kind;
     const legacy = j?.session?.physicalType || j?.physicalType || j?.physicalSubtype;
-    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy)
-      ? legacy
-      : "half_day";
+    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy) ? legacy : "half_day";
   }
 
   /* ===== Load selected job details ===== */
@@ -358,6 +411,7 @@ export default function Admin({ navigate, user }) {
         const anyPlusHourly = ["junior", "senior", "lead"].some((rk) => tr[rk]?.payMode === "specific_plus_hourly");
         setHourlyAddon(!!anyPlusHourly);
 
+        // Hourly by role / virtual
         setHrJr(String(tr.junior?.base ?? gl.hourly_by_role?.junior?.base ?? DEFAULT_HOURLY.jr));
         setHrSr(String(tr.senior?.base ?? gl.hourly_by_role?.senior?.base ?? DEFAULT_HOURLY.sr));
         setHrLead(String(tr.lead?.base ?? gl.hourly_by_role?.lead?.base ?? DEFAULT_HOURLY.lead));
@@ -365,9 +419,11 @@ export default function Admin({ navigate, user }) {
         setHrSrOT(String(tr.senior?.otRatePerHour ?? gl.hourly_by_role?.senior?.otRatePerHour ?? "0"));
         setHrLeadOT(String(tr.lead?.otRatePerHour ?? gl.hourly_by_role?.lead?.otRatePerHour ?? "0"));
 
+        // Flat hourly
         setFlatRate(String(flat.base ?? gl.hourly_flat?.base ?? DEFAULT_HOURLY.jr));
         setFlatOT(String(flat.otRatePerHour ?? gl.hourly_flat?.otRatePerHour ?? "0"));
 
+        // Session prices (host + emcee)
         setPHalfJr(String(tr.junior?.halfDay ?? gl.session?.half_day?.jr ?? DEFAULT_HALF.jr));
         setPHalfSr(String(tr.senior?.halfDay ?? gl.session?.half_day?.sr ?? DEFAULT_HALF.sr));
         setPHalfLead(String(tr.lead?.halfDay ?? gl.session?.half_day?.lead ?? DEFAULT_HALF.lead));
@@ -399,17 +455,13 @@ export default function Admin({ navigate, user }) {
 
   const headerPills = useMemo(() => {
     if (!job) return null;
-    return (
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <Pill text={job.status || "upcoming"} bg="#E5E7EB" color="#111827" />
-      </div>
-    );
+    return <span style={styles.pill("#f3f4f6", "#111827")}>{job.status || "upcoming"}</span>;
   }, [job]);
 
   if (!user || (user.role !== "admin" && user.role !== "pm")) {
     return (
-      <div className="container">
-        <div className="card">Admin/PM only.</div>
+      <div className="container" style={styles.page}>
+        <div style={styles.panel}>Admin/PM only.</div>
       </div>
     );
   }
@@ -433,6 +485,7 @@ export default function Admin({ navigate, user }) {
       };
     }
 
+    // Session variants
     const price = (tier) => {
       if (kind === "half_day") {
         if (tier === "jr") return N(pHalfJr);
@@ -527,14 +580,12 @@ export default function Admin({ navigate, user }) {
         physicalType: sessionMode === "physical" ? physicalType : null,
         hourlyEnabled: isSessionKind(physicalType) ? !!hourlyAddon : false,
       },
-
       mode: sessionMode,
       sessionMode,
       sessionKind: kind,
       physicalType: sessionMode === "physical" ? physicalType : null,
       physicalSubtype: sessionMode === "physical" ? physicalType : null,
       physicalHourlyEnabled: isSessionKind(physicalType) ? !!hourlyAddon : false,
-
       rate: {
         transportBus: N(parkingAllowance, 0),
         transportAllowance: N(parkingAllowance, 0),
@@ -542,15 +593,9 @@ export default function Admin({ navigate, user }) {
         sessionKind: kind,
         tierRates,
         ...(physicalType === "hourly_flat"
-          ? {
-              flatHourly: {
-                base: N(flatRate, 15),
-                otRatePerHour: N(flatOT, 0),
-              },
-            }
+          ? { flatHourly: { base: N(flatRate, 15), otRatePerHour: N(flatOT, 0) } }
           : {}),
       },
-
       allowances: {
         ...(job?.allowances || {}),
         parking: {
@@ -570,12 +615,12 @@ export default function Admin({ navigate, user }) {
     }
   }
 
-  /* ===== Wage Calculation (PART-TIMERS ONLY; full-timers excluded from display/pay) ===== */
+  /* ===== Wage Calculation (PART-TIMERS ONLY) ===== */
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({ employees: 0, hours: 0, wages: 0, jobs: 0 });
-
-  // per-person deductions (RM)
   const [deductions, setDeductions] = useState({});
+  const [search, setSearch] = useState("");
+
   const setDeduction = (uid, val) => {
     setDeductions((prev) => ({ ...prev, [uid]: Math.max(0, N(val, 0)) }));
   };
@@ -606,11 +651,6 @@ export default function Admin({ navigate, user }) {
     const apps = job.applications || [];
     const attendance = job.attendance || {};
 
-    // Identify full-timers so we can exclude them from wage display/pay here
-    const fullTimers = job.fullTimers || job.staff || job.fulltimeStaff || [];
-    const getStaffId = (s) => (s && (s.userId || s.id || s.email || s.phone || s.name)) || "";
-    const fullTimerIds = new Set((fullTimers || []).map(getStaffId).filter(Boolean));
-
     const outRows = [];
 
     const byUserTransport = new Map();
@@ -632,6 +672,7 @@ export default function Admin({ navigate, user }) {
     const lduOn = !!ldu.enabled;
     const lduPriceNum = N(ldu.price, 0);
     const lduHelpers = new Set(ldu.participants || []);
+
     const parkingAmt =
       (Number.isFinite(rate.parkingAllowance) ? rate.parkingAllowance : undefined) ??
       (Number.isFinite(rate.transportAllowance) ? rate.transportAllowance : undefined) ??
@@ -646,10 +687,8 @@ export default function Admin({ navigate, user }) {
       if (["junior", "jr"].includes(v)) return "junior";
       if (["senior", "sr"].includes(v)) return "senior";
       if (["lead", "lead host", "leader"].includes(v)) return "lead";
-      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc"))
-        return "junior_emcee";
-      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc"))
-        return "senior_emcee";
+      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc")) return "junior_emcee";
+      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc")) return "senior_emcee";
       if (v.includes("junior") && v.includes("marshal")) return "junior";
       if (v.includes("senior") && v.includes("marshal")) return "senior";
       return null;
@@ -658,22 +697,15 @@ export default function Admin({ navigate, user }) {
     const tierKeyForUser = (uid, appRec) => {
       const jobRoles = job.roleByUser || job.tierByUser || {};
       const raw =
-        (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) || jobRoles[uid];
+        (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) ||
+        jobRoles[uid];
 
       const mapped = mapRoleToTierKey(raw) || raw;
-      if (
-        mapped === "junior" ||
-        mapped === "senior" ||
-        mapped === "lead" ||
-        mapped === "junior_emcee" ||
-        mapped === "senior_emcee"
-      ) {
-        return mapped;
-      }
+      if (["junior", "senior", "lead", "junior_emcee", "senior_emcee"].includes(mapped)) return mapped;
       return "junior";
     };
 
-    const pushRowForPerson = (uid, appRec = {}) => {
+    const pushRowForPerson = (uid, appRec) => {
       const rec = attendance[uid] || {};
       const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
@@ -717,7 +749,6 @@ export default function Admin({ navigate, user }) {
       }
 
       let allowances = 0;
-
       const transport = byUserTransport.get(uid) || "Own Transport";
       if (transport === "ATAG Transport" || transport === "ATAG Bus") allowances += N(parkingAmt, 0);
 
@@ -726,7 +757,6 @@ export default function Admin({ navigate, user }) {
         const earlyHours = (scheduledStart - inTime) / HOUR_MS;
         if (earlyHours >= threshold) allowances += N(ec.amount, 0);
       }
-
       if (lduOn && lduHelpers.has(uid)) allowances += lduPriceNum;
 
       const gross = basePay + otPay + specificPay + allowances;
@@ -735,44 +765,24 @@ export default function Admin({ navigate, user }) {
 
       const appUser = (appRec && appRec.user) || {};
       const coreUser = userMap[uid] || {};
+
       const combinedAppName =
         appRec && (appRec.firstName || appRec.lastName)
           ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim()
           : "";
 
       const name =
-        pick(
-          coreUser.name,
-          coreUser.fullName,
-          coreUser.displayName,
-          appUser.name,
-          appUser.fullName,
-          appUser.displayName,
-          appRec && appRec.name,
-          appRec && appRec.fullName,
-          appRec && appRec.displayName,
-          combinedAppName
-        ) || uid;
+        pick(coreUser.name, coreUser.fullName, coreUser.displayName, appUser.name, appUser.fullName, appUser.displayName, appRec?.name, appRec?.fullName, appRec?.displayName, combinedAppName) ||
+        uid;
 
-      const phone =
-        pick(
-          coreUser.phone,
-          coreUser.phoneNumber,
-          appUser.phone,
-          appUser.phoneNumber,
-          appUser.contact,
-          appRec && appRec.phone,
-          appRec && appRec.phoneNumber,
-          appRec && appRec.contact
-        ) || "";
-
-      const email = pick(coreUser.email, appUser.email, appRec && appRec.email, uid) || uid;
+      const phone = pick(coreUser.phone, coreUser.phoneNumber, appUser.phone, appUser.phoneNumber, appUser.contact, appRec?.phone, appRec?.phoneNumber, appRec?.contact) || "-";
+      const email = pick(coreUser.email, appUser.email, appRec?.email, uid) || uid;
 
       outRows.push({
         userId: uid,
         name: name || "-",
         email,
-        phone: phone || "-",
+        phone,
         jobTitle: job.title,
         hours: Number(workedHours.toFixed(2)),
         transport,
@@ -786,37 +796,41 @@ export default function Admin({ navigate, user }) {
       });
     };
 
-    // PART-TIMERS ONLY:
+    // PART-TIMERS only: approved + optional attendance
     const participants = new Set();
     approved.forEach((uid) => participants.add(uid));
     Object.keys(attendance).forEach((uid) => participants.add(uid));
 
     participants.forEach((uid) => {
-      if (!approved.has(uid)) return;           // only approved
-      if (fullTimerIds.has(uid)) return;        // exclude full-timers from pay display
+      if (!approved.has(uid)) return;
       const appRec = apps.find((a) => a.userId === uid) || {};
       pushRowForPerson(uid, appRec);
     });
 
-    const sortedRows = [...outRows].sort((a, b) => {
-      const an = (a.name || "").toLowerCase();
-      const bn = (b.name || "").toLowerCase();
-      if (an < bn) return -1;
-      if (an > bn) return 1;
-      return 0;
-    });
+    const filtered = outRows
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      .filter((r) => {
+        if (!search.trim()) return true;
+        const q = search.trim().toLowerCase();
+        return (
+          (r.name || "").toLowerCase().includes(q) ||
+          (r.email || "").toLowerCase().includes(q) ||
+          (r.phone || "").toLowerCase().includes(q)
+        );
+      });
 
-    const employees = sortedRows.length;
-    const hoursSum = sortedRows.reduce((s, r) => s + r.hours, 0);
-    const wagesSum = sortedRows.reduce((s, r) => s + r.wageNet, 0);
-    setRows(sortedRows);
+    const employees = filtered.length;
+    const hoursSum = filtered.reduce((s, r) => s + r.hours, 0);
+    const wagesSum = filtered.reduce((s, r) => s + r.wageNet, 0);
+
+    setRows(filtered);
     setSummary({ employees, hours: hoursSum, wages: wagesSum, jobs: job ? 1 : 0 });
   }
 
   useEffect(() => {
     calcWages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job, deductions, userMap]);
+  }, [job, deductions, userMap, search]);
 
   async function exportPayrollCSV() {
     if (!rows.length) {
@@ -856,66 +870,54 @@ export default function Admin({ navigate, user }) {
     URL.revokeObjectURL(url);
   }
 
-  /* ===== UI blocks (mirrors JobModal payment editors) ===== */
+  /* ===== UI blocks (payment editors) ===== */
   const HourlySimpleGrid = ({ title }) => (
-    <div className="card" style={{ padding: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: 8,
-          fontSize: 12,
-          color: "#6b7280",
-          marginBottom: 4,
-        }}
-      >
-        <div>Role</div>
-        <div>Rate (RM/hr)</div>
-        <div>OT Rate (RM/hr)</div>
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ fontWeight: 900 }}>{title}</div>
+      <div style={styles.grid3}>
+        <Field label="Junior Rate (RM/hr)">
+          <input style={styles.input} value={hrJr} onChange={(e) => setHrJr(e.target.value)} inputMode="decimal" />
+        </Field>
+        <Field label="Junior OT (RM/hr)">
+          <input style={styles.input} value={hrJrOT} onChange={(e) => setHrJrOT(e.target.value)} inputMode="decimal" />
+        </Field>
+        <div />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Junior</div>
-        <input value={hrJr} onChange={(e) => setHrJr(e.target.value)} inputMode="decimal" />
-        <input value={hrJrOT} onChange={(e) => setHrJrOT(e.target.value)} inputMode="decimal" />
+      <div style={styles.grid3}>
+        <Field label="Senior Rate (RM/hr)">
+          <input style={styles.input} value={hrSr} onChange={(e) => setHrSr(e.target.value)} inputMode="decimal" />
+        </Field>
+        <Field label="Senior OT (RM/hr)">
+          <input style={styles.input} value={hrSrOT} onChange={(e) => setHrSrOT(e.target.value)} inputMode="decimal" />
+        </Field>
+        <div />
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Senior</div>
-        <input value={hrSr} onChange={(e) => setHrSr(e.target.value)} inputMode="decimal" />
-        <input value={hrSrOT} onChange={(e) => setHrSrOT(e.target.value)} inputMode="decimal" />
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-        <div style={{ display: "flex", alignItems: "center", fontWeight: 600 }}>Lead Host</div>
-        <input value={hrLead} onChange={(e) => setHrLead(e.target.value)} inputMode="decimal" />
-        <input value={hrLeadOT} onChange={(e) => setHrLeadOT(e.target.value)} inputMode="decimal" />
+      <div style={styles.grid3}>
+        <Field label="Lead Host Rate (RM/hr)">
+          <input style={styles.input} value={hrLead} onChange={(e) => setHrLead(e.target.value)} inputMode="decimal" />
+        </Field>
+        <Field label="Lead OT (RM/hr)">
+          <input style={styles.input} value={hrLeadOT} onChange={(e) => setHrLeadOT(e.target.value)} inputMode="decimal" />
+        </Field>
+        <div />
       </div>
     </div>
   );
 
   const FlatHourlyBlock = () => (
-    <div className="card" style={{ padding: 12 }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Backend (flat hourly for everyone)</div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 8,
-          fontSize: 12,
-          color: "#6b7280",
-          marginBottom: 4,
-        }}
-      >
-        <div>Rate (RM/hr)</div>
-        <div>OT Rate (RM/hr)</div>
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ fontWeight: 900 }}>Backend (flat hourly for everyone)</div>
+      <div style={styles.grid2}>
+        <Field label="Rate (RM/hr)">
+          <input style={styles.input} value={flatRate} onChange={(e) => setFlatRate(e.target.value)} inputMode="decimal" />
+        </Field>
+        <Field label="OT Rate (RM/hr)">
+          <input style={styles.input} value={flatOT} onChange={(e) => setFlatOT(e.target.value)} inputMode="decimal" />
+        </Field>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        <input value={flatRate} onChange={(e) => setFlatRate(e.target.value)} inputMode="decimal" />
-        <input value={flatOT} onChange={(e) => setFlatOT(e.target.value)} inputMode="decimal" />
-      </div>
-      <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+      <div style={{ fontSize: 12, color: "#6b7280" }}>
         Everyone is paid the same hourly and OT rate regardless of role.
       </div>
     </div>
@@ -931,472 +933,467 @@ export default function Admin({ navigate, user }) {
     const show2d1n = physicalType === "2d1n";
     const show3d2n = physicalType === "3d2n";
 
+    const SessionGrid = ({ title, v, setV, w, setW, x, setX, y, setY, z, setZ }) => (
+      <div style={{ display: "grid", gap: 10 }}>
+        <div style={{ fontWeight: 900 }}>{title}</div>
+        <div style={styles.grid5}>
+          <Field label="Junior (RM)">
+            <input style={styles.input} value={v} onChange={(e) => setV(e.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Senior (RM)">
+            <input style={styles.input} value={w} onChange={(e) => setW(e.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Lead Host (RM)">
+            <input style={styles.input} value={x} onChange={(e) => setX(e.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Junior Emcee (RM)">
+            <input style={styles.input} value={y} onChange={(e) => setY(e.target.value)} inputMode="decimal" />
+          </Field>
+          <Field label="Senior Emcee (RM)">
+            <input style={styles.input} value={z} onChange={(e) => setZ(e.target.value)} inputMode="decimal" />
+          </Field>
+        </div>
+      </div>
+    );
+
     return (
-      <div className="card" style={{ padding: 12 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Session payment (Physical)</div>
-
+      <div style={{ display: "grid", gap: 14 }}>
         {showHalf && (
-          <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>Half Day (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-                <input value={pHalfJr} onChange={(e) => setPHalfJr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-                <input value={pHalfSr} onChange={(e) => setPHalfSr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-                <input value={pHalfLead} onChange={(e) => setPHalfLead(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior Emcee (RM)</div>
-                <input value={pHalfJrEmcee} onChange={(e) => setPHalfJrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior Emcee (RM)</div>
-                <input value={pHalfSrEmcee} onChange={(e) => setPHalfSrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-            </div>
-          </div>
+          <SessionGrid
+            title="Half Day (per person)"
+            v={pHalfJr}
+            setV={setPHalfJr}
+            w={pHalfSr}
+            setW={setPHalfSr}
+            x={pHalfLead}
+            setX={setPHalfLead}
+            y={pHalfJrEmcee}
+            setY={setPHalfJrEmcee}
+            z={pHalfSrEmcee}
+            setZ={setPHalfSrEmcee}
+          />
         )}
-
         {showFull && (
-          <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>Full Day (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-                <input value={pFullJr} onChange={(e) => setPFullJr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-                <input value={pFullSr} onChange={(e) => setPFullSr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-                <input value={pFullLead} onChange={(e) => setPFullLead(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior Emcee (RM)</div>
-                <input value={pFullJrEmcee} onChange={(e) => setPFullJrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior Emcee (RM)</div>
-                <input value={pFullSrEmcee} onChange={(e) => setPFullSrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-            </div>
-          </div>
+          <SessionGrid
+            title="Full Day (per person)"
+            v={pFullJr}
+            setV={setPFullJr}
+            w={pFullSr}
+            setW={setPFullSr}
+            x={pFullLead}
+            setX={setPFullLead}
+            y={pFullJrEmcee}
+            setY={setPFullJrEmcee}
+            z={pFullSrEmcee}
+            setZ={setPFullSrEmcee}
+          />
         )}
-
         {show2d1n && (
-          <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>2D1N (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-                <input value={p2d1nJr} onChange={(e) => setP2d1nJr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-                <input value={p2d1nSr} onChange={(e) => setP2d1nSr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-                <input value={p2d1nLead} onChange={(e) => setP2d1nLead(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior Emcee (RM)</div>
-                <input value={p2d1nJrEmcee} onChange={(e) => setP2d1nJrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior Emcee (RM)</div>
-                <input value={p2d1nSrEmcee} onChange={(e) => setP2d1nSrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-            </div>
-          </div>
+          <SessionGrid
+            title="2D1N (per person)"
+            v={p2d1nJr}
+            setV={setP2d1nJr}
+            w={p2d1nSr}
+            setW={setP2d1nSr}
+            x={p2d1nLead}
+            setX={setP2d1nLead}
+            y={p2d1nJrEmcee}
+            setY={setP2d1nJrEmcee}
+            z={p2d1nSrEmcee}
+            setZ={setP2d1nSrEmcee}
+          />
         )}
-
         {show3d2n && (
-          <div>
-            <div style={{ marginBottom: 8, fontWeight: 600 }}>3D2N (per person)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior (RM)</div>
-                <input value={p3d2nJr} onChange={(e) => setP3d2nJr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior (RM)</div>
-                <input value={p3d2nSr} onChange={(e) => setP3d2nSr(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Lead Host (RM)</div>
-                <input value={p3d2nLead} onChange={(e) => setP3d2nLead(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Junior Emcee (RM)</div>
-                <input value={p3d2nJrEmcee} onChange={(e) => setP3d2nJrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Senior Emcee (RM)</div>
-                <input value={p3d2nSrEmcee} onChange={(e) => setP3d2nSrEmcee(e.target.value)} inputMode="decimal" />
-              </div>
-            </div>
-          </div>
+          <SessionGrid
+            title="3D2N (per person)"
+            v={p3d2nJr}
+            setV={setP3d2nJr}
+            w={p3d2nSr}
+            setW={setP3d2nSr}
+            x={p3d2nLead}
+            setX={setP3d2nLead}
+            y={p3d2nJrEmcee}
+            setY={setP3d2nJrEmcee}
+            z={p3d2nSrEmcee}
+            setZ={setP3d2nSrEmcee}
+          />
         )}
 
-        <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", gap: 10, alignItems: "center" }}>
-          <input id="hourlyToggle" type="checkbox" checked={hourlyAddon} onChange={(e) => setHourlyAddon(e.target.checked)} />
-          <label htmlFor="hourlyToggle" style={{ userSelect: "none" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <input
+            id="hourlyToggle"
+            type="checkbox"
+            checked={hourlyAddon}
+            onChange={(e) => setHourlyAddon(e.target.checked)}
+          />
+          <label htmlFor="hourlyToggle" style={{ userSelect: "none", fontWeight: 800 }}>
             Enable hourly add-on (in addition to session price)
           </label>
         </div>
 
-        {hourlyAddon && (
-          <div className="card" style={{ marginTop: 12, padding: 12, background: "#f8fafc" }}>
+        {hourlyAddon ? (
+          <div style={{ border: "1px dashed #e5e7eb", borderRadius: 14, padding: 12, background: "#fafafa" }}>
             <HourlySimpleGrid title="Hourly add-on (Physical)" />
           </div>
-        )}
+        ) : null}
       </div>
     );
   };
 
   return (
-    <div className="container" style={{ paddingTop: 12 }}>
-      {error && (
-        <div className="card" style={{ background: "#fff4f4", color: "#b00" }}>
+    <div className="container" style={styles.page}>
+      {error ? (
+        <div style={{ ...styles.panel, borderColor: "#fecaca", background: "#fff1f2", color: "#b91c1c" }}>
           {String(error)}
         </div>
-      )}
+      ) : null}
+
+      {/* Tabs */}
+      <div style={styles.tabRow}>
+        <button style={styles.tab(tab === "defaults")} onClick={() => setTab("defaults")}>
+          Global Defaults
+        </button>
+        <button style={styles.tab(tab === "job")} onClick={() => setTab("job")}>
+          Rate & Job Config
+        </button>
+        <button style={styles.tab(tab === "payroll")} onClick={() => setTab("payroll")}>
+          Payroll
+        </button>
+      </div>
 
       {/* ---------------- GLOBAL WAGE DEFAULTS ---------------- */}
-      <Section title="Global Wage Defaults (used by JobModal as starting values)">
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 3fr", gap: 12 }}>
-          <Field label="Default Parking Allowance (RM)">
-            <input inputMode="decimal" value={gParking} onChange={(e) => setGParking(e.target.value)} />
-          </Field>
+      {tab === "defaults" && (
+        <Panel
+          title="Global Wage Defaults"
+          subtitle="Used by JobModal as starting values (cleaner view — collapsible sections)."
+          right={
+            <button className="btn primary" onClick={saveGlobal}>
+              Save Defaults
+            </button>
+          }
+        >
+          <div style={styles.grid2}>
+            <Field label="Default Parking Allowance (RM)">
+              <input style={styles.input} inputMode="decimal" value={gParking} onChange={(e) => setGParking(e.target.value)} />
+            </Field>
 
-          <div className="card" style={{ padding: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "grid", gap: 10 }}>
               <Field label="Early Call Amount (RM)">
-                <input inputMode="decimal" value={gECAmount} onChange={(e) => setGECAmount(e.target.value)} />
+                <input style={styles.input} inputMode="decimal" value={gECAmount} onChange={(e) => setGECAmount(e.target.value)} />
               </Field>
               <Field label="Loading & Unloading (RM / helper)">
-                <input inputMode="decimal" value={gLDUPrice} onChange={(e) => setGLDUPrice(e.target.value)} />
-              </Field>
-            </div>
-          </div>
-        </div>
-
-        <Section title="Hourly (by role) — Defaults">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
-            <div>Role</div>
-            <div>Rate (RM/hr)</div>
-            <div>OT Rate (RM/hr)</div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontWeight: 600, display: "flex", alignItems: "center" }}>Junior</div>
-            <input inputMode="decimal" value={gHrJr} onChange={(e) => setGHrJr(e.target.value)} />
-            <input inputMode="decimal" value={gHrJrOT} onChange={(e) => setGHrJrOT(e.target.value)} />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 6 }}>
-            <div style={{ fontWeight: 600, display: "flex", alignItems: "center" }}>Senior</div>
-            <input inputMode="decimal" value={gHrSr} onChange={(e) => setGHrSr(e.target.value)} />
-            <input inputMode="decimal" value={gHrSrOT} onChange={(e) => setGHrSrOT(e.target.value)} />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-            <div style={{ fontWeight: 600, display: "flex", alignItems: "center" }}>Lead Host</div>
-            <input inputMode="decimal" value={gHrLead} onChange={(e) => setGHrLead(e.target.value)} />
-            <input inputMode="decimal" value={gHrLeadOT} onChange={(e) => setGHrLeadOT(e.target.value)} />
-          </div>
-        </Section>
-
-        <Section title="Backend (flat hourly for all) — Defaults">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
-            <div>Rate (RM/hr)</div>
-            <div>OT Rate (RM/hr)</div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <input inputMode="decimal" value={gFlat} onChange={(e) => setGFlat(e.target.value)} />
-            <input inputMode="decimal" value={gFlatOT} onChange={(e) => setGFlatOT(e.target.value)} />
-          </div>
-        </Section>
-
-        {/* Session defaults (same as your original) */}
-        <Section title="Session (specific payment per person) — Defaults">
-          {/* Half Day */}
-          <div className="card" style={{ padding: 10, marginBottom: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Half Day</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)">
-                <input inputMode="decimal" value={gHalfJr} onChange={(e) => setGHalfJr(e.target.value)} />
-              </Field>
-              <Field label="Senior (RM)">
-                <input inputMode="decimal" value={gHalfSr} onChange={(e) => setGHalfSr(e.target.value)} />
-              </Field>
-              <Field label="Lead Host (RM)">
-                <input inputMode="decimal" value={gHalfLead} onChange={(e) => setGHalfLead(e.target.value)} />
-              </Field>
-              <Field label="Junior Emcee (RM)">
-                <input inputMode="decimal" value={gHalfJrEmcee} onChange={(e) => setGHalfJrEmcee(e.target.value)} />
-              </Field>
-              <Field label="Senior Emcee (RM)">
-                <input inputMode="decimal" value={gHalfSrEmcee} onChange={(e) => setGHalfSrEmcee(e.target.value)} />
+                <input style={styles.input} inputMode="decimal" value={gLDUPrice} onChange={(e) => setGLDUPrice(e.target.value)} />
               </Field>
             </div>
           </div>
 
-          {/* Full Day */}
-          <div className="card" style={{ padding: 10, marginBottom: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>Full Day</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)">
-                <input inputMode="decimal" value={gFullJr} onChange={(e) => setGFullJr(e.target.value)} />
-              </Field>
-              <Field label="Senior (RM)">
-                <input inputMode="decimal" value={gFullSr} onChange={(e) => setGFullSr(e.target.value)} />
-              </Field>
-              <Field label="Lead Host (RM)">
-                <input inputMode="decimal" value={gFullLead} onChange={(e) => setGFullLead(e.target.value)} />
-              </Field>
-              <Field label="Junior Emcee (RM)">
-                <input inputMode="decimal" value={gFullJrEmcee} onChange={(e) => setGFullJrEmcee(e.target.value)} />
-              </Field>
-              <Field label="Senior Emcee (RM)">
-                <input inputMode="decimal" value={gFullSrEmcee} onChange={(e) => setGFullSrEmcee(e.target.value)} />
-              </Field>
-            </div>
-          </div>
+          <div style={{ height: 12 }} />
 
-          {/* 2D1N */}
-          <div className="card" style={{ padding: 10, marginBottom: 8 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>2D1N</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)">
-                <input inputMode="decimal" value={g2d1nJr} onChange={(e) => setG2d1nJr(e.target.value)} />
-              </Field>
-              <Field label="Senior (RM)">
-                <input inputMode="decimal" value={g2d1nSr} onChange={(e) => setG2d1nSr(e.target.value)} />
-              </Field>
-              <Field label="Lead Host (RM)">
-                <input inputMode="decimal" value={g2d1nLead} onChange={(e) => setG2d1nLead(e.target.value)} />
-              </Field>
-              <Field label="Junior Emcee (RM)">
-                <input inputMode="decimal" value={g2d1nJrEmcee} onChange={(e) => setG2d1nJrEmcee(e.target.value)} />
-              </Field>
-              <Field label="Senior Emcee (RM)">
-                <input inputMode="decimal" value={g2d1nSrEmcee} onChange={(e) => setG2d1nSrEmcee(e.target.value)} />
-              </Field>
-            </div>
-          </div>
-
-          {/* 3D2N */}
-          <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>3D2N</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
-              <Field label="Junior (RM)">
-                <input inputMode="decimal" value={g3d2nJr} onChange={(e) => setG3d2nJr(e.target.value)} />
-              </Field>
-              <Field label="Senior (RM)">
-                <input inputMode="decimal" value={g3d2nSr} onChange={(e) => setG3d2nSr(e.target.value)} />
-              </Field>
-              <Field label="Lead Host (RM)">
-                <input inputMode="decimal" value={g3d2nLead} onChange={(e) => setG3d2nLead(e.target.value)} />
-              </Field>
-              <Field label="Junior Emcee (RM)">
-                <input inputMode="decimal" value={g3d2nJrEmcee} onChange={(e) => setG3d2nJrEmcee(e.target.value)} />
-              </Field>
-              <Field label="Senior Emcee (RM)">
-                <input inputMode="decimal" value={g3d2nSrEmcee} onChange={(e) => setG3d2nSrEmcee(e.target.value)} />
-              </Field>
-            </div>
-          </div>
-        </Section>
-
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn primary" onClick={saveGlobal}>
-            Save Defaults
-          </button>
-        </div>
-      </Section>
-
-      {/* ---------------- RATE & JOB CONFIGURATION ---------------- */}
-      <Section title="Rate & Job Configuration">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <div style={{ display: "grid", gap: 6 }}>
-            <select
-              value={selectedId}
-              onChange={(e) => setSelectedId(e.target.value)}
-              style={{ width: 360, padding: 10, borderRadius: 8 }}
-            >
-              <option value="">Select a job…</option>
-              {jobs.map((j) => (
-                <option key={j.id} value={j.id}>
-                  {j.title}
-                </option>
-              ))}
-            </select>
-
-            {job && (
-              <div style={{ fontSize: 12, color: "#6b7280" }}>
-                <div>
-                  <b>Venue:</b> {job.venue || "-"}
-                </div>
-                <div>
-                  <b>When:</b> {fmtRange(job.startTime, job.endTime)}
-                </div>
+          <details style={styles.details} open>
+            <summary style={styles.summary}>Hourly (by role)</summary>
+            <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+              <div style={styles.grid3}>
+                <Field label="Junior Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrJr} onChange={(e) => setGHrJr(e.target.value)} />
+                </Field>
+                <Field label="Junior OT (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrJrOT} onChange={(e) => setGHrJrOT(e.target.value)} />
+                </Field>
+                <div />
               </div>
-            )}
-          </div>
 
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {headerPills}
-            <button className="btn primary" onClick={saveConfig} disabled={!job}>
-              Save Configuration
-            </button>
-          </div>
-        </div>
+              <div style={styles.grid3}>
+                <Field label="Senior Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrSr} onChange={(e) => setGHrSr(e.target.value)} />
+                </Field>
+                <Field label="Senior OT (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrSrOT} onChange={(e) => setGHrSrOT(e.target.value)} />
+                </Field>
+                <div />
+              </div>
 
-        {job && (
-          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-            <div className="card" style={{ padding: 12 }}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: sessionMode === "physical" ? "1fr 1fr" : "1fr",
-                  gap: 12,
-                }}
+              <div style={styles.grid3}>
+                <Field label="Lead Host Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrLead} onChange={(e) => setGHrLead(e.target.value)} />
+                </Field>
+                <Field label="Lead OT (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrLeadOT} onChange={(e) => setGHrLeadOT(e.target.value)} />
+                </Field>
+                <div />
+              </div>
+            </div>
+          </details>
+
+          <div style={{ height: 10 }} />
+
+          <details style={styles.details}>
+            <summary style={styles.summary}>Backend (flat hourly for all)</summary>
+            <div style={{ marginTop: 12 }}>
+              <div style={styles.grid2}>
+                <Field label="Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gFlat} onChange={(e) => setGFlat(e.target.value)} />
+                </Field>
+                <Field label="OT Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gFlatOT} onChange={(e) => setGFlatOT(e.target.value)} />
+                </Field>
+              </div>
+            </div>
+          </details>
+
+          <div style={{ height: 10 }} />
+
+          <details style={styles.details}>
+            <summary style={styles.summary}>Session (specific payment per person)</summary>
+            <div style={{ marginTop: 12, display: "grid", gap: 14 }}>
+              <div style={{ fontWeight: 900 }}>Half Day</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJr} onChange={(e) => setGHalfJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSr} onChange={(e) => setGHalfSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gHalfLead} onChange={(e) => setGHalfLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJrEmcee} onChange={(e) => setGHalfJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSrEmcee} onChange={(e) => setGHalfSrEmcee(e.target.value)} /></Field>
+              </div>
+
+              <div style={{ fontWeight: 900 }}>Full Day</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gFullJr} onChange={(e) => setGFullJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gFullSr} onChange={(e) => setGFullSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gFullLead} onChange={(e) => setGFullLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullJrEmcee} onChange={(e) => setGFullJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullSrEmcee} onChange={(e) => setGFullSrEmcee(e.target.value)} /></Field>
+              </div>
+
+              <div style={{ fontWeight: 900 }}>2D1N</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJr} onChange={(e) => setG2d1nJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSr} onChange={(e) => setG2d1nSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nLead} onChange={(e) => setG2d1nLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJrEmcee} onChange={(e) => setG2d1nJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSrEmcee} onChange={(e) => setG2d1nSrEmcee(e.target.value)} /></Field>
+              </div>
+
+              <div style={{ fontWeight: 900 }}>3D2N</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJr} onChange={(e) => setG3d2nJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSr} onChange={(e) => setG3d2nSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nLead} onChange={(e) => setG3d2nLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJrEmcee} onChange={(e) => setG3d2nJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSrEmcee} onChange={(e) => setG3d2nSrEmcee(e.target.value)} /></Field>
+              </div>
+            </div>
+          </details>
+        </Panel>
+      )}
+
+      {/* ---------------- RATE & JOB CONFIG ---------------- */}
+      {tab === "job" && (
+        <Panel
+          title="Rate & Job Configuration"
+          subtitle="Per-job wage settings (same meaning as JobModal), but cleaner layout."
+          right={
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {headerPills}
+              <button className="btn primary" onClick={saveConfig} disabled={!job}>
+                Save Configuration
+              </button>
+            </div>
+          }
+        >
+          <div style={styles.grid2}>
+            <Field label="Select Job">
+              <select
+                style={styles.select}
+                value={selectedId}
+                onChange={(e) => setSelectedId(e.target.value)}
               >
-                <div>
-                  <div style={{ fontSize: 12, fontWeight: 600 }}>Session Type</div>
-                  <select value={sessionMode} onChange={(e) => setSessionMode(e.target.value)}>
+                <option value="">Select a job…</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.title}
+                  </option>
+                ))}
+              </select>
+              {job ? (
+                <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                  <div><b>Venue:</b> {job.venue || "-"}</div>
+                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
+                </div>
+              ) : null}
+            </Field>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={styles.grid2}>
+                <Field label="Session Type">
+                  <select style={styles.select} value={sessionMode} onChange={(e) => setSessionMode(e.target.value)}>
                     <option value="virtual">Virtual</option>
                     <option value="physical">Physical</option>
                   </select>
-                </div>
+                </Field>
 
-                {sessionMode === "physical" && (
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>Physical Subtype</div>
-                    <select value={physicalType} onChange={(e) => setPhysicalType(e.target.value)}>
-                      <option value="half_day">Half Day</option>
-                      <option value="full_day">Full Day</option>
-                      <option value="2d1n">2D1N</option>
-                      <option value="3d2n">3D2N</option>
-                      <option value="hourly_by_role">Hourly (by role)</option>
-                      <option value="hourly_flat">Backend (flat hourly for all)</option>
-                    </select>
-                  </div>
-                )}
+                <Field label="Physical Subtype">
+                  <select
+                    style={styles.select}
+                    value={physicalType}
+                    onChange={(e) => setPhysicalType(e.target.value)}
+                    disabled={sessionMode !== "physical"}
+                  >
+                    <option value="half_day">Half Day</option>
+                    <option value="full_day">Full Day</option>
+                    <option value="2d1n">2D1N</option>
+                    <option value="3d2n">3D2N</option>
+                    <option value="hourly_by_role">Hourly (by role)</option>
+                    <option value="hourly_flat">Backend (flat hourly for all)</option>
+                  </select>
+                </Field>
               </div>
+
+              <Field
+                label="Parking Allowance (RM)"
+                hint={
+                  job?.transportOptions?.bus
+                    ? "Applied only when ATAG Transport is selected."
+                    : "ATAG Transport isn't enabled on this job — allowance won’t apply."
+                }
+              >
+                <input
+                  style={styles.input}
+                  inputMode="decimal"
+                  value={parkingAllowance}
+                  onChange={(e) => setParkingAllowance(e.target.value)}
+                />
+              </Field>
             </div>
-
-            <Field
-              label="Parking Allowance (RM, when ATAG Transport is selected)"
-              hint={
-                job?.transportOptions?.bus
-                  ? "Applied to applicants who choose ATAG Transport."
-                  : "ATAG Transport isn't enabled on this job — allowance won’t apply."
-              }
-            >
-              <input
-                type="text"
-                inputMode="decimal"
-                value={parkingAllowance}
-                onChange={(e) => setParkingAllowance(e.target.value)}
-              />
-            </Field>
-
-            <Section title="Wage Settings (matches JobModal)">
-              <PaymentBlock />
-            </Section>
           </div>
-        )}
-      </Section>
 
-      {/* Wage Summary (AUTO) — PART-TIMERS ONLY */}
-      <div className="card" style={{ marginTop: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontWeight: 700 }}>Wage Summary (auto-calculated)</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            {job && (
+          <div style={{ height: 14 }} />
+
+          <div style={{ border: "1px solid #eef2f7", borderRadius: 16, padding: 14 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Wage Settings (matches JobModal)</div>
+            <PaymentBlock />
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280" }}>
+            Note: Payroll tab shows <b>part-timers only</b> (full-timers removed as requested).
+          </div>
+        </Panel>
+      )}
+
+      {/* ---------------- PAYROLL ---------------- */}
+      {tab === "payroll" && (
+        <Panel
+          title="Payroll Summary"
+          subtitle="Auto-calculated (part-timers only). Use deductions if needed, then export CSV."
+          right={
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>
                 Export to CSV
               </button>
-            )}
-          </div>
-        </div>
+            </div>
+          }
+        >
+          <div style={styles.grid2}>
+            <Field label="Selected Job">
+              <select
+                style={styles.select}
+                value={selectedId}
+                onChange={(e) => setSelectedId(e.target.value)}
+              >
+                <option value="">Select a job…</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.title}
+                  </option>
+                ))}
+              </select>
+              {job ? (
+                <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
+                  <div><b>Status:</b> {job.status || "-"}</div>
+                </div>
+              ) : null}
+            </Field>
 
-        <div style={{ overflowX: "auto", marginTop: 8 }}>
-          <table width="100%" cellPadding="8" style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #ddd" }}>
-                <th align="left">Name</th>
-                <th align="left">Email</th>
-                <th align="left">Phone</th>
-                <th align="left">Job</th>
-                <th align="right">Hours</th>
-                <th align="left">Transport</th>
-                <th align="right">Base</th>
-                <th align="right">OT</th>
-                <th align="right">Specific</th>
-                <th align="right">Allowances</th>
-                <th align="right">Deduct (RM)</th>
-                <th align="right">Net Pay</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.userId} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                  <td>{r.name}</td>
-                  <td>{r.email}</td>
-                  <td>{r.phone}</td>
-                  <td>{r.jobTitle}</td>
-                  <td align="right">{r.hours.toFixed(2)}</td>
-                  <td>{r.transport}</td>
-                  <td align="right">{money(r._basePay)}</td>
-                  <td align="right">{money(r._otPay)}</td>
-                  <td align="right">{money(r._specific)}</td>
-                  <td align="right">{money(r._allowances)}</td>
-                  <td align="right" style={{ minWidth: 100 }}>
-                    <input
-                      inputMode="decimal"
-                      value={String(deductions[r.userId] ?? 0)}
-                      onChange={(e) => setDeduction(r.userId, e.target.value)}
-                      style={{ width: 90, textAlign: "right" }}
-                    />
-                  </td>
-                  <td align="right">
-                    <b>{money(r.wageNet)}</b>
-                  </td>
-                </tr>
-              ))}
-              {!rows.length && (
-                <tr>
-                  <td colSpan={12} style={{ opacity: 0.6 }}>
-                    Select a job to view auto-calculated wages.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div style={{ marginTop: 10, fontSize: 14, opacity: 0.9 }}>
-          <div>
-            <strong>Totals</strong>
+            <Field label="Search">
+              <input
+                style={styles.input}
+                placeholder="Search name / email / phone…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </Field>
           </div>
-          <div>Total Employees: {summary.employees}</div>
-          <div>Total Hours: {summary.hours.toFixed(2)}</div>
-          <div>Total Net Wages: {money(summary.wages)}</div>
-          <div>Jobs Included: {summary.jobs}</div>
-        </div>
-      </div>
+
+          <div style={{ height: 12 }} />
+
+          <div style={{ overflowX: "auto", border: "1px solid #eef2f7", borderRadius: 16 }}>
+            <table width="100%" cellPadding="10" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
+              <thead>
+                <tr style={{ background: "#f9fafb" }}>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Name</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Email</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Phone</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Job</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Hours</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Transport</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Base</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>OT</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Specific</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Allowances</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Deduct</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.userId} style={{ borderTop: "1px solid #eef2f7" }}>
+                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.name}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.email}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.phone}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.jobTitle}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{r.hours.toFixed(2)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.transport}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._basePay)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._otPay)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._specific)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._allowances)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                      <input
+                        style={{ ...styles.input, width: 90, textAlign: "right", padding: "8px 10px" }}
+                        inputMode="decimal"
+                        value={String(deductions[r.userId] ?? 0)}
+                        onChange={(e) => setDeduction(r.userId, e.target.value)}
+                      />
+                    </td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                      <span style={{ fontWeight: 900 }}>{money(r.wageNet)}</span>
+                    </td>
+                  </tr>
+                ))}
+                {!job ? (
+                  <tr>
+                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
+                      Select a job to view payroll.
+                    </td>
+                  </tr>
+                ) : !rows.length ? (
+                  <tr>
+                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
+                      No approved part-timers found (or filtered out by search).
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ marginTop: 12, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, color: "#111827" }}>
+            <span style={styles.pill("#eef2ff", "#3730a3")}>Employees: {summary.employees}</span>
+            <span style={styles.pill("#ecfeff", "#155e75")}>Hours: {summary.hours.toFixed(2)}</span>
+            <span style={styles.pill("#f0fdf4", "#166534")}>Total Net: {money(summary.wages)}</span>
+            <span style={styles.pill("#f3f4f6", "#111827")}>Jobs: {summary.jobs}</span>
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }
