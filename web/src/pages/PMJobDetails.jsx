@@ -176,6 +176,78 @@ async function apiGetFallback(urls, fallbackValue) {
   return fallbackValue;
 }
 
+/* Applicants table (3 sections) */
+function ApplicantsTable({ title, rows, onApprove, onReject }) {
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div style={{ fontWeight: 800, marginBottom: 8 }}>
+        {title} <span style={{ color: "#6b7280", fontWeight: 600 }}>({rows.length})</span>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+              <th style={{ textAlign: "left", padding: "10px 8px", width: 60 }}>No.</th>
+              <th style={{ textAlign: "left", padding: "10px 8px" }}>Email</th>
+              <th style={{ textAlign: "left", padding: "10px 8px" }}>Name</th>
+              <th style={{ textAlign: "left", padding: "10px 8px" }}>Phone</th>
+              <th style={{ textAlign: "left", padding: "10px 8px" }}>Discord</th>
+              <th style={{ textAlign: "left", padding: "10px 8px" }}>Transport</th>
+              <th style={{ textAlign: "left", padding: "10px 8px" }}>Status</th>
+              <th style={{ textAlign: "left", padding: "10px 8px" }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={8} style={{ padding: 12, color: "#6b7280" }}>
+                  No records.
+                </td>
+              </tr>
+            ) : (
+              rows.map((a, idx) => (
+                <tr key={a.userId || a.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "10px 8px", fontWeight: 700 }}>{idx + 1}.</td>
+                  <td
+                    style={{
+                      padding: "10px 8px",
+                      maxWidth: 260,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {a.email}
+                  </td>
+                  <td style={{ padding: "10px 8px" }}>{a.name || a.fullName || a.displayName || "-"}</td>
+                  <td style={{ padding: "10px 8px" }}>{a.phone || a.phoneNumber || "-"}</td>
+                  <td style={{ padding: "10px 8px" }}>{a.discord || a.discordHandle || a.username || "-"}</td>
+                  <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
+                  <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status || "Applied"}</td>
+                  <td style={{ padding: "10px 8px" }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button
+                        className="btn"
+                        style={{ background: "#22c55e", color: "#fff" }}
+                        onClick={() => onApprove(a.userId)}
+                      >
+                        Approve
+                      </button>
+                      <button className="btn danger" onClick={() => onReject(a.userId)}>
+                        Reject
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function PMJobDetails({ jobId }) {
   /* ---------- state ---------- */
   const [job, setJob] = useState(null);
@@ -699,9 +771,6 @@ export default function PMJobDetails({ jobId }) {
     const hasLU = keys.some((k) => luSet.has(k)) || !!app.luConfirmed;
     const hasEarly = keys.some((k) => earlySet.has(k)) || !!app.earlyCallConfirmed;
 
-    const luApplied = !!app.luApplied;
-    const earlyApplied = !!app.earlyCallApplied;
-
     return {
       userId: uid,
       email: app.email || uid,
@@ -712,8 +781,8 @@ export default function PMJobDetails({ jobId }) {
       out: rec.out,
       hasLU,
       hasEarly,
-      luApplied,
-      earlyApplied,
+      luApplied: !!app.luApplied,
+      earlyApplied: !!app.earlyCallApplied,
     };
   });
 
@@ -741,6 +810,16 @@ export default function PMJobDetails({ jobId }) {
       </span>
     );
   })();
+
+  // Applicants split into 3 tables
+  const normStatus = (s) => String(s || "applied").trim().toLowerCase();
+  const appliedApplicants = (applicants || []).filter((a) => {
+    const st = normStatus(a.status);
+    // treat unknown as applied
+    return st === "applied" || st === "pending" || st === "new" || st === "" || st === "null" || st === "undefined";
+  });
+  const approvedApplicants = (applicants || []).filter((a) => normStatus(a.status) === "approved");
+  const rejectedApplicants = (applicants || []).filter((a) => normStatus(a.status) === "rejected");
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
@@ -840,71 +919,25 @@ export default function PMJobDetails({ jobId }) {
         </div>
       </div>
 
-      {/* Applicants */}
-      <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Applicants</div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                <th style={{ textAlign: "left", padding: "10px 8px", width: 60 }}>No.</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>Email</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>Name</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>Phone</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>Discord</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>Transport</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>Status</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {applicants.length === 0 ? (
-                <tr>
-                  <td colSpan={8} style={{ padding: 12, color: "#6b7280" }}>
-                    No applicants yet.
-                  </td>
-                </tr>
-              ) : (
-                applicants.map((a, idx) => (
-                  <tr key={a.userId || a.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
-                    <td style={{ padding: "10px 8px", fontWeight: 700 }}>{idx + 1}.</td>
-                    <td
-                      style={{
-                        padding: "10px 8px",
-                        maxWidth: 260,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {a.email}
-                    </td>
-                    <td style={{ padding: "10px 8px" }}>{a.name || a.fullName || a.displayName || "-"}</td>
-                    <td style={{ padding: "10px 8px" }}>{a.phone || a.phoneNumber || "-"}</td>
-                    <td style={{ padding: "10px 8px" }}>{a.discord || a.discordHandle || a.username || "-"}</td>
-                    <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
-                    <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status}</td>
-                    <td style={{ padding: "10px 8px" }}>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                        <button
-                          className="btn"
-                          style={{ background: "#22c55e", color: "#fff" }}
-                          onClick={() => setApproval(a.userId, true)}
-                        >
-                          Approve
-                        </button>
-                        <button className="btn danger" onClick={() => setApproval(a.userId, false)}>
-                          Reject
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* Applicants (3 tables) */}
+      <ApplicantsTable
+        title="Applicants — Applied"
+        rows={appliedApplicants}
+        onApprove={(uid) => setApproval(uid, true)}
+        onReject={(uid) => setApproval(uid, false)}
+      />
+      <ApplicantsTable
+        title="Applicants — Approved"
+        rows={approvedApplicants}
+        onApprove={(uid) => setApproval(uid, true)}
+        onReject={(uid) => setApproval(uid, false)}
+      />
+      <ApplicantsTable
+        title="Applicants — Rejected"
+        rows={rejectedApplicants}
+        onApprove={(uid) => setApproval(uid, true)}
+        onReject={(uid) => setApproval(uid, false)}
+      />
 
       {/* Approved List & Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
@@ -936,9 +969,9 @@ export default function PMJobDetails({ jobId }) {
                   const earlyKey = `${r.userId}:early`;
                   const luKey = `${r.userId}:lu`;
 
-                  // only allow toggling if applied OR already confirmed
-                  const earlyDisabled = !earlyEnabled || (!r.earlyApplied && !r.hasEarly) || !!addonBusy[earlyKey];
-                  const luDisabled = (!r.luApplied && !r.hasLU) || !!addonBusy[luKey];
+                  // ✅ PM can toggle anytime (only lock when busy; Early Call requires enabled)
+                  const earlyDisabled = !earlyEnabled || !!addonBusy[earlyKey];
+                  const luDisabled = !!addonBusy[luKey];
 
                   return (
                     <tr key={r.userId || r.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
@@ -1019,7 +1052,13 @@ export default function PMJobDetails({ jobId }) {
             overflow: "hidden",
           }}
         >
-          <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
           <div
@@ -1161,7 +1200,9 @@ export default function PMJobDetails({ jobId }) {
                 {scanBusy ? "..." : "Scan"}
               </button>
             </div>
-            <div style={{ color: "white", fontSize: 11 }}>{camReady ? "Camera ready — point at a QR code." : "Opening camera…"}</div>
+            <div style={{ color: "white", fontSize: 11 }}>
+              {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
+            </div>
             <div style={{ color: "white", fontSize: 11 }}>
               {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
