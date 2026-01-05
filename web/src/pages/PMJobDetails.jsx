@@ -134,9 +134,7 @@ function normalizeUserKey(v) {
   if (!v) return null;
   if (typeof v === "string") return v;
   if (typeof v === "number") return String(v);
-  if (typeof v === "object") {
-    return v.userId || v.id || v.email || v.username || null;
-  }
+  if (typeof v === "object") return v.userId || v.id || v.email || null;
   return null;
 }
 function toKeySet(list) {
@@ -148,8 +146,6 @@ function toKeySet(list) {
   }
   return s;
 }
-
-/* api fallback helper (for different backend route naming) */
 async function apiPostFallback(urls, body) {
   const list = Array.isArray(urls) ? urls : [urls];
   let lastErr = null;
@@ -159,12 +155,25 @@ async function apiPostFallback(urls, body) {
       return await apiPost(u, body);
     } catch (e) {
       lastErr = e;
-      // if backend returns 404, try next fallback
-      if (e?.status === 404 || e?.response?.status === 404) continue;
+      const st = e?.status || e?.response?.status;
+      if (st === 404) continue;
       throw e;
     }
   }
   throw lastErr || new Error("Request failed");
+}
+async function apiGetFallback(urls, fallbackValue) {
+  const list = Array.isArray(urls) ? urls : [urls];
+  for (const u of list) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await apiGet(u);
+    } catch (e) {
+      const st = e?.status || e?.response?.status;
+      if (st === 404) continue;
+    }
+  }
+  return fallbackValue;
 }
 
 export default function PMJobDetails({ jobId }) {
@@ -172,6 +181,7 @@ export default function PMJobDetails({ jobId }) {
   const [job, setJob] = useState(null);
   const [applicants, setApplicants] = useState([]);
   const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
+  const [early, setEarly] = useState({ applicants: [], participants: [] });
   const [loading, setLoading] = useState(true);
 
   const [statusForce, setStatusForce] = useState(null);
@@ -186,7 +196,7 @@ export default function PMJobDetails({ jobId }) {
   const [startBusy, setStartBusy] = useState(false);
   const [scanPopup, setScanPopup] = useState(null); // {kind,text}
 
-  // toggles busy states
+  // addon toggles busy
   const [addonBusy, setAddonBusy] = useState({}); // { "<userId>:<kind>": boolean }
 
   // camera
@@ -221,11 +231,7 @@ export default function PMJobDetails({ jobId }) {
       let merged = statusForce ? { ...j, status: statusForce } : j;
 
       const serverAltEnd =
-        merged.actualEndAt ||
-        merged.endedAt ||
-        merged.finishedAt ||
-        merged.closedAt ||
-        null;
+        merged.actualEndAt || merged.endedAt || merged.finishedAt || merged.closedAt || null;
 
       const cachedEnd = LOCAL_KEY(jobId) ? localStorage.getItem(LOCAL_KEY(jobId)) : null;
       if (statusForce === "ended" || merged.status === "ended") {
@@ -247,6 +253,17 @@ export default function PMJobDetails({ jobId }) {
         participants: [],
       }));
       setLU(l);
+
+      // Early Call participants (fallback to avoid crash if route not ready)
+      const ec = await apiGetFallback(
+        [
+          `/jobs/${jobId}/early-call${bust}`,
+          `/jobs/${jobId}/earlycall${bust}`,
+          `/jobs/${jobId}/earlyCall${bust}`,
+        ],
+        { applicants: [], participants: [] }
+      );
+      setEarly(ec);
     } catch (e) {
       if (e && e.status === 401) {
         window.location.replace("#/login");
@@ -319,9 +336,7 @@ export default function PMJobDetails({ jobId }) {
       } catch {}
       streamRef.current = null;
     }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
+    if (videoRef.current) videoRef.current.srcObject = null;
   }
 
   function openScanner() {
@@ -368,7 +383,6 @@ export default function PMJobDetails({ jobId }) {
           handleDecoded(decoded);
         }
       }
-
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -395,9 +409,7 @@ export default function PMJobDetails({ jobId }) {
         }).catch(() => {});
     }, 10000);
 
-    return () => {
-      stopHeartbeat();
-    };
+    return () => stopHeartbeat();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, jobId]);
 
@@ -463,7 +475,6 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
-    // local distance precheck (scanner vs applicant)
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
@@ -503,8 +514,8 @@ export default function PMJobDetails({ jobId }) {
       vibrateOk();
       setTimeout(() => setScanPopup(null), 1500);
 
-      setToken(""); // allow second scan
-      load(true); // silent refresh of attendance
+      setToken("");
+      load(true);
     } catch (e) {
       let msg = "Scan failed.";
       const j = readApiError(e);
@@ -586,15 +597,15 @@ export default function PMJobDetails({ jobId }) {
     await load();
   }
 
-  async function toggleLoadingUnloading(userId, present) {
-    // existing backend route used previously by Applicants "L&U" column
+  // Loading/Unloading confirm (existing endpoint)
+  async function toggleLU(userId, present) {
     await apiPost(`/jobs/${jobId}/loading/mark`, { userId, present });
     const l = await apiGet(`/jobs/${jobId}/loading?_=${Date.now()}`);
     setLU(l);
   }
 
+  // Early call confirm (try common endpoints)
   async function toggleEarlyCall(userId, present) {
-    // try a few common route patterns (in case backend naming differs)
     await apiPostFallback(
       [
         `/jobs/${jobId}/early-call/mark`,
@@ -603,6 +614,15 @@ export default function PMJobDetails({ jobId }) {
       ],
       { userId, present }
     );
+    const ec = await apiGetFallback(
+      [
+        `/jobs/${jobId}/early-call?_=${Date.now()}`,
+        `/jobs/${jobId}/earlycall?_=${Date.now()}`,
+        `/jobs/${jobId}/earlyCall?_=${Date.now()}`,
+      ],
+      { applicants: [], participants: [] }
+    );
+    setEarly(ec);
   }
 
   async function markVirtualPresent(userId, present) {
@@ -623,16 +643,28 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
-  /* OT calc */
+  async function onToggle(kind, userId, checked) {
+    const key = `${userId}:${kind}`;
+    setAddonBusy((p) => ({ ...p, [key]: true }));
+    try {
+      if (kind === "lu") await toggleLU(userId, checked);
+      if (kind === "early") await toggleEarlyCall(userId, checked);
+      await load(true);
+    } catch (e) {
+      console.error("toggle failed", kind, e);
+      alert("Update failed. If Early Call route not added yet, please add backend endpoint.");
+      await load(true);
+    } finally {
+      setAddonBusy((p) => ({ ...p, [key]: false }));
+    }
+  }
+
+  /* OT calc (hooks must stay ABOVE any early return) */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
   const actualEndIso =
-    job?.actualEndAt ||
-    job?.endedAt ||
-    job?.finishedAt ||
-    job?.closedAt ||
-    endedAtRef.current ||
-    null;
+    job?.actualEndAt || job?.endedAt || job?.finishedAt || job?.closedAt || endedAtRef.current || null;
   const actualEndDJ = actualEndIso ? dayjs(actualEndIso) : null;
+
   const otRoundedHours = useMemo(() => {
     if (!scheduledEndDJ || !actualEndDJ) return 0;
     const minutes = actualEndDJ.diff(scheduledEndDJ, "minute");
@@ -642,6 +674,7 @@ export default function PMJobDetails({ jobId }) {
     return baseHours + (remainder > 30 ? 1 : 0);
   }, [scheduledEndDJ, actualEndDJ]);
 
+  // ✅ IMPORTANT: no hooks below this line
   if (loading || !job) return <div className="container">Loading…</div>;
 
   // helper to find applicant data for an approved id
@@ -653,34 +686,21 @@ export default function PMJobDetails({ jobId }) {
     );
   }
 
-  // build sets for toggles
-  const luSet = useMemo(() => toKeySet(lu?.participants || []), [lu?.participants]);
-
-  const earlyCallSet = useMemo(() => {
-    // support multiple possible shapes
-    const src =
-      job?.earlyCallParticipants ||
-      job?.earlyCallUsers ||
-      job?.earlyCallUserIds ||
-      job?.earlyCall?.participants ||
-      job?.earlyCall?.users ||
-      job?.earlyCall?.userIds ||
-      job?.earlyCall?.confirmedUsers ||
-      [];
-    return toKeySet(src);
-  }, [job]);
+  const luSet = toKeySet(lu?.participants || []);
+  const earlySet = toKeySet(early?.participants || []);
 
   // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
-    const keys = [uid, app.userId, app.email].filter(Boolean);
 
-    const hasLU =
-      keys.some((k) => luSet.has(k)) || Boolean(app.luConfirmed) || Boolean(app.loadingUnloading);
-    const hasEarlyCall =
-      keys.some((k) => earlyCallSet.has(k)) || Boolean(app.earlyCall) || Boolean(app.earlyCallConfirmed);
+    const keys = [uid, app.userId, app.email].filter(Boolean);
+    const hasLU = keys.some((k) => luSet.has(k)) || !!app.luConfirmed;
+    const hasEarly = keys.some((k) => earlySet.has(k)) || !!app.earlyCallConfirmed;
+
+    const luApplied = !!app.luApplied;
+    const earlyApplied = !!app.earlyCallApplied;
 
     return {
       userId: uid,
@@ -691,13 +711,16 @@ export default function PMJobDetails({ jobId }) {
       in: rec.in,
       out: rec.out,
       hasLU,
-      hasEarlyCall,
+      hasEarly,
+      luApplied,
+      earlyApplied,
     };
   });
 
   const statusEff = effectiveStatus(job.status);
   const canStart = statusEff === "upcoming";
   const isOngoing = statusEff === "ongoing";
+  const earlyEnabled = !!job.earlyCall?.enabled;
 
   const pill = (() => {
     const s = statusEff;
@@ -718,28 +741,6 @@ export default function PMJobDetails({ jobId }) {
       </span>
     );
   })();
-
-  const earlyCallEnabled = Boolean(job?.earlyCall?.enabled);
-
-  async function onToggle(kind, userId, checked) {
-    const key = `${userId}:${kind}`;
-    setAddonBusy((p) => ({ ...p, [key]: true }));
-    try {
-      if (kind === "lu") {
-        await toggleLoadingUnloading(userId, checked);
-      } else if (kind === "earlyCall") {
-        if (!earlyCallEnabled) return;
-        await toggleEarlyCall(userId, checked);
-      }
-      await load(true);
-    } catch (e) {
-      console.error("toggle failed", kind, e);
-      alert("Update failed. Please try again.");
-      await load(true);
-    } finally {
-      setAddonBusy((p) => ({ ...p, [key]: false }));
-    }
-  }
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
@@ -763,15 +764,10 @@ export default function PMJobDetails({ jobId }) {
               </div>
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
-              <div>
-                Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
-              </div>
-              {isVirtual && (
-                <div style={{ fontWeight: 700, color: "#7c3aed" }}>
-                  Mode: Virtual (no scanning)
-                </div>
-              )}
+              <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
+              {isVirtual && <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>}
             </div>
+
             <div
               className="card"
               style={{
@@ -795,11 +791,7 @@ export default function PMJobDetails({ jobId }) {
                 <div>
                   <b>OT (rounded hours):</b>
                   <br />
-                  {actualEndDJ
-                    ? otRoundedHours > 0
-                      ? `${otRoundedHours} hour(s)`
-                      : "0 (no OT)"
-                    : "—"}
+                  {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
@@ -887,13 +879,9 @@ export default function PMJobDetails({ jobId }) {
                     >
                       {a.email}
                     </td>
-                    <td style={{ padding: "10px 8px" }}>
-                      {a.name || a.fullName || a.displayName || "-"}
-                    </td>
+                    <td style={{ padding: "10px 8px" }}>{a.name || a.fullName || a.displayName || "-"}</td>
                     <td style={{ padding: "10px 8px" }}>{a.phone || a.phoneNumber || "-"}</td>
-                    <td style={{ padding: "10px 8px" }}>
-                      {a.discord || a.discordHandle || a.username || "-"}
-                    </td>
+                    <td style={{ padding: "10px 8px" }}>{a.discord || a.discordHandle || a.username || "-"}</td>
                     <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
                     <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status}</td>
                     <td style={{ padding: "10px 8px" }}>
@@ -918,7 +906,7 @@ export default function PMJobDetails({ jobId }) {
         </div>
       </div>
 
-      {/* Attendance */}
+      {/* Approved List & Attendance */}
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
         <div style={{ overflowX: "auto" }}>
@@ -930,12 +918,8 @@ export default function PMJobDetails({ jobId }) {
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>
-                  Early Call
-                </th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 140 }}>
-                  Loading/Unloading
-                </th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Early Call</th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 160 }}>Loading/Unloading</th>
                 <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
                 <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
               </tr>
@@ -949,8 +933,13 @@ export default function PMJobDetails({ jobId }) {
                 </tr>
               ) : (
                 approvedRows.map((r, idx) => {
-                  const earlyKey = `${r.userId}:earlyCall`;
+                  const earlyKey = `${r.userId}:early`;
                   const luKey = `${r.userId}:lu`;
+
+                  // only allow toggling if applied OR already confirmed
+                  const earlyDisabled = !earlyEnabled || (!r.earlyApplied && !r.hasEarly) || !!addonBusy[earlyKey];
+                  const luDisabled = (!r.luApplied && !r.hasLU) || !!addonBusy[luKey];
+
                   return (
                     <tr key={r.userId || r.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
                       <td style={{ padding: "8px 4px", fontWeight: 700 }}>{idx + 1}.</td>
@@ -960,13 +949,13 @@ export default function PMJobDetails({ jobId }) {
                       <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
 
                       <td style={{ padding: "8px 4px", textAlign: "center" }}>
-                        {earlyCallEnabled ? (
+                        {earlyEnabled ? (
                           <input
                             type="checkbox"
-                            checked={!!r.hasEarlyCall}
-                            disabled={!!addonBusy[earlyKey]}
-                            onChange={(e) => onToggle("earlyCall", r.userId, e.target.checked)}
-                            title="Early Call"
+                            checked={!!r.hasEarly}
+                            disabled={earlyDisabled}
+                            onChange={(e) => onToggle("early", r.userId, e.target.checked)}
+                            title={r.earlyApplied ? "Early Call (Applied)" : "Early Call"}
                           />
                         ) : (
                           <span style={{ color: "#9ca3af" }}>—</span>
@@ -977,9 +966,9 @@ export default function PMJobDetails({ jobId }) {
                         <input
                           type="checkbox"
                           checked={!!r.hasLU}
-                          disabled={!!addonBusy[luKey]}
+                          disabled={luDisabled}
                           onChange={(e) => onToggle("lu", r.userId, e.target.checked)}
-                          title="Loading/Unloading"
+                          title={r.luApplied ? "Loading/Unloading (Applied)" : "Loading/Unloading"}
                         />
                       </td>
 
@@ -1030,16 +1019,9 @@ export default function PMJobDetails({ jobId }) {
             overflow: "hidden",
           }}
         >
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
+          <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
-          {/* scan frame */}
           <div
             style={{
               position: "absolute",
@@ -1074,7 +1056,6 @@ export default function PMJobDetails({ jobId }) {
             }
           `}</style>
 
-          {/* top bar */}
           <div
             style={{
               position: "absolute",
@@ -1112,21 +1093,14 @@ export default function PMJobDetails({ jobId }) {
               }}
             >
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} />{" "}
-                IN
+                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
               </label>
               <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input
-                  type="radio"
-                  checked={scanDir === "out"}
-                  onChange={() => setScanDir("out")}
-                />{" "}
-                OUT
+                <input type="radio" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> OUT
               </label>
             </div>
           </div>
 
-          {/* bottom bar */}
           <div
             style={{
               position: "absolute",
@@ -1187,16 +1161,13 @@ export default function PMJobDetails({ jobId }) {
                 {scanBusy ? "..." : "Scan"}
               </button>
             </div>
-            <div style={{ color: "white", fontSize: 11 }}>
-              {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
-            </div>
+            <div style={{ color: "white", fontSize: 11 }}>{camReady ? "Camera ready — point at a QR code." : "Opening camera…"}</div>
             <div style={{ color: "white", fontSize: 11 }}>
               {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
             {scanMsg && <div style={{ color: "white", fontSize: 11 }}>{scanMsg}</div>}
           </div>
 
-          {/* center popup */}
           {scanPopup && (
             <div
               style={{
@@ -1204,10 +1175,7 @@ export default function PMJobDetails({ jobId }) {
                 top: "50%",
                 left: "50%",
                 transform: "translate(-50%, -50%)",
-                background:
-                  scanPopup.kind === "success"
-                    ? "rgba(34,197,94,0.9)"
-                    : "rgba(248,113,113,0.9)",
+                background: scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
                 color: "white",
                 padding: "10px 20px",
                 borderRadius: 999,
