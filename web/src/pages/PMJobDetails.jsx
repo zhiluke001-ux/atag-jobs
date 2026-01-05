@@ -610,7 +610,7 @@ export default function PMJobDetails({ jobId }) {
   // Loading/Unloading toggle (reused, but now placed in Approved List)
   async function toggleLoadingUnloading(userId, enabled) {
     try {
-      await apiPost(`/jobs/${jobId}/loading/mark`, { userId, present: enabled });
+      await apiPost(`/jobs/${jobId}/loading/mark`, { userId, on: enabled, enabled, present: enabled });
       const l = await apiGet(`/jobs/${jobId}/loading?_=${Date.now()}`).catch(() => null);
       if (l) setLU(l);
       else load(true);
@@ -623,7 +623,7 @@ export default function PMJobDetails({ jobId }) {
   // Early call toggle (needs backend endpoint)
   async function toggleEarlyCall(userId, enabled) {
     try {
-      await apiPost(`/jobs/${jobId}/earlycall/mark`, { userId, enabled, present: enabled });
+      await apiPost(`/jobs/${jobId}/earlycall/mark`, { userId, on: enabled, enabled, present: enabled });
       const e = await apiGet(`/jobs/${jobId}/earlycall?_=${Date.now()}`).catch(() => null);
       if (e) setEC(e);
       else load(true);
@@ -654,7 +654,6 @@ export default function PMJobDetails({ jobId }) {
     return baseHours + (remainder > 30 ? 1 : 0);
   }, [scheduledEndDJ, actualEndDJ]);
 
-  if (loading || !job) return <div className="container">Loading…</div>;
 
   // helper to find applicant data for an approved id
   function findApplicant(id) {
@@ -736,6 +735,9 @@ export default function PMJobDetails({ jobId }) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job, applicants, ecSet, luSet]);
+  // IMPORTANT: keep all hooks above this point; avoid early-return before hooks (prevents React error #310)
+  if (loading || !job) return <div className="container">Loading…</div>;
+
 
   const approvedCount = approvedRows.length;
 
