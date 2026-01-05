@@ -1287,7 +1287,8 @@ app.post(
             db.config.rates.earlyCall?.defaultAmount ??
             20
         ),
-        thresholdHours: Number(earlyCall?.thresholdHours ?? 3)
+        thresholdHours: Number(earlyCall?.thresholdHours ?? 3),
+        participants: Array.isArray(earlyCall?.participants) ? earlyCall.participants : [],
       },
       loadingUnload: {
         enabled: !!lduBody.enabled,
@@ -1912,112 +1913,166 @@ app.post(
   }
 );
 
-/* ---- L&U manage ---- */
-// ===============================
-// Early Call (per-person toggles)
-// ===============================
+/* ---- Early Call (per-person toggles) ---- */
+/**
+ * job.earlyCall shape:
+ * {
+ *   enabled: boolean,
+ *   amount: number,
+ *   thresholdHours: number,
+ *   participants: string[]
+ * }
+ *
+ * Backward compatibility:
+ * - If participants is empty, UI/pay calculation may still fall back to automatic eligibility (check-in time vs threshold).
+ * - If participants has items, it can be used as manual override list.
+ */
+function ensureEarlyCall(job) {
+  const defaultAmount = Number(db.config?.rates?.earlyCall?.defaultAmount ?? 0);
+  const defaultThreshold = Number(db.config?.rates?.earlyCall?.thresholdHours ?? 0);
 
-// Helper: ensure earlyCall shape exists on job
-function ensureEarlyCall(job, db) {
-  if (!job.earlyCall || typeof job.earlyCall !== "object") job.earlyCall = {};
+  if (!job.earlyCall || typeof job.earlyCall !== "object") {
+    job.earlyCall = {
+      enabled: false,
+      amount: defaultAmount,
+      thresholdHours: defaultThreshold,
+      participants: [],
+    };
+  }
 
-  // keep your existing values if you already store them somewhere else
-  // fallback to db defaults if you have them, otherwise hard defaults
-  const defaultAmount =
-    db?.wageDefaults?.earlyCallAmount ??
-    db?.config?.earlyCallAmount ??
-    20;
-
-  const defaultThresholdHours =
-    db?.wageDefaults?.earlyCallThresholdHours ??
-    db?.config?.earlyCallThresholdHours ??
-    0; // set 0 if you are doing purely manual toggle
-
-  if (typeof job.earlyCall.amount !== "number") job.earlyCall.amount = defaultAmount;
-  if (typeof job.earlyCall.thresholdHours !== "number") job.earlyCall.thresholdHours = defaultThresholdHours;
-  if (typeof job.earlyCall.enabled !== "boolean") job.earlyCall.enabled = true;
+  // normalize fields
+  job.earlyCall.enabled = Boolean(job.earlyCall.enabled);
+  job.earlyCall.amount = Number.isFinite(Number(job.earlyCall.amount))
+    ? Number(job.earlyCall.amount)
+    : defaultAmount;
+  job.earlyCall.thresholdHours = Number.isFinite(Number(job.earlyCall.thresholdHours))
+    ? Number(job.earlyCall.thresholdHours)
+    : defaultThreshold;
 
   if (!Array.isArray(job.earlyCall.participants)) job.earlyCall.participants = [];
+
+  // de-dup + clean
+  job.earlyCall.participants = Array.from(
+    new Set(job.earlyCall.participants.filter((x) => typeof x === "string" && x.trim()))
+  );
+
   return job.earlyCall;
 }
 
-/**
- * GET /jobs/:id/earlycall
- * Returns early call config + selected participants
- */
-app.get("/jobs/:id/earlycall", requireAuth, requirePMOrAdmin, (req, res) => {
-  const db = readDB();
-  const job = db.jobs?.find((j) => j.id === req.params.id);
+app.get(
+  "/jobs/:id/earlycall",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
 
-  if (!job) return res.status(404).json({ message: "Job not found" });
+    const ec = ensureEarlyCall(job);
+    const participantDetails = ec.participants
+      .map((uid) => {
+        const u = db.users.find((x) => x.id === uid);
+        if (!u) return null;
+        return {
+          userId: u.id,
+          email: u.email,
+          name: u.name || "",
+          phone: u.phone || "",
+          discord: u.discord || "",
+        };
+      })
+      .filter(Boolean);
 
-  const ec = ensureEarlyCall(job, db);
-
-  // (optional) return richer user info if you want
-  // but keep it simple & consistent with /loading
-  writeDB(db);
-
-  return res.json({
-    enabled: ec.enabled,
-    amount: ec.amount,
-    thresholdHours: ec.thresholdHours,
-    participants: ec.participants, // array of userIds
-  });
-});
-
-/**
- * POST /jobs/:id/earlycall/mark
- * Body: { userId: string, enabled: boolean }
- * Adds/removes userId from earlyCall.participants
- */
-app.post("/jobs/:id/earlycall/mark", requireAuth, requirePMOrAdmin, (req, res) => {
-  const { userId } = req.body || {};
-  // support multiple param names (so frontend changes won’t break)
-  const enabled =
-    typeof req.body?.enabled === "boolean"
-      ? req.body.enabled
-      : typeof req.body?.on === "boolean"
-      ? req.body.on
-      : true;
-
-  if (!userId) return res.status(400).json({ message: "userId is required" });
-
-  const db = readDB();
-  const job = db.jobs?.find((j) => j.id === req.params.id);
-
-  if (!job) return res.status(404).json({ message: "Job not found" });
-
-  const ec = ensureEarlyCall(job, db);
-
-  const set = new Set(ec.participants);
-  if (enabled) set.add(userId);
-  else set.delete(userId);
-
-  ec.participants = Array.from(set);
-
-  // audit log (optional, keep if you already have audit helpers)
-  if (Array.isArray(db.auditLog)) {
-    db.auditLog.push({
-      ts: new Date().toISOString(),
-      actorId: req.user?.id,
-      action: "EARLY_CALL_MARK",
-      jobId: job.id,
-      userId,
-      enabled,
-    });
+    return res.json({ ...ec, participantDetails });
   }
+);
 
-  writeDB(db);
+app.post(
+  "/jobs/:id/earlycall/mark",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
 
-  return res.json({
-    ok: true,
-    enabled: ec.enabled,
-    amount: ec.amount,
-    thresholdHours: ec.thresholdHours,
-    participants: ec.participants,
-  });
-});
+    const { userId } = req.body || {};
+    const present =
+      typeof req.body?.present === "boolean"
+        ? req.body.present
+        : typeof req.body?.enabled === "boolean"
+          ? req.body.enabled
+          : undefined;
 
+    if (!userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "userId_required" });
+    }
+    if (typeof present !== "boolean") {
+      return res.status(400).json({ error: "present_boolean_required" });
+    }
+
+    const ec = ensureEarlyCall(job);
+    const set = new Set(ec.participants);
+
+    if (present) set.add(userId);
+    else set.delete(userId);
+
+    ec.participants = Array.from(set);
+
+    await saveDB(db);
+
+    const participantDetails = ec.participants
+      .map((uid) => {
+        const u = db.users.find((x) => x.id === uid);
+        if (!u) return null;
+        return {
+          userId: u.id,
+          email: u.email,
+          name: u.name || "",
+          phone: u.phone || "",
+          discord: u.discord || "",
+        };
+      })
+      .filter(Boolean);
+
+    return res.json({ ok: true, participants: ec.participants, participantDetails });
+  }
+);
+
+app.post(
+  "/jobs/:id/earlycall/config",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+
+    const ec = ensureEarlyCall(job);
+
+    const { enabled, amount, thresholdHours } = req.body || {};
+
+    if (typeof enabled === "boolean") ec.enabled = enabled;
+
+    if (amount !== undefined) {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ error: "amount_must_be_non_negative_number" });
+      }
+      ec.amount = n;
+    }
+
+    if (thresholdHours !== undefined) {
+      const n = Number(thresholdHours);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ error: "thresholdHours_must_be_non_negative_number" });
+      }
+      ec.thresholdHours = n;
+    }
+
+    await saveDB(db);
+    return res.json({ ok: true, earlyCall: ec });
+  }
+);
+
+/* ---- Loading & Unloading (per-person toggles) ---- */
 
 app.get(
   "/jobs/:id/loading",
