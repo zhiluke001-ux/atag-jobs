@@ -129,73 +129,11 @@ function readApiError(err) {
   return {};
 }
 
-/* ---------- UI helpers ---------- */
-function initials(nameOrEmail) {
-  const s = String(nameOrEmail || "").trim();
-  if (!s) return "?";
-  const parts = s.split(/\s+/).slice(0, 2);
-  const t = parts.map((p) => p[0]).join("");
-  return t.toUpperCase();
-}
-function safeVal(v) {
-  return v == null || v === "" ? "-" : v;
-}
-function normalizeIdList(v) {
-  if (!v) return [];
-  if (Array.isArray(v)) {
-    return v
-      .map((x) => (typeof x === "object" ? x.userId || x.email || x.id : x))
-      .filter(Boolean);
-  }
-  if (typeof v === "object") return Object.keys(v);
-  return [];
-}
-function makeSet(...lists) {
-  const s = new Set();
-  lists.flat().forEach((x) => {
-    if (x == null) return;
-    if (typeof x === "string" || typeof x === "number") s.add(String(x));
-  });
-  return s;
-}
-
-function Switch({ label, checked, disabled, onChange }) {
-  return (
-    <label className={`atagSwitchWrap ${disabled ? "isDisabled" : ""}`}>
-      <input
-        type="checkbox"
-        checked={!!checked}
-        disabled={!!disabled}
-        onChange={(e) => onChange?.(e.target.checked)}
-      />
-      <span className="atagSwitch" aria-hidden="true" />
-      <span className="atagSwitchLabel">{label}</span>
-    </label>
-  );
-}
-
-function Section({ title, right, children, defaultOpen = true }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="atagCard" style={{ marginTop: 14 }}>
-      <div className="atagCardHead">
-        <button className="atagHeadBtn" onClick={() => setOpen((v) => !v)} type="button">
-          <span className="atagChevron">{open ? "▾" : "▸"}</span>
-          <span className="atagHeadTitle">{title}</span>
-        </button>
-        <div className="atagHeadRight">{right}</div>
-      </div>
-      {open && <div className="atagCardBody">{children}</div>}
-    </div>
-  );
-}
-
 export default function PMJobDetails({ jobId }) {
   /* ---------- state ---------- */
   const [job, setJob] = useState(null);
   const [applicants, setApplicants] = useState([]);
-  const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] }); // Loading/Unloading participants
-  const [ec, setEC] = useState({ participants: [] }); // Early Call participants (optional endpoint)
+  const [lu, setLU] = useState({ quota: 0, applicants: [], participants: [] });
   const [loading, setLoading] = useState(true);
 
   const [statusForce, setStatusForce] = useState(null);
@@ -242,7 +180,11 @@ export default function PMJobDetails({ jobId }) {
       let merged = statusForce ? { ...j, status: statusForce } : j;
 
       const serverAltEnd =
-        merged.actualEndAt || merged.endedAt || merged.finishedAt || merged.closedAt || null;
+        merged.actualEndAt ||
+        merged.endedAt ||
+        merged.finishedAt ||
+        merged.closedAt ||
+        null;
 
       const cachedEnd = LOCAL_KEY(jobId) ? localStorage.getItem(LOCAL_KEY(jobId)) : null;
       if (statusForce === "ended" || merged.status === "ended") {
@@ -264,10 +206,6 @@ export default function PMJobDetails({ jobId }) {
         participants: [],
       }));
       setLU(l);
-
-      // Optional early-call participants endpoint (safe if missing)
-      const e = await apiGet(`/jobs/${jobId}/earlycall${bust}`).catch(() => ({ participants: [] }));
-      setEC(e);
     } catch (e) {
       if (e && e.status === 401) {
         window.location.replace("#/login");
@@ -607,31 +545,27 @@ export default function PMJobDetails({ jobId }) {
     await load();
   }
 
-  // Loading/Unloading toggle (reused, but now placed in Approved List)
-  async function toggleLoadingUnloading(userId, enabled) {
-    try {
-      await apiPost(`/jobs/${jobId}/loading/mark`, { userId, on: enabled, enabled, present: enabled });
-      const l = await apiGet(`/jobs/${jobId}/loading?_=${Date.now()}`).catch(() => null);
-      if (l) setLU(l);
-      else load(true);
-    } catch (e) {
-      console.error("toggle L&U failed", e);
-      alert("Loading/Unloading toggle failed.");
-    }
+  async function toggleLU(userId, present) {
+    await apiPost(`/jobs/${jobId}/loading/mark`, { userId, present });
+    const l = await apiGet(`/jobs/${jobId}/loading?_=${Date.now()}`);
+    setLU(l);
   }
 
-  // Early call toggle (needs backend endpoint)
-  async function toggleEarlyCall(userId, enabled) {
+  async function markVirtualPresent(userId, present) {
+    if (!job) return;
     try {
-      await apiPost(`/jobs/${jobId}/earlycall/mark`, { userId, on: enabled, enabled, present: enabled });
-      const e = await apiGet(`/jobs/${jobId}/earlycall?_=${Date.now()}`).catch(() => null);
-      if (e) setEC(e);
-      else load(true);
-    } catch (err) {
-      console.error("toggle early call failed", err);
-      alert(
-        "Early Call toggle failed. If you haven't added the API yet, implement POST /jobs/:id/earlycall/mark (and optionally GET /jobs/:id/earlycall)."
-      );
+      if (present) {
+        await apiPost(`/jobs/${jobId}/attendance/mark`, {
+          userId,
+          inAt: job.startTime,
+          outAt: job.endTime,
+        });
+      } else {
+        await apiPost(`/jobs/${jobId}/attendance/mark`, { userId, clear: true });
+      }
+      await load();
+    } catch {
+      alert("Mark virtual attendance failed.");
     }
   }
 
@@ -654,6 +588,7 @@ export default function PMJobDetails({ jobId }) {
     return baseHours + (remainder > 30 ? 1 : 0);
   }, [scheduledEndDJ, actualEndDJ]);
 
+  if (loading || !job) return <div className="container">Loading…</div>;
 
   // helper to find applicant data for an approved id
   function findApplicant(id) {
@@ -664,557 +599,504 @@ export default function PMJobDetails({ jobId }) {
     );
   }
 
+  // display rows
+  const approvedRows = (job.approved || []).map((uid) => {
+    const app = findApplicant(uid) || {};
+    const attendanceMap = job.attendance || {};
+    const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
+    return {
+      userId: uid,
+      email: app.email || uid,
+      name: app.name || app.fullName || app.displayName || "",
+      phone: app.phone || app.phoneNumber || "",
+      discord: app.discord || app.discordHandle || app.username || "",
+      in: rec.in,
+      out: rec.out,
+    };
+  });
+
   const statusEff = effectiveStatus(job.status);
   const canStart = statusEff === "upcoming";
   const isOngoing = statusEff === "ongoing";
 
   const pill = (() => {
     const s = statusEff;
-    const bg = s === "ongoing" ? "#d1fae5" : s === "ended" ? "#fee2e2" : "#eef2f7";
-    const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#334155";
+    const bg = s === "ongoing" ? "#d1fae5" : s === "ended" ? "#fee2e2" : "#e5e7eb";
+    const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#374151";
     return (
-      <span className="atagPill" style={{ background: bg, color: fg }}>
+      <span
+        className="status"
+        style={{
+          background: bg,
+          color: fg,
+          borderRadius: 999,
+          padding: "4px 10px",
+          fontWeight: 700,
+        }}
+      >
         {s}
       </span>
     );
   })();
 
-  // Build sets for toggles (robust across possible shapes)
-  const luSet = useMemo(() => {
-    const ids = normalizeIdList(lu?.participants);
-    return makeSet(ids);
-  }, [lu?.participants]);
-
-  const ecSet = useMemo(() => {
-    const fromEndpoint = normalizeIdList(ec?.participants);
-    const fromJob =
-      normalizeIdList(job?.earlyCall?.participants) ||
-      normalizeIdList(job?.earlyCallParticipants) ||
-      normalizeIdList(job?.earlyCallUsers) ||
-      normalizeIdList(job?.earlyCallUserIds);
-    return makeSet(fromEndpoint, fromJob);
-  }, [ec?.participants, job]);
-
-  // Display rows for Approved (now includes numbering + toggles)
-  const approvedRows = useMemo(() => {
-    const attendanceMap = job.attendance || {};
-    return (job.approved || []).map((uid) => {
-      const app = findApplicant(uid) || {};
-      const rec =
-        attendanceMap[uid] ||
-        attendanceMap[app.userId] ||
-        attendanceMap[app.email] ||
-        {};
-      const email = app.email || uid;
-      const key = String(uid);
-
-      // Guess flags from applicant if present, else from sets
-      const earlyCallOn =
-        !!app.earlyCallConfirmed ||
-        !!app.earlyCallSelected ||
-        !!app.earlyCall ||
-        ecSet.has(String(uid)) ||
-        ecSet.has(String(email));
-
-      const luOn =
-        !!app.luConfirmed ||
-        luSet.has(String(uid)) ||
-        luSet.has(String(email));
-
-      return {
-        userId: key,
-        email,
-        name: app.name || app.fullName || app.displayName || "",
-        phone: app.phone || app.phoneNumber || "",
-        discord: app.discord || app.discordHandle || app.username || "",
-        in: rec.in,
-        out: rec.out,
-        earlyCallOn,
-        luOn,
-      };
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job, applicants, ecSet, luSet]);
-  // IMPORTANT: keep all hooks above this point; avoid early-return before hooks (prevents React error #310)
-  if (loading || !job) return <div className="container">Loading…</div>;
-
-
-  const approvedCount = approvedRows.length;
-
   return (
     <div className="container" style={{ paddingTop: 16 }}>
-      <style>{`
-        .atagWrap { max-width: 1100px; margin: 0 auto; }
-        .atagCard { background: #fff; border: 1px solid #e5e7eb; border-radius: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.04); overflow: hidden; }
-        .atagCardBody { padding: 14px; }
-        .atagCardHead { display:flex; align-items:center; justify-content:space-between; gap:10px; padding: 12px 14px; background:#fafafa; border-bottom:1px solid #eef2f7; }
-        .atagHeadBtn { display:flex; align-items:center; gap:10px; background:transparent; border:none; padding:0; cursor:pointer; }
-        .atagChevron { width:18px; text-align:center; color:#64748b; font-weight:800; }
-        .atagHeadTitle { font-weight:900; color:#0f172a; }
-        .atagHeadRight { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
-        .atagPill { border-radius: 999px; padding: 4px 10px; font-weight: 800; text-transform: capitalize; font-size: 12px; }
-        .atagChip { border:1px solid #e5e7eb; border-radius:999px; padding:3px 10px; font-size:12px; color:#334155; background:#fff; }
-        .atagMeta { display:flex; gap:12px; flex-wrap:wrap; color:#334155; font-size:13px; }
-        .atagTitleRow { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
-        .atagTitle { font-size: 20px; font-weight: 900; color:#0f172a; line-height:1.1; }
-        .atagSub { color:#475569; margin-top:6px; font-size:13px; }
-        .atagStats { margin-top:10px; display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:10px; }
-        .atagStat { border:1px solid #eef2f7; border-radius:12px; padding:10px; background:#fbfdff; }
-        .atagStat b { color:#0f172a; }
-        .atagBtns { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
-        .atagList { display:flex; flex-direction:column; gap:10px; }
-        .atagRow { display:flex; gap:12px; align-items:flex-start; border:1px solid #eef2f7; border-radius:14px; padding:10px 12px; background:#fff; }
-        .atagRow:hover { background:#fcfcfd; }
-        .atagAvatar { width:34px; height:34px; border-radius:999px; background:#f1f5f9; border:1px solid #e2e8f0; display:flex; align-items:center; justify-content:center; font-weight:900; color:#334155; flex:0 0 auto; }
-        .atagMain { flex:1 1 auto; min-width:0; }
-        .atagNameLine { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-        .atagName { font-weight:900; color:#0f172a; }
-        .atagSmall { color:#64748b; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
-        .atagBadges { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
-        .atagBadge { font-size:12px; border:1px solid #e5e7eb; border-radius:999px; padding:2px 8px; background:#fff; color:#334155; }
-        .atagBadgeOk { border-color:#bbf7d0; background:#f0fdf4; color:#166534; }
-        .atagBadgeWarn { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
-        .atagActions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; align-items:center; }
-        .atagNum { width:34px; height:34px; border-radius:10px; background:#0f172a; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:900; flex:0 0 auto; }
-        .atagRightCol { display:flex; flex-direction:column; gap:8px; align-items:flex-end; justify-content:center; min-width: 220px; }
-        .atagTimes { display:flex; gap:8px; flex-wrap:wrap; }
-        .atagTimeChip { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:12px; border:1px solid #e5e7eb; border-radius:999px; padding:2px 8px; background:#fff; color:#0f172a; }
-        .atagSwitchWrap { display:flex; align-items:center; gap:8px; user-select:none; }
-        .atagSwitchWrap input { display:none; }
-        .atagSwitch { width:38px; height:22px; border-radius:999px; background:#e2e8f0; position:relative; border:1px solid #cbd5e1; transition: all .15s ease; }
-        .atagSwitch::after { content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:999px; background:#fff; border:1px solid #cbd5e1; transition: all .15s ease; }
-        .atagSwitchWrap input:checked + .atagSwitch { background:#22c55e; border-color:#16a34a; }
-        .atagSwitchWrap input:checked + .atagSwitch::after { left:18px; border-color:#16a34a; }
-        .atagSwitchLabel { font-size:12px; color:#334155; font-weight:700; }
-        .atagSwitchWrap.isDisabled { opacity:.55; pointer-events:none; }
-        @media (max-width: 860px) {
-          .atagStats { grid-template-columns: 1fr; }
-          .atagRightCol { min-width: 0; align-items:flex-start; }
-          .atagRow { flex-direction: column; }
-          .atagActions { justify-content:flex-start; }
-        }
-      `}</style>
-
-      <div className="atagWrap">
-        {/* Header */}
-        <div className="atagCard">
-          <div className="atagCardBody">
-            <div className="atagTitleRow">
-              <div style={{ minWidth: 0 }}>
-                <div className="atagTitle">{job.title}</div>
-                {job.description ? <div className="atagSub">{job.description}</div> : null}
-
-                <div className="atagMeta" style={{ marginTop: 10 }}>
-                  <span className="atagChip">
-                    <b>{safeVal(job.venue)}</b>
-                  </span>
-                  <span className="atagChip">{fmtRange(job.startTime, job.endTime)}</span>
-                  <span className="atagChip">Headcount: {safeVal(job.headcount)}</span>
-                  <span className="atagChip">
-                    Early call:{" "}
-                    {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
-                  </span>
-                  {isVirtual && (
-                    <span className="atagChip" style={{ borderColor: "#ddd6fe", background: "#faf5ff", color: "#6d28d9" }}>
-                      Virtual (no scanning)
-                    </span>
-                  )}
+      {/* header */}
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 800 }}>{job.title}</div>
+            <div style={{ color: "#374151", marginTop: 6 }}>{job.description || ""}</div>
+            <div
+              style={{
+                marginTop: 10,
+                display: "flex",
+                gap: 16,
+                flexWrap: "wrap",
+                color: "#374151",
+              }}
+            >
+              <div>
+                <strong>{job.venue}</strong>
+              </div>
+              <div>{fmtRange(job.startTime, job.endTime)}</div>
+              <div>Headcount: {job.headcount}</div>
+              <div>
+                Early call:{" "}
+                {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
+              </div>
+              {isVirtual && (
+                <div style={{ fontWeight: 700, color: "#7c3aed" }}>
+                  Mode: Virtual (no scanning)
                 </div>
-
-                <div className="atagStats">
-                  <div className="atagStat">
-                    <b>Initial End Time</b>
-                    <div style={{ marginTop: 4 }}>{fmtDateTime(job.endTime) || "-"}</div>
-                  </div>
-                  <div className="atagStat">
-                    <b>PM Ended At</b>
-                    <div style={{ marginTop: 4 }}>
-                      {actualEndDJ ? fmtDateTime(actualEndDJ.toISOString()) : "— (not ended)"}
-                    </div>
-                  </div>
-                  <div className="atagStat">
-                    <b>OT (rounded)</b>
-                    <div style={{ marginTop: 4 }}>
-                      {actualEndDJ
-                        ? otRoundedHours > 0
-                          ? `${otRoundedHours} hour(s)`
-                          : "0 (no OT)"
-                        : "—"}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-                      ≤30m round down, &gt;30m round up
-                    </div>
-                  </div>
+              )}
+            </div>
+            <div
+              className="card"
+              style={{
+                marginTop: 10,
+                padding: 10,
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+              }}
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                <div>
+                  <b>Initial End Time:</b>
+                  <br />
+                  {fmtDateTime(job.endTime) || "-"}
+                </div>
+                <div>
+                  <b>PM Ended At:</b>
+                  <br />
+                  {actualEndDJ ? fmtDateTime(actualEndDJ.toISOString()) : "— (not ended)"}
+                </div>
+                <div>
+                  <b>OT (rounded hours):</b>
+                  <br />
+                  {actualEndDJ
+                    ? otRoundedHours > 0
+                      ? `${otRoundedHours} hour(s)`
+                      : "0 (no OT)"
+                    : "—"}
                 </div>
               </div>
-              <div>{pill}</div>
-            </div>
-
-            <div className="atagBtns">
-              {canStart ? (
-                <button className="btn red" onClick={startAndOpen} disabled={startBusy}>
-                  {startBusy ? "Starting…" : isVirtual ? "Start event" : "Start & scan"}
-                </button>
-              ) : isOngoing ? (
-                <button className="btn gray" disabled>
-                  Started
-                </button>
-              ) : (
-                <button className="btn gray" disabled>
-                  Ended
-                </button>
-              )}
-
-              {isOngoing && !isVirtual && !scannerOpen && (
-                <button className="btn" onClick={openScanner}>
-                  Open scanner
-                </button>
-              )}
-              {!isVirtual && scannerOpen && (
-                <button className="btn gray" onClick={closeScanner}>
-                  Hide scanner
-                </button>
-              )}
-
-              <button className="btn" onClick={() => resetEvent(true)}>
-                Reset (keep attendance)
-              </button>
-              <button className="btn danger" onClick={() => resetEvent(false)}>
-                Reset (delete attendance)
-              </button>
-              <button className="btn" onClick={endEvent}>
-                End event
-              </button>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+                OT rule: whole hours only — ≤30 min rounds down, &gt;30 min rounds up.
+              </div>
             </div>
           </div>
+          <div>{pill}</div>
         </div>
 
-        {/* Applicants (clean list) */}
-        <Section
-          title={`Applicants`}
-          right={<span className="atagChip">{applicants.length} total</span>}
-          defaultOpen={true}
-        >
-          {applicants.length === 0 ? (
-            <div style={{ color: "#64748b" }}>No applicants yet.</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+          {canStart ? (
+            <button className="btn red" onClick={startAndOpen} disabled={startBusy}>
+              {startBusy ? "Starting…" : isVirtual ? "Start event" : "Start & scan"}
+            </button>
+          ) : isOngoing ? (
+            <button className="btn gray" disabled>
+              Started
+            </button>
           ) : (
-            <div className="atagList">
-              {applicants.map((a) => {
-                const name = a.name || a.fullName || a.displayName || a.email;
-                const status = String(a.status || "").toLowerCase();
-                const statusClass =
-                  status === "approved"
-                    ? "atagBadgeOk"
-                    : status === "rejected"
-                      ? "atagBadgeWarn"
-                      : "";
-
-                return (
-                  <div className="atagRow" key={a.userId || a.email}>
-                    <div className="atagAvatar">{initials(name)}</div>
-
-                    <div className="atagMain">
-                      <div className="atagNameLine">
-                        <div className="atagName">{safeVal(name)}</div>
-                      </div>
-                      <div className="atagSmall" title={`${a.email || ""} ${a.phone || a.phoneNumber || ""} ${a.discord || a.discordHandle || a.username || ""}`}>
-                        {safeVal(a.email)}{" "}
-                        {a.phone || a.phoneNumber ? `· ${a.phone || a.phoneNumber}` : ""}
-                        {a.discord || a.discordHandle || a.username ? `· ${a.discord || a.discordHandle || a.username}` : ""}
-                      </div>
-
-                      <div className="atagBadges">
-                        <span className={`atagBadge ${statusClass}`}>Status: {safeVal(a.status)}</span>
-                        <span className="atagBadge">Transport: {safeVal(a.transport)}</span>
-                      </div>
-                    </div>
-
-                    <div className="atagActions">
-                      <button
-                        className="btn"
-                        style={{ background: "#22c55e", color: "#fff" }}
-                        onClick={() => setApproval(a.userId, true)}
-                      >
-                        Approve
-                      </button>
-                      <button className="btn danger" onClick={() => setApproval(a.userId, false)}>
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <button className="btn gray" disabled>
+              Ended
+            </button>
           )}
-        </Section>
 
-        {/* Approved + Attendance (numbered + toggles) */}
-        <Section
-          title={`Approved List & Attendance`}
-          right={<span className="atagChip">{approvedCount} approved</span>}
-          defaultOpen={true}
+          {isOngoing && !isVirtual && !scannerOpen && (
+            <button className="btn" onClick={openScanner}>
+              Open scanner
+            </button>
+          )}
+          {!isVirtual && scannerOpen && (
+            <button className="btn gray" onClick={closeScanner}>
+              Hide scanner
+            </button>
+          )}
+
+          <button className="btn" onClick={() => resetEvent(true)}>
+            Reset (keep attendance)
+          </button>
+          <button className="btn danger" onClick={() => resetEvent(false)}>
+            Reset (delete attendance)
+          </button>
+          <button className="btn" onClick={endEvent}>
+            End event
+          </button>
+        </div>
+      </div>
+
+      {/* Applicants */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Applicants</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Email</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Name</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Phone</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Discord</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Transport</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Status</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>L&amp;U</th>
+                <th style={{ textAlign: "left", padding: "10px 8px" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {applicants.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: 12, color: "#6b7280" }}>
+                    No applicants yet.
+                  </td>
+                </tr>
+              ) : (
+                applicants.map((a) => (
+                  <tr key={a.userId} style={{ borderTop: "1px solid #f1f5f9" }}>
+                    <td
+                      style={{
+                        padding: "10px 8px",
+                        maxWidth: 260,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {a.email}
+                    </td>
+                    <td style={{ padding: "10px 8px" }}>
+                      {a.name || a.fullName || a.displayName || "-"}
+                    </td>
+                    <td style={{ padding: "10px 8px" }}>{a.phone || a.phoneNumber || "-"}</td>
+                    <td style={{ padding: "10px 8px" }}>
+                      {a.discord || a.discordHandle || a.username || "-"}
+                    </td>
+                    <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
+                    <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status}</td>
+                    <td style={{ padding: "10px 8px" }}>
+                      {a.luApplied ? (
+                        <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={a.luConfirmed}
+                            onChange={(e) => toggleLU(a.userId, e.target.checked)}
+                          />
+                          <span>Confirmed</span>
+                        </label>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td style={{ padding: "10px 8px" }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          className="btn"
+                          style={{ background: "#22c55e", color: "#fff" }}
+                          onClick={() => setApproval(a.userId, true)}
+                        >
+                          Approve
+                        </button>
+                        <button className="btn danger" onClick={() => setApproval(a.userId, false)}>
+                          Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Attendance */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
+                <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
+              </tr>
+            </thead>
+            <tbody>
+              {approvedRows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ color: "#6b7280", padding: 8 }}>
+                    No approved users yet.
+                  </td>
+                </tr>
+              ) : (
+                approvedRows.map((r) => (
+                  <tr key={r.userId || r.email} style={{ borderTop: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "8px 4px" }}>{r.email}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
+                    <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
+                    <td
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "center",
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                      }}
+                    >
+                      {fmtTime(r.in)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "8px 4px",
+                        textAlign: "center",
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                      }}
+                    >
+                      {fmtTime(r.out)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+
+          {/* Optional: Virtual attendance marking (if you use it elsewhere) */}
+          {/* You can still call markVirtualPresent(userId, true/false) from UI if needed */}
+        </div>
+      </div>
+
+      {/* ---------- SCANNER OVERLAY ---------- */}
+      {!isVirtual && scannerOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            width: "100vw",
+            maxWidth: "100vw",
+            background: "#000",
+            zIndex: 9999,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
         >
-          {approvedRows.length === 0 ? (
-            <div style={{ color: "#64748b" }}>No approved users yet.</div>
-          ) : (
-            <div className="atagList">
-              {approvedRows.map((r, idx) => {
-                const ecEnabled = !!job?.earlyCall?.enabled;
-                return (
-                  <div className="atagRow" key={r.userId || r.email}>
-                    <div className="atagNum">{idx + 1}</div>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+          <canvas ref={canvasRef} style={{ display: "none" }} />
 
-                    <div className="atagMain">
-                      <div className="atagNameLine">
-                        <div className="atagName">{safeVal(r.name || r.email)}</div>
-                      </div>
-                      <div className="atagSmall" title={`${r.email} ${r.phone} ${r.discord}`}>
-                        {safeVal(r.email)}
-                        {r.phone ? ` · ${r.phone}` : ""}
-                        {r.discord ? ` · ${r.discord}` : ""}
-                      </div>
-
-                      <div className="atagBadges">
-                        <span className="atagBadge">Early Call: {ecEnabled ? `RM ${job.earlyCall.amount}` : "N/A"}</span>
-                        <span className="atagBadge">L&U: {safeVal(job?.loadingUnloading?.amount ?? job?.loadingUnloadingAmount ?? "—")}</span>
-                      </div>
-                    </div>
-
-                    <div className="atagRightCol">
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "flex-end" }}>
-                        <Switch
-                          label="Early Call"
-                          checked={!!r.earlyCallOn}
-                          disabled={!ecEnabled}
-                          onChange={(val) => toggleEarlyCall(r.userId, val)}
-                        />
-                        <Switch
-                          label="L&U"
-                          checked={!!r.luOn}
-                          onChange={(val) => toggleLoadingUnloading(r.userId, val)}
-                        />
-                      </div>
-
-                      <div className="atagTimes">
-                        <span className="atagTimeChip">IN {fmtTime(r.in) || "--:--:--"}</span>
-                        <span className="atagTimeChip">OUT {fmtTime(r.out) || "--:--:--"}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Section>
-
-        {/* ---------- SCANNER OVERLAY ---------- */}
-        {!isVirtual && scannerOpen && (
+          {/* scan frame */}
           <div
             style={{
-              position: "fixed",
-              inset: 0,
-              width: "100vw",
-              maxWidth: "100vw",
-              background: "#000",
-              zIndex: 9999,
-              display: "flex",
-              flexDirection: "column",
+              position: "absolute",
+              top: "18%",
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: "62vw",
+              maxWidth: 350,
+              height: "38vh",
+              maxHeight: 300,
+              border: "2px solid rgba(255,255,255,0.35)",
+              borderRadius: 8,
               overflow: "hidden",
             }}
           >
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
-            <canvas ref={canvasRef} style={{ display: "none" }} />
-
-            {/* scan frame */}
             <div
               style={{
                 position: "absolute",
-                top: "18%",
-                left: "50%",
-                transform: "translateX(-50%)",
-                width: "62vw",
-                maxWidth: 350,
-                height: "38vh",
-                maxHeight: 300,
-                border: "2px solid rgba(255,255,255,0.35)",
-                borderRadius: 8,
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  height: 3,
-                  background: "#ef4444",
-                  animation: "scanline 2s infinite",
-                }}
-              />
-            </div>
-            <style>{`
-              @keyframes scanline {
-                0% { top: 4px; }
-                50% { top: calc(100% - 6px); }
-                100% { top: 4px; }
-              }
-            `}</style>
-
-            {/* top bar */}
-            <div
-              style={{
-                position: "absolute",
-                top: 12,
-                left: 12,
-                right: 12,
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 8,
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <button
-                onClick={closeScanner}
-                style={{
-                  background: "rgba(0,0,0,0.6)",
-                  color: "white",
-                  border: "none",
-                  padding: "6px 12px",
-                  borderRadius: 8,
-                }}
-              >
-                ← Back
-              </button>
-              <div
-                style={{
-                  background: "rgba(0,0,0,0.4)",
-                  color: "white",
-                  padding: "4px 10px",
-                  borderRadius: 999,
-                  display: "flex",
-                  gap: 10,
-                  alignItems: "center",
-                }}
-              >
-                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                  <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} />{" "}
-                  IN
-                </label>
-                <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                  <input
-                    type="radio"
-                    checked={scanDir === "out"}
-                    onChange={() => setScanDir("out")}
-                  />{" "}
-                  OUT
-                </label>
-              </div>
-            </div>
-
-            {/* bottom bar */}
-            <div
-              style={{
-                position: "absolute",
-                bottom: 0,
                 left: 0,
                 right: 0,
-                padding: 10,
-                background: "linear-gradient(transparent, rgba(0,0,0,0.6))",
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
+                height: 3,
+                background: "#ef4444",
+                animation: "scanline 2s infinite",
+              }}
+            />
+          </div>
+          <style>{`
+            @keyframes scanline {
+              0% { top: 4px; }
+              50% { top: calc(100% - 6px); }
+              100% { top: 4px; }
+            }
+          `}</style>
+
+          {/* top bar */}
+          <div
+            style={{
+              position: "absolute",
+              top: 12,
+              left: 12,
+              right: 12,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <button
+              onClick={closeScanner}
+              style={{
+                background: "rgba(0,0,0,0.6)",
+                color: "white",
+                border: "none",
+                padding: "6px 12px",
+                borderRadius: 8,
               }}
             >
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
+              ← Back
+            </button>
+            <div
+              style={{
+                background: "rgba(0,0,0,0.4)",
+                color: "white",
+                padding: "4px 10px",
+                borderRadius: 999,
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+              }}
+            >
+              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} />{" "}
+                IN
+              </label>
+              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 <input
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="Token…"
-                  style={{
-                    flex: "1 1 120px",
-                    minWidth: 0,
-                    borderRadius: 6,
-                    border: "1px solid rgba(255,255,255,0.35)",
-                    background: "rgba(0,0,0,0.35)",
-                    color: "white",
-                    padding: "6px 8px",
-                    fontSize: 13,
-                  }}
-                />
-                <button
-                  onClick={pasteFromClipboard}
-                  style={{
-                    background: "rgba(255,255,255,0.12)",
-                    color: "white",
-                    border: "none",
-                    padding: "6px 10px",
-                    borderRadius: 6,
-                    fontSize: 12,
-                    flex: "0 0 auto",
-                  }}
-                >
-                  Paste
-                </button>
-                <button
-                  onClick={() => doScan()}
-                  disabled={scanBusy || !token}
-                  style={{
-                    background: scanBusy ? "rgba(148,163,184,0.7)" : "#22c55e",
-                    color: "white",
-                    border: "none",
-                    padding: "6px 10px",
-                    borderRadius: 6,
-                    fontWeight: 600,
-                    fontSize: 12,
-                    flex: "0 0 auto",
-                  }}
-                >
-                  {scanBusy ? "..." : "Scan"}
-                </button>
-              </div>
-              <div style={{ color: "white", fontSize: 11 }}>
-                {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
-              </div>
-              <div style={{ color: "white", fontSize: 11 }}>
-                {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
-              </div>
-              {scanMsg && <div style={{ color: "white", fontSize: 11 }}>{scanMsg}</div>}
+                  type="radio"
+                  checked={scanDir === "out"}
+                  onChange={() => setScanDir("out")}
+                />{" "}
+                OUT
+              </label>
             </div>
+          </div>
 
-            {/* center popup */}
-            {scanPopup && (
-              <div
+          {/* bottom bar */}
+          <div
+            style={{
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              padding: 10,
+              background: "linear-gradient(transparent, rgba(0,0,0,0.6))",
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
+              <input
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="Token…"
                 style={{
-                  position: "absolute",
-                  top: "50%",
-                  left: "50%",
-                  transform: "translate(-50%, -50%)",
-                  background:
-                    scanPopup.kind === "success"
-                      ? "rgba(34,197,94,0.9)"
-                      : "rgba(248,113,113,0.9)",
+                  flex: "1 1 120px",
+                  minWidth: 0,
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.35)",
+                  background: "rgba(0,0,0,0.35)",
                   color: "white",
-                  padding: "10px 20px",
-                  borderRadius: 999,
-                  fontWeight: 700,
-                  textAlign: "center",
-                  maxWidth: "80%",
-                  boxShadow: "0 10px 40px rgba(0,0,0,0.35)",
+                  padding: "6px 8px",
+                  fontSize: 13,
+                }}
+              />
+              <button
+                onClick={pasteFromClipboard}
+                style={{
+                  background: "rgba(255,255,255,0.12)",
+                  color: "white",
+                  border: "none",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  flex: "0 0 auto",
                 }}
               >
-                {scanPopup.text}
-              </div>
-            )}
+                Paste
+              </button>
+              <button
+                onClick={() => doScan()}
+                disabled={scanBusy || !token}
+                style={{
+                  background: scanBusy ? "rgba(148,163,184,0.7)" : "#22c55e",
+                  color: "white",
+                  border: "none",
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: 12,
+                  flex: "0 0 auto",
+                }}
+              >
+                {scanBusy ? "..." : "Scan"}
+              </button>
+            </div>
+            <div style={{ color: "white", fontSize: 11 }}>
+              {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
+            </div>
+            <div style={{ color: "white", fontSize: 11 }}>
+              {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
+            </div>
+            {scanMsg && <div style={{ color: "white", fontSize: 11 }}>{scanMsg}</div>}
           </div>
-        )}
-      </div>
+
+          {/* center popup */}
+          {scanPopup && (
+            <div
+              style={{
+                position: "absolute",
+                top: "50%",
+                left: "50%",
+                transform: "translate(-50%, -50%)",
+                background:
+                  scanPopup.kind === "success"
+                    ? "rgba(34,197,94,0.9)"
+                    : "rgba(248,113,113,0.9)",
+                color: "white",
+                padding: "10px 20px",
+                borderRadius: 999,
+                fontWeight: 700,
+                textAlign: "center",
+                maxWidth: "80%",
+                boxShadow: "0 10px 40px rgba(0,0,0,0.35)",
+              }}
+            >
+              {scanPopup.text}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
