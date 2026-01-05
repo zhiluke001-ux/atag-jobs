@@ -1913,6 +1913,112 @@ app.post(
 );
 
 /* ---- L&U manage ---- */
+// ===============================
+// Early Call (per-person toggles)
+// ===============================
+
+// Helper: ensure earlyCall shape exists on job
+function ensureEarlyCall(job, db) {
+  if (!job.earlyCall || typeof job.earlyCall !== "object") job.earlyCall = {};
+
+  // keep your existing values if you already store them somewhere else
+  // fallback to db defaults if you have them, otherwise hard defaults
+  const defaultAmount =
+    db?.wageDefaults?.earlyCallAmount ??
+    db?.config?.earlyCallAmount ??
+    20;
+
+  const defaultThresholdHours =
+    db?.wageDefaults?.earlyCallThresholdHours ??
+    db?.config?.earlyCallThresholdHours ??
+    0; // set 0 if you are doing purely manual toggle
+
+  if (typeof job.earlyCall.amount !== "number") job.earlyCall.amount = defaultAmount;
+  if (typeof job.earlyCall.thresholdHours !== "number") job.earlyCall.thresholdHours = defaultThresholdHours;
+  if (typeof job.earlyCall.enabled !== "boolean") job.earlyCall.enabled = true;
+
+  if (!Array.isArray(job.earlyCall.participants)) job.earlyCall.participants = [];
+  return job.earlyCall;
+}
+
+/**
+ * GET /jobs/:id/earlycall
+ * Returns early call config + selected participants
+ */
+app.get("/jobs/:id/earlycall", requireAuth, requirePMOrAdmin, (req, res) => {
+  const db = readDB();
+  const job = db.jobs?.find((j) => j.id === req.params.id);
+
+  if (!job) return res.status(404).json({ message: "Job not found" });
+
+  const ec = ensureEarlyCall(job, db);
+
+  // (optional) return richer user info if you want
+  // but keep it simple & consistent with /loading
+  writeDB(db);
+
+  return res.json({
+    enabled: ec.enabled,
+    amount: ec.amount,
+    thresholdHours: ec.thresholdHours,
+    participants: ec.participants, // array of userIds
+  });
+});
+
+/**
+ * POST /jobs/:id/earlycall/mark
+ * Body: { userId: string, enabled: boolean }
+ * Adds/removes userId from earlyCall.participants
+ */
+app.post("/jobs/:id/earlycall/mark", requireAuth, requirePMOrAdmin, (req, res) => {
+  const { userId } = req.body || {};
+  // support multiple param names (so frontend changes won’t break)
+  const enabled =
+    typeof req.body?.enabled === "boolean"
+      ? req.body.enabled
+      : typeof req.body?.on === "boolean"
+      ? req.body.on
+      : true;
+
+  if (!userId) return res.status(400).json({ message: "userId is required" });
+
+  const db = readDB();
+  const job = db.jobs?.find((j) => j.id === req.params.id);
+
+  if (!job) return res.status(404).json({ message: "Job not found" });
+
+  const ec = ensureEarlyCall(job, db);
+
+  const set = new Set(ec.participants);
+  if (enabled) set.add(userId);
+  else set.delete(userId);
+
+  ec.participants = Array.from(set);
+
+  // audit log (optional, keep if you already have audit helpers)
+  if (Array.isArray(db.auditLog)) {
+    db.auditLog.push({
+      ts: new Date().toISOString(),
+      actorId: req.user?.id,
+      action: "EARLY_CALL_MARK",
+      jobId: job.id,
+      userId,
+      enabled,
+    });
+  }
+
+  writeDB(db);
+
+  return res.json({
+    ok: true,
+    enabled: ec.enabled,
+    amount: ec.amount,
+    thresholdHours: ec.thresholdHours,
+    participants: ec.participants,
+  });
+});
+
+
 app.get(
   "/jobs/:id/loading",
   authMiddleware,
