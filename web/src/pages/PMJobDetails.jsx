@@ -129,6 +129,44 @@ function readApiError(err) {
   return {};
 }
 
+/* normalize helpers for sets */
+function normalizeUserKey(v) {
+  if (!v) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "number") return String(v);
+  if (typeof v === "object") {
+    return v.userId || v.id || v.email || v.username || null;
+  }
+  return null;
+}
+function toKeySet(list) {
+  const s = new Set();
+  const arr = Array.isArray(list) ? list : list ? [list] : [];
+  for (const item of arr) {
+    const k = normalizeUserKey(item);
+    if (k) s.add(k);
+  }
+  return s;
+}
+
+/* api fallback helper (for different backend route naming) */
+async function apiPostFallback(urls, body) {
+  const list = Array.isArray(urls) ? urls : [urls];
+  let lastErr = null;
+  for (const u of list) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await apiPost(u, body);
+    } catch (e) {
+      lastErr = e;
+      // if backend returns 404, try next fallback
+      if (e?.status === 404 || e?.response?.status === 404) continue;
+      throw e;
+    }
+  }
+  throw lastErr || new Error("Request failed");
+}
+
 export default function PMJobDetails({ jobId }) {
   /* ---------- state ---------- */
   const [job, setJob] = useState(null);
@@ -147,6 +185,9 @@ export default function PMJobDetails({ jobId }) {
   const [scanBusy, setScanBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [scanPopup, setScanPopup] = useState(null); // {kind,text}
+
+  // toggles busy states
+  const [addonBusy, setAddonBusy] = useState({}); // { "<userId>:<kind>": boolean }
 
   // camera
   const videoRef = useRef(null);
@@ -545,10 +586,23 @@ export default function PMJobDetails({ jobId }) {
     await load();
   }
 
-  async function toggleLU(userId, present) {
+  async function toggleLoadingUnloading(userId, present) {
+    // existing backend route used previously by Applicants "L&U" column
     await apiPost(`/jobs/${jobId}/loading/mark`, { userId, present });
     const l = await apiGet(`/jobs/${jobId}/loading?_=${Date.now()}`);
     setLU(l);
+  }
+
+  async function toggleEarlyCall(userId, present) {
+    // try a few common route patterns (in case backend naming differs)
+    await apiPostFallback(
+      [
+        `/jobs/${jobId}/early-call/mark`,
+        `/jobs/${jobId}/earlycall/mark`,
+        `/jobs/${jobId}/earlyCall/mark`,
+      ],
+      { userId, present }
+    );
   }
 
   async function markVirtualPresent(userId, present) {
@@ -599,11 +653,35 @@ export default function PMJobDetails({ jobId }) {
     );
   }
 
+  // build sets for toggles
+  const luSet = useMemo(() => toKeySet(lu?.participants || []), [lu?.participants]);
+
+  const earlyCallSet = useMemo(() => {
+    // support multiple possible shapes
+    const src =
+      job?.earlyCallParticipants ||
+      job?.earlyCallUsers ||
+      job?.earlyCallUserIds ||
+      job?.earlyCall?.participants ||
+      job?.earlyCall?.users ||
+      job?.earlyCall?.userIds ||
+      job?.earlyCall?.confirmedUsers ||
+      [];
+    return toKeySet(src);
+  }, [job]);
+
   // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
     const attendanceMap = job.attendance || {};
     const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
+    const keys = [uid, app.userId, app.email].filter(Boolean);
+
+    const hasLU =
+      keys.some((k) => luSet.has(k)) || Boolean(app.luConfirmed) || Boolean(app.loadingUnloading);
+    const hasEarlyCall =
+      keys.some((k) => earlyCallSet.has(k)) || Boolean(app.earlyCall) || Boolean(app.earlyCallConfirmed);
+
     return {
       userId: uid,
       email: app.email || uid,
@@ -612,6 +690,8 @@ export default function PMJobDetails({ jobId }) {
       discord: app.discord || app.discordHandle || app.username || "",
       in: rec.in,
       out: rec.out,
+      hasLU,
+      hasEarlyCall,
     };
   });
 
@@ -639,6 +719,28 @@ export default function PMJobDetails({ jobId }) {
     );
   })();
 
+  const earlyCallEnabled = Boolean(job?.earlyCall?.enabled);
+
+  async function onToggle(kind, userId, checked) {
+    const key = `${userId}:${kind}`;
+    setAddonBusy((p) => ({ ...p, [key]: true }));
+    try {
+      if (kind === "lu") {
+        await toggleLoadingUnloading(userId, checked);
+      } else if (kind === "earlyCall") {
+        if (!earlyCallEnabled) return;
+        await toggleEarlyCall(userId, checked);
+      }
+      await load(true);
+    } catch (e) {
+      console.error("toggle failed", kind, e);
+      alert("Update failed. Please try again.");
+      await load(true);
+    } finally {
+      setAddonBusy((p) => ({ ...p, [key]: false }));
+    }
+  }
+
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       {/* header */}
@@ -662,8 +764,7 @@ export default function PMJobDetails({ jobId }) {
               <div>{fmtRange(job.startTime, job.endTime)}</div>
               <div>Headcount: {job.headcount}</div>
               <div>
-                Early call:{" "}
-                {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
+                Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
               </div>
               {isVirtual && (
                 <div style={{ fontWeight: 700, color: "#7c3aed" }}>
@@ -754,13 +855,13 @@ export default function PMJobDetails({ jobId }) {
           <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+                <th style={{ textAlign: "left", padding: "10px 8px", width: 60 }}>No.</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Email</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Name</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Phone</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Discord</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Transport</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Status</th>
-                <th style={{ textAlign: "left", padding: "10px 8px" }}>L&amp;U</th>
                 <th style={{ textAlign: "left", padding: "10px 8px" }}>Actions</th>
               </tr>
             </thead>
@@ -772,8 +873,9 @@ export default function PMJobDetails({ jobId }) {
                   </td>
                 </tr>
               ) : (
-                applicants.map((a) => (
-                  <tr key={a.userId} style={{ borderTop: "1px solid #f1f5f9" }}>
+                applicants.map((a, idx) => (
+                  <tr key={a.userId || a.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "10px 8px", fontWeight: 700 }}>{idx + 1}.</td>
                     <td
                       style={{
                         padding: "10px 8px",
@@ -794,20 +896,6 @@ export default function PMJobDetails({ jobId }) {
                     </td>
                     <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
                     <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status}</td>
-                    <td style={{ padding: "10px 8px" }}>
-                      {a.luApplied ? (
-                        <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                          <input
-                            type="checkbox"
-                            checked={a.luConfirmed}
-                            onChange={(e) => toggleLU(a.userId, e.target.checked)}
-                          />
-                          <span>Confirmed</span>
-                        </label>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
                     <td style={{ padding: "10px 8px" }}>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button
@@ -834,13 +922,20 @@ export default function PMJobDetails({ jobId }) {
       <div className="card" style={{ marginTop: 14 }}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
         <div style={{ overflowX: "auto" }}>
-          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}>
+          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 920 }}>
             <thead>
               <tr>
+                <th style={{ textAlign: "left", padding: "8px 4px", width: 60 }}>No.</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
                 <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>
+                  Early Call
+                </th>
+                <th style={{ textAlign: "center", padding: "8px 4px", width: 140 }}>
+                  Loading/Unloading
+                </th>
                 <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
                 <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
               </tr>
@@ -848,39 +943,69 @@ export default function PMJobDetails({ jobId }) {
             <tbody>
               {approvedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ color: "#6b7280", padding: 8 }}>
+                  <td colSpan={9} style={{ color: "#6b7280", padding: 8 }}>
                     No approved users yet.
                   </td>
                 </tr>
               ) : (
-                approvedRows.map((r) => (
-                  <tr key={r.userId || r.email} style={{ borderTop: "1px solid #f1f5f9" }}>
-                    <td style={{ padding: "8px 4px" }}>{r.email}</td>
-                    <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
-                    <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
-                    <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
-                    <td
-                      style={{
-                        padding: "8px 4px",
-                        textAlign: "center",
-                        fontFamily:
-                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                      }}
-                    >
-                      {fmtTime(r.in)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "8px 4px",
-                        textAlign: "center",
-                        fontFamily:
-                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                      }}
-                    >
-                      {fmtTime(r.out)}
-                    </td>
-                  </tr>
-                ))
+                approvedRows.map((r, idx) => {
+                  const earlyKey = `${r.userId}:earlyCall`;
+                  const luKey = `${r.userId}:lu`;
+                  return (
+                    <tr key={r.userId || r.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "8px 4px", fontWeight: 700 }}>{idx + 1}.</td>
+                      <td style={{ padding: "8px 4px" }}>{r.email}</td>
+                      <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
+                      <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
+                      <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
+
+                      <td style={{ padding: "8px 4px", textAlign: "center" }}>
+                        {earlyCallEnabled ? (
+                          <input
+                            type="checkbox"
+                            checked={!!r.hasEarlyCall}
+                            disabled={!!addonBusy[earlyKey]}
+                            onChange={(e) => onToggle("earlyCall", r.userId, e.target.checked)}
+                            title="Early Call"
+                          />
+                        ) : (
+                          <span style={{ color: "#9ca3af" }}>—</span>
+                        )}
+                      </td>
+
+                      <td style={{ padding: "8px 4px", textAlign: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={!!r.hasLU}
+                          disabled={!!addonBusy[luKey]}
+                          onChange={(e) => onToggle("lu", r.userId, e.target.checked)}
+                          title="Loading/Unloading"
+                        />
+                      </td>
+
+                      <td
+                        style={{
+                          padding: "8px 4px",
+                          textAlign: "center",
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        {fmtTime(r.in)}
+                      </td>
+                      <td
+                        style={{
+                          padding: "8px 4px",
+                          textAlign: "center",
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        {fmtTime(r.out)}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
