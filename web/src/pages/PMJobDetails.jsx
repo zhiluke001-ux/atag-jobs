@@ -48,6 +48,7 @@ function b64urlDecode(str) {
     return "";
   }
 }
+
 function extractLatLngFromToken(token) {
   if (!token || typeof token !== "string") return null;
 
@@ -80,14 +81,46 @@ function extractLatLngFromToken(token) {
   }
   return null;
 }
+
 function extractDirFromToken(token) {
   try {
     if (!token || !token.includes(".")) return null;
     const payload = JSON.parse(b64urlDecode(token.split(".")[1]));
-    return payload?.dir ?? null;
+    return payload?.dir ?? null; // "in" | "out"
   } catch {
     return null;
   }
+}
+
+function extractUserKeyFromToken(token) {
+  if (!token || typeof token !== "string") return null;
+
+  // A) JWT-like
+  if (token.includes(".")) {
+    try {
+      const payload = JSON.parse(b64urlDecode(token.split(".")[1]));
+      const key =
+        payload?.userId ??
+        payload?.uid ??
+        payload?.sub ??
+        payload?.email ??
+        payload?.user ??
+        payload?.id ??
+        null;
+      if (typeof key === "string" || typeof key === "number") return String(key);
+    } catch {}
+  }
+
+  // B) querystring
+  try {
+    const qs = token.includes("?") ? token.split("?")[1] : token;
+    const sp = new URLSearchParams(qs);
+    const key =
+      sp.get("userId") || sp.get("uid") || sp.get("sub") || sp.get("email") || sp.get("id");
+    if (key) return String(key);
+  } catch {}
+
+  return null;
 }
 
 /* robust virtual detector */
@@ -146,6 +179,7 @@ function toKeySet(list) {
   }
   return s;
 }
+
 async function apiPostFallback(urls, body) {
   const list = Array.isArray(urls) ? urls : [urls];
   let lastErr = null;
@@ -261,7 +295,6 @@ export default function PMJobDetails({ jobId }) {
 
   // scanner
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [scanDir, setScanDir] = useState("in");
   const [token, setToken] = useState("");
   const [scanMsg, setScanMsg] = useState("");
   const [scanBusy, setScanBusy] = useState(false);
@@ -278,6 +311,12 @@ export default function PMJobDetails({ jobId }) {
   const streamRef = useRef(null);
   const lastDecodedRef = useRef("");
   const [camReady, setCamReady] = useState(false);
+
+  // ✅ local lock to prevent overwrite within the same open session (fast double scans etc.)
+  const scanLockRef = useRef({
+    in: new Set(),
+    out: new Set(),
+  });
 
   // geo
   const [loc, setLoc] = useState(null);
@@ -416,6 +455,10 @@ export default function PMJobDetails({ jobId }) {
     setToken("");
     lastDecodedRef.current = "";
     pendingTokenRef.current = null;
+
+    // reset local scan locks each time scanner opens (optional; keeps it simple)
+    scanLockRef.current = { in: new Set(), out: new Set() };
+
     setScannerOpen(true);
   }
   function closeScanner() {
@@ -531,6 +574,16 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
+  function popupError(text) {
+    setScanMsg("❌ " + text);
+    setScanPopup({ kind: "error", text });
+    setTimeout(() => setScanPopup(null), 1800);
+    setToken("");
+    setTimeout(() => {
+      lastDecodedRef.current = "";
+    }, 600);
+  }
+
   async function doScan(manualToken) {
     const useToken = manualToken || token;
     if (!useToken) {
@@ -552,27 +605,64 @@ export default function PMJobDetails({ jobId }) {
     if (applicantLL) {
       const d = haversineMeters(loc, applicantLL);
       if (d != null && d > maxM) {
-        const text = "Too far from part-timer.";
-        setScanMsg("❌ " + text);
-        setScanPopup({ kind: "error", text });
-        setTimeout(() => setScanPopup(null), 1800);
-        setToken("");
-        setTimeout(() => {
-          lastDecodedRef.current = "";
-        }, 600);
+        popupError("Too far from part-timer.");
         return;
       }
     }
 
-    const tokenDir = extractDirFromToken(useToken);
-    if (tokenDir && tokenDir !== scanDir) {
-      setScanMsg(
-        `Token is for "${tokenDir.toUpperCase()}" but you selected "${scanDir.toUpperCase()}". Proceeding…`
-      );
-    } else {
-      setScanMsg("");
+    // ✅ First-scan-wins guard: prevent overwriting IN/OUT once already recorded
+    const tokenDir = extractDirFromToken(useToken); // "in" | "out" | null
+    const tokenUserKey = extractUserKeyFromToken(useToken); // userId/email/sub (best effort)
+
+    // Build candidate keys to match attendance map (userId/email)
+    const candidateKeys = [];
+    if (tokenUserKey) candidateKeys.push(tokenUserKey);
+
+    if (tokenUserKey) {
+      const app =
+        (applicants || []).find((a) => a.userId === tokenUserKey || a.email === tokenUserKey) || null;
+      if (app?.userId && app.userId !== tokenUserKey) candidateKeys.push(app.userId);
+      if (app?.email && app.email !== tokenUserKey) candidateKeys.push(app.email);
     }
 
+    // local lock (fast repeated scans before reload)
+    if (tokenDir && candidateKeys.length) {
+      const lockSet = scanLockRef.current?.[tokenDir];
+      if (lockSet) {
+        const hit = candidateKeys.find((k) => lockSet.has(k));
+        if (hit) {
+          const when =
+            tokenDir === "in"
+              ? "Already checked-in (locked). Please scan OUT QR."
+              : "Already checked-out (locked).";
+          popupError(when);
+          return;
+        }
+      }
+    }
+
+    // server-known attendance check (prevents overwrite across reloads)
+    if (tokenDir && candidateKeys.length) {
+      const attendanceMap = job?.attendance || {};
+      let rec = null;
+      for (const k of candidateKeys) {
+        if (attendanceMap?.[k]) {
+          rec = attendanceMap[k];
+          break;
+        }
+      }
+
+      if (tokenDir === "in" && rec?.in) {
+        popupError(`Already checked-in at ${fmtTime(rec.in)}. Please scan OUT QR.`);
+        return;
+      }
+      if (tokenDir === "out" && rec?.out) {
+        popupError(`Already checked-out at ${fmtTime(rec.out)}.`);
+        return;
+      }
+    }
+
+    setScanMsg("");
     setScanBusy(true);
     try {
       const r = await apiPost("/scan", {
@@ -580,11 +670,18 @@ export default function PMJobDetails({ jobId }) {
         scannerLat: loc.lat,
         scannerLng: loc.lng,
       });
+
       const msg = `Scan OK at ${dayjs(r.time).format("HH:mm:ss")}`;
       setScanMsg("✅ " + msg);
       setScanPopup({ kind: "success", text: msg });
       vibrateOk();
       setTimeout(() => setScanPopup(null), 1500);
+
+      // ✅ lock after success (so a later accidental re-scan won't overwrite)
+      if (tokenDir && candidateKeys.length) {
+        const lockSet = scanLockRef.current?.[tokenDir];
+        if (lockSet) candidateKeys.forEach((k) => lockSet.add(k));
+      }
 
       setToken("");
       load(true);
@@ -596,6 +693,7 @@ export default function PMJobDetails({ jobId }) {
       else if (j?.error === "event_not_started") msg = "Event not started.";
       else if (j?.error === "scanner_location_required") msg = "Scanner location missing.";
       else if (j?.error) msg = j.error;
+
       setScanMsg("❌ " + msg);
       setScanPopup({ kind: "error", text: msg });
       setTimeout(() => setScanPopup(null), 2000);
@@ -815,7 +913,6 @@ export default function PMJobDetails({ jobId }) {
   const normStatus = (s) => String(s || "applied").trim().toLowerCase();
   const appliedApplicants = (applicants || []).filter((a) => {
     const st = normStatus(a.status);
-    // treat unknown as applied
     return st === "applied" || st === "pending" || st === "new" || st === "" || st === "null" || st === "undefined";
   });
   const approvedApplicants = (applicants || []).filter((a) => normStatus(a.status) === "approved");
@@ -969,7 +1066,6 @@ export default function PMJobDetails({ jobId }) {
                   const earlyKey = `${r.userId}:early`;
                   const luKey = `${r.userId}:lu`;
 
-                  // ✅ PM can toggle anytime (only lock when busy; Early Call requires enabled)
                   const earlyDisabled = !earlyEnabled || !!addonBusy[earlyKey];
                   const luDisabled = !!addonBusy[luKey];
 
@@ -1031,9 +1127,6 @@ export default function PMJobDetails({ jobId }) {
               )}
             </tbody>
           </table>
-
-          {/* Optional: Virtual attendance marking (if you use it elsewhere) */}
-          {/* You can still call markVirtualPresent(userId, true/false) from UI if needed */}
         </div>
       </div>
 
@@ -1120,24 +1213,6 @@ export default function PMJobDetails({ jobId }) {
             >
               ← Back
             </button>
-            <div
-              style={{
-                background: "rgba(0,0,0,0.4)",
-                color: "white",
-                padding: "4px 10px",
-                borderRadius: 999,
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-              }}
-            >
-              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="radio" checked={scanDir === "in"} onChange={() => setScanDir("in")} /> IN
-              </label>
-              <label style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input type="radio" checked={scanDir === "out"} onChange={() => setScanDir("out")} /> OUT
-              </label>
-            </div>
           </div>
 
           <div
