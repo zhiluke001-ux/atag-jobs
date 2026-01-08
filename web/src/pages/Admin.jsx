@@ -752,11 +752,38 @@ export default function Admin({ navigate, user }) {
       const transport = byUserTransport.get(uid) || "Own Transport";
       if (transport === "ATAG Transport" || transport === "ATAG Bus") allowances += N(parkingAmt, 0);
 
-      const threshold = N(ec.thresholdHours, 0);
-      if (ec.enabled && inTime) {
-        const earlyHours = (scheduledStart - inTime) / HOUR_MS;
-        if (earlyHours >= threshold) allowances += N(ec.amount, 0);
-      }
+// Early Call: ONLY add when PM checked for this person (no auto "arrived early" rule)
+const ecAmt = N(ec.amount, 0);
+
+// try to detect "confirmed" from multiple possible places (safe across backend versions)
+const earlyFromJob =
+  (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
+const earlyListRaw =
+  (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
+
+const earlyLists = []
+  .concat(Array.isArray(earlyFromJob) ? earlyFromJob : [earlyFromJob])
+  .concat(Array.isArray(earlyListRaw) ? earlyListRaw : [earlyListRaw]);
+
+const earlyCheckedByList = earlyLists.some((p) => {
+  const key =
+    typeof p === "string" || typeof p === "number"
+      ? String(p)
+      : p?.userId || p?.id || p?.email || null;
+  if (!key) return false;
+  return key === uid || (appRec?.email && key === appRec.email);
+});
+
+const earlyChecked =
+  !!rec?.earlyCall ||
+  !!appRec?.earlyCallConfirmed ||
+  !!appRec?.addOns?.earlyCall ||
+  earlyCheckedByList;
+
+if (ec.enabled && ecAmt > 0 && earlyChecked) {
+  allowances += ecAmt;
+}
+
       if (lduOn && lduHelpers.has(uid)) allowances += lduPriceNum;
 
       const gross = basePay + otPay + specificPay + allowances;
