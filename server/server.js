@@ -2350,17 +2350,20 @@ app.post(
 async function handleReset(req, res) {
   const job = db.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
+
   const keepAttendance = !!req.body?.keepAttendance;
   job.events = { startedAt: null, endedAt: null, scanner: null };
-  if (!keepAttendance) job.attendance = {};
-  else job.attendance = job.attendance || {};
+  if (!keepAttendance) job.attendance = {}; // Reset all attendance
+
   await saveDB(db);
   exportJobCSV(job);
   addAudit("reset_event", { jobId: job.id, keepAttendance }, req);
   const hydrated = hydrateJobFullTimers(job);
   const status = computeStatus(hydrated);
+
   res.json({ ok: true, job: { ...hydrated, status } });
 }
+
 app.post(
   "/jobs/:id/reset",
   authMiddleware,
@@ -2430,87 +2433,72 @@ app.post(
   }
 );
 
-app.post(
-  "/scan",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const { token, scannerLat, scannerLng } = req.body || {};
-    if (!token) return res.status(400).json({ error: "missing_token" });
+app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const { token, scannerLat, scannerLng } = req.body || {};
+  if (!token) return res.status(400).json({ error: "missing_token" });
 
-    let payload;
-    try {
-      payload = jwt.verify(token, JWT_SECRET);
-    } catch {
-      addAudit("scan_error", { reason: "jwt_error" }, req);
-      return res.status(400).json({ error: "jwt_error" });
-    }
-    if (payload.typ !== "scan")
-      return res.status(400).json({ error: "bad_token_type" });
-
-    const job = db.jobs.find((j) => j.id === payload.j);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-    if (!job.events?.startedAt)
-      return res.status(400).json({ error: "event_not_started" });
-
-    const sLat = Number(scannerLat),
-      sLng = Number(scannerLng);
-    if (!isValidCoord(payload.lat, payload.lng))
-      return res.status(400).json({ error: "token_missing_location" });
-    if (!isValidCoord(sLat, sLng))
-      return res.status(400).json({ error: "scanner_location_required" });
-
-    const dist = haversineMeters(payload.lat, payload.lng, sLat, sLng);
-    if (dist > MAX_DISTANCE_METERS) {
-      addAudit(
-        "scan_rejected_distance",
-        { jobId: job.id, userId: payload.u, dist },
-        req
-      );
-      return res.status(400).json({
-        error: "too_far",
-        distanceMeters: Math.round(dist),
-        maxDistanceMeters: MAX_DISTANCE_METERS
-      });
-    }
-
-    job.attendance = job.attendance || {};
-    const now = dayjs();
-    job.attendance[payload.u] = job.attendance[payload.u] || {
-      in: null,
-      out: null,
-      lateMinutes: 0
-    };
-    if (payload.dir === "in") {
-      job.attendance[payload.u].in = now.toISOString();
-      job.attendance[payload.u].lateMinutes = Math.max(
-        0,
-        now.diff(dayjs(job.startTime), "minute")
-      );
-    } else {
-      job.attendance[payload.u].out = now.toISOString();
-    }
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit(
-      "scan_" + payload.dir,
-      {
-        jobId: job.id,
-        userId: payload.u,
-        distanceMeters: Math.round(dist)
-      },
-      req
-    );
-    res.json({
-      ok: true,
-      jobId: job.id,
-      userId: payload.u,
-      direction: payload.dir,
-      time: now.toISOString(),
-      record: job.attendance[payload.u]
-    });
+  let payload;
+  try {
+    payload = jwt.verify(token, JWT_SECRET);
+  } catch {
+    addAudit("scan_error", { reason: "jwt_error" }, req);
+    return res.status(400).json({ error: "jwt_error" });
   }
-);
+
+  if (payload.typ !== "scan") return res.status(400).json({ error: "bad_token_type" });
+
+  const job = db.jobs.find((j) => j.id === payload.j);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
+
+  const sLat = Number(scannerLat), sLng = Number(scannerLng);
+  if (!isValidCoord(payload.lat, payload.lng)) return res.status(400).json({ error: "token_missing_location" });
+  if (!isValidCoord(sLat, sLng)) return res.status(400).json({ error: "scanner_location_required" });
+
+  const dist = haversineMeters(payload.lat, payload.lng, sLat, sLng);
+  if (dist > MAX_DISTANCE_METERS) {
+    addAudit("scan_rejected_distance", { jobId: job.id, userId: payload.u, dist }, req);
+    return res.status(400).json({ error: "too_far", distanceMeters: Math.round(dist), maxDistanceMeters: MAX_DISTANCE_METERS });
+  }
+
+  // Check if the user has already checked in or out
+  const userAttendance = job.attendance[payload.u];
+  if (userAttendance?.in && payload.dir === "in") {
+    return res.status(400).json({ error: "already_checked_in" });
+  }
+
+  if (userAttendance?.out && payload.dir === "out") {
+    return res.status(400).json({ error: "already_checked_out" });
+  }
+
+  job.attendance = job.attendance || {};
+  const now = dayjs();
+  job.attendance[payload.u] = job.attendance[payload.u] || {
+    in: null,
+    out: null,
+    lateMinutes: 0
+  };
+
+  if (payload.dir === "in") {
+    job.attendance[payload.u].in = now.toISOString();
+    job.attendance[payload.u].lateMinutes = Math.max(0, now.diff(dayjs(job.startTime), "minute"));
+  } else {
+    job.attendance[payload.u].out = now.toISOString();
+  }
+
+  await saveDB(db);
+  exportJobCSV(job);
+  addAudit("scan_" + payload.dir, { jobId: job.id, userId: payload.u, distanceMeters: Math.round(dist) }, req);
+
+  res.json({
+    ok: true,
+    jobId: job.id,
+    userId: payload.u,
+    direction: payload.dir,
+    time: now.toISOString(),
+    record: job.attendance[payload.u]
+  });
+});
 
 /* ---- CSV download ---- */
 app.get(
