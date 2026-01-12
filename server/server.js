@@ -1648,24 +1648,64 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
    - Delete (owner or PM/Admin): POST /jobs/:id/parking-receipt/:rid/delete
 */
 
+/* ✅✅✅ Parking receipt APIs ✅✅✅
+   - Submit: POST /jobs/:id/parking-receipt
+   - My receipts: GET /jobs/:id/parking-receipt/me
+   - PM/Admin all receipts: GET /jobs/:id/parking-receipts
+   - Delete (owner or PM/Admin): POST /jobs/:id/parking-receipt/:rid/delete
+*/
+
+/** Build public base URL safely (Render / proxies) */
+function publicBase(req) {
+  const forced = String(process.env.PUBLIC_API_URL || "").replace(/\/$/, "");
+  if (forced) return forced;
+
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http")
+    .split(",")[0]
+    .trim();
+  const host = String(req.headers["x-forwarded-host"] || req.get("host") || "")
+    .split(",")[0]
+    .trim();
+
+  return `${proto}://${host}`;
+}
+
+/** Convert /uploads/... to absolute URL */
+function toPublicUrl(req, p) {
+  if (!p) return "";
+  if (/^https?:\/\//i.test(p)) return p;
+  return `${publicBase(req)}${p.startsWith("/") ? "" : "/"}${p}`;
+}
+
 function absPathFromReceiptUrl(photoUrl) {
   try {
     const clean = String(photoUrl || "").split("?")[0];
-    const prefix = "/uploads/parking-receceipts"; // (typo guard)
-    const prefix2 = "/uploads/parking-receipts/";
-    if (clean.startsWith(prefix2)) {
-      const filename = clean.slice(prefix2.length);
-      return path.join(parkingReceiptsDir, filename);
-    }
-    // tolerate accidental typo in stored url
-    if (clean.startsWith(prefix + "/")) {
-      const filename = clean.slice((prefix + "/").length);
-      return path.join(parkingReceiptsDir, filename);
+
+    // tolerate typo + correct path
+    const prefixes = ["/uploads/parking-receipts/", "/uploads/parking-receceipts/"];
+
+    for (const pfx of prefixes) {
+      if (clean.startsWith(pfx)) {
+        const filename = clean.slice(pfx.length);
+        return path.join(parkingReceiptsDir, filename);
+      }
     }
   } catch {}
   return null;
 }
 
+function enrichReceipt(req, r) {
+  const u = (db.users || []).find((x) => x.id === r.userId);
+  return {
+    ...r,
+    photoUrlAbs: toPublicUrl(req, r.photoUrl),
+    name: u?.name || r.name || "",
+    phone: u?.phone || "",
+    discord: u?.discord || "",
+  };
+}
+
+/** Submit receipt */
 app.post(
   "/jobs/:id/parking-receipt",
   authMiddleware,
@@ -1723,12 +1763,19 @@ app.post(
 
     addAudit("parking_receipt_submit", { jobId: job.id, userId: uid, receiptId: receipt.id }, req);
 
-    // ✅ return both receipt + photoUrl for frontend convenience
-    return res.json({ ok: true, receipt, photoUrl: receipt.photoUrl });
+    const enriched = enrichReceipt(req, receipt);
+
+    // ✅ return both relative and absolute (frontend should use photoUrlAbs)
+    return res.json({
+      ok: true,
+      receipt: enriched,
+      photoUrl: receipt.photoUrl,
+      photoUrlAbs: enriched.photoUrlAbs,
+    });
   }
 );
 
-// PM/Admin list receipts for a job
+/** PM/Admin list receipts for a job */
 app.get(
   "/jobs/:id/parking-receipts",
   authMiddleware,
@@ -1738,16 +1785,13 @@ app.get(
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
     const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-    const enriched = receipts.map((r) => {
-      const u = (db.users || []).find((x) => x.id === r.userId);
-      return { ...r, name: u?.name || "", phone: u?.phone || "", discord: u?.discord || "" };
-    });
+    const enriched = receipts.map((r) => enrichReceipt(req, r));
 
-    res.json({ ok: true, receipts: enriched });
+    return res.json({ ok: true, receipts: enriched });
   }
 );
 
-// user fetch own receipts for a job
+/** User fetch own receipts for a job */
 app.get(
   "/jobs/:id/parking-receipt/me",
   authMiddleware,
@@ -1758,11 +1802,13 @@ app.get(
 
     const uid = req.user.id;
     const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-    res.json({ ok: true, receipts: receipts.filter((r) => r.userId === uid) });
+    const mine = receipts.filter((r) => r.userId === uid).map((r) => enrichReceipt(req, r));
+
+    return res.json({ ok: true, receipts: mine });
   }
 );
 
-// ✅ Delete receipt (owner or PM/Admin)
+/** Delete receipt (owner or PM/Admin) */
 app.post(
   "/jobs/:id/parking-receipt/:rid/delete",
   authMiddleware,
@@ -1783,10 +1829,9 @@ app.post(
       return res.status(403).json({ error: "forbidden" });
     }
 
-    // remove from db
     job.parkingReceipts.splice(idx, 1);
 
-    // try delete file from disk (best effort)
+    // best-effort delete file
     const abs = absPathFromReceiptUrl(receipt.photoUrl);
     try {
       if (abs && fs.existsSync(abs)) fs.unlinkSync(abs);
@@ -1796,24 +1841,6 @@ app.post(
     addAudit("parking_receipt_delete", { jobId: job.id, userId: req.user.id, receiptId: rid }, req);
 
     return res.json({ ok: true });
-  }
-);
-
-
-
-
-// (Optional) user fetch own receipts for a job
-app.get(
-  "/jobs/:id/parking-receipt/me",
-  authMiddleware,
-  requireRole("part-timer", "pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const uid = req.user.id;
-    const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-    res.json({ ok: true, receipts: receipts.filter((r) => r.userId === uid) });
   }
 );
 
