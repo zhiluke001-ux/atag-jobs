@@ -20,7 +20,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: "5mb" })); // increased limit
+app.use(express.json({ limit: "5mb" }));
 app.use(morgan("dev"));
 
 /* ---- uploads (images) ---- */
@@ -32,7 +32,6 @@ fs.ensureDirSync(avatarsDir);
 fs.ensureDirSync(verificationsDir);
 
 app.use("/uploads", express.static(uploadsRoot));
-
 
 /* ---------------- DB + defaults ---------------- */
 let db = await loadDB();
@@ -47,13 +46,22 @@ const DEFAULT_RATES = {
     halfDay: { junior: 80, senior: 100, lead: 44 },
     fullDay: { junior: 150, senior: 180, lead: 88 },
     twoD1N: { junior: 230, senior: 270, lead: null },
-    threeD2n: { junior: 300, senior: 350, lead: null }
+    threeD2n: { junior: 300, senior: 350, lead: null },
   },
   physicalHourly: { junior: 20, senior: 30, lead: 30 },
   loadingUnloading: { amount: 30 },
-  earlyCall: { defaultAmount: 20 }
+  // ✅ add thresholdHours default so ensureEarlyCall has a real default
+  earlyCall: { defaultAmount: 20, thresholdHours: 3 },
 };
+
 db.config.rates = db.config.rates || DEFAULT_RATES;
+
+// ✅ backfill missing earlyCall.thresholdHours if old DB doesn’t have it
+db.config.rates.earlyCall = db.config.rates.earlyCall || {};
+if (db.config.rates.earlyCall.defaultAmount == null)
+  db.config.rates.earlyCall.defaultAmount = DEFAULT_RATES.earlyCall.defaultAmount;
+if (db.config.rates.earlyCall.thresholdHours == null)
+  db.config.rates.earlyCall.thresholdHours = DEFAULT_RATES.earlyCall.thresholdHours;
 
 // ✅ Ensure roleRatesDefaults exists & has all staff grades, including emcees
 db.config.roleRatesDefaults = db.config.roleRatesDefaults || {};
@@ -63,32 +71,32 @@ rrd.junior = rrd.junior || {
   payMode: "hourly",
   base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
   specificPayment: null,
-  otMultiplier: 0
+  otMultiplier: 0,
 };
 rrd.senior = rrd.senior || {
   payMode: "hourly",
   base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
   specificPayment: null,
-  otMultiplier: 0
+  otMultiplier: 0,
 };
 rrd.lead = rrd.lead || {
   payMode: "hourly",
   base: Number(db.config.rates?.physicalHourly?.lead ?? 30),
   specificPayment: null,
-  otMultiplier: 0
+  otMultiplier: 0,
 };
 // ✅ NEW emcee grades
 rrd.junior_emcee = rrd.junior_emcee || {
   payMode: "hourly",
   base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
   specificPayment: null,
-  otMultiplier: 0
+  otMultiplier: 0,
 };
 rrd.senior_emcee = rrd.senior_emcee || {
   payMode: "hourly",
   base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
   specificPayment: null,
-  otMultiplier: 0
+  otMultiplier: 0,
 };
 
 db.pushSubs = db.pushSubs || {};
@@ -99,9 +107,7 @@ await saveDB(db);
 /* ------------ globals / helpers ------------- */
 const JWT_SECRET = db.config.jwtSecret;
 const MAX_DISTANCE_METERS = Number(
-  process.env.SCAN_MAX_DISTANCE_METERS ||
-    db.config.scanMaxDistanceMeters ||
-    500
+  process.env.SCAN_MAX_DISTANCE_METERS || db.config.scanMaxDistanceMeters || 500
 );
 const ROLES = ["part-timer", "pm", "admin"];
 
@@ -109,10 +115,9 @@ const ROLES = ["part-timer", "pm", "admin"];
 const STAFF_ROLES = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"];
 
 const toRad = (deg) => (deg * Math.PI) / 180;
-const clampRole = (r) =>
-  ROLES.includes(String(r)) ? String(r) : "part-timer";
+const clampRole = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
 
-// ✅ make grade handling more forgiving: spaces → underscore, case-insensitive
+// ✅ make grade handling more forgiving
 const clampGrade = (g) => {
   const x = String(g || "")
     .toLowerCase()
@@ -138,14 +143,11 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
   const dLng = toRad(lng2 - lng1);
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLng / 2) ** 2;
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-const signToken = (payload) =>
-  jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
+const signToken = (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 
 function signUserToken(user) {
   return signToken({
@@ -153,7 +155,7 @@ function signUserToken(user) {
     email: user.email,
     role: user.role,
     name: user.name,
-    grade: user.grade || "junior"
+    grade: user.grade || "junior",
   });
 }
 
@@ -171,9 +173,7 @@ function authMiddleware(req, res, next) {
 const requireRole =
   (...roles) =>
   (req, res, next) =>
-    roles.includes(req.user.role)
-      ? next()
-      : res.status(403).json({ error: "forbidden" });
+    roles.includes(req.user.role) ? next() : res.status(403).json({ error: "forbidden" });
 
 function addAudit(action, details, req) {
   db.audit = db.audit || [];
@@ -183,7 +183,7 @@ function addAudit(action, details, req) {
     actor: req?.user?.email || "guest",
     role: req?.user?.role || "guest",
     action,
-    details
+    details,
   });
   if (db.audit.length > 1000) db.audit.length = 1000;
 }
@@ -203,9 +203,7 @@ function computeStatus(job) {
 function hashPassword(password) {
   const iterations = 150000;
   const salt = crypto.randomBytes(16).toString("hex");
-  const derived = crypto
-    .pbkdf2Sync(password, salt, iterations, 32, "sha256")
-    .toString("hex");
+  const derived = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
   return `pbkdf2_sha256$${iterations}$${salt}$${derived}`;
 }
 function verifyPassword(password, encoded) {
@@ -213,13 +211,8 @@ function verifyPassword(password, encoded) {
     const [algo, iterStr, salt, hash] = String(encoded).split("$");
     if (algo !== "pbkdf2_sha256") return false;
     const iterations = parseInt(iterStr, 10);
-    const derived = crypto
-      .pbkdf2Sync(password, salt, iterations, 32, "sha256")
-      .toString("hex");
-    return crypto.timingSafeEqual(
-      Buffer.from(derived, "hex"),
-      Buffer.from(hash, "hex")
-    );
+    const derived = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
+    return crypto.timingSafeEqual(Buffer.from(derived, "hex"), Buffer.from(hash, "hex"));
   } catch {
     return false;
   }
@@ -228,8 +221,7 @@ function findUserByIdentifier(id) {
   const x = String(id || "").toLowerCase();
   return (db.users || []).find(
     (u) =>
-      String(u.email || "").toLowerCase() === x ||
-      String(u.username || "").toLowerCase() === x
+      String(u.email || "").toLowerCase() === x || String(u.username || "").toLowerCase() === x
   );
 }
 
@@ -241,19 +233,13 @@ function paySummaryFromRate(rate = {}) {
   const otm = Number(rate.otMultiplier || 0);
   const otTag = otm > 0 ? ` (OT x${otm})` : "";
 
-  if (pm === "specific" && Number.isFinite(fix))
-    return `RM ${Math.round(fix)} / shift`;
-  if (
-    pm === "specific_plus_hourly" &&
-    Number.isFinite(fix) &&
-    Number.isFinite(hr)
-  )
+  if (pm === "specific" && Number.isFinite(fix)) return `RM ${Math.round(fix)} / shift`;
+  if (pm === "specific_plus_hourly" && Number.isFinite(fix) && Number.isFinite(hr))
     return `RM ${Math.round(fix)} + RM ${Math.round(hr)}/hr${otTag}`;
   if ((pm === "hourly" || pm == null) && Number.isFinite(hr))
     return `RM ${Math.round(hr)}/hr${otTag}`;
 
-  const legacyHr =
-    rate?.physicalHourly?.junior ?? rate?.virtualHourly?.junior;
+  const legacyHr = rate?.physicalHourly?.junior ?? rate?.virtualHourly?.junior;
   if (Number.isFinite(legacyHr)) return `From RM ${Math.round(legacyHr)}/hr`;
   return "See details";
 }
@@ -270,34 +256,59 @@ function scheduledHours(job) {
   return Number(hoursBetweenISO(job?.startTime, job?.endTime).toFixed(2));
 }
 
-/* ===== job public view ===== */
-function jobPublicView(job) {
-  const {
-    id,
-    title,
-    venue,
-    description,
-    startTime,
-    endTime,
-    headcount,
-    transportOptions,
-    roleCounts
-  } = job;
-  const lu = job.loadingUnload || {
+/* ===== Loading/Unloading normalizer (FIXES stale closed + enabled) ===== */
+function ensureLoadingUnload(job) {
+  const basePrice = Number(db.config?.rates?.loadingUnloading?.amount ?? 0);
+
+  job.loadingUnload = job.loadingUnload || {
     enabled: false,
     quota: 0,
-    price: Number(db.config.rates.loadingUnloading.amount),
+    price: basePrice,
     applicants: [],
     participants: [],
-    closed: false
+    closed: false,
   };
 
-  const appliedCount = Array.isArray(job.applications)
-    ? job.applications.length
-    : 0;
-  const approvedCount = Array.isArray(job.approved)
-    ? job.approved.length
-    : 0;
+  const quota = Number(job.loadingUnload.quota || 0);
+  const applicants = Array.isArray(job.loadingUnload.applicants)
+    ? Array.from(new Set(job.loadingUnload.applicants))
+    : [];
+  const participants = Array.isArray(job.loadingUnload.participants)
+    ? Array.from(new Set(job.loadingUnload.participants))
+    : [];
+
+  // ✅ important: treat quota>0 as enabled even if enabled was not set
+  const enabled = Boolean(job.loadingUnload.enabled) || quota > 0;
+  const price = Number(job.loadingUnload.price ?? basePrice);
+
+  // ✅ critical fix: if quota <= 0 => unlimited => NEVER closed
+  const closed = quota > 0 ? participants.length >= quota : false;
+
+  job.loadingUnload.enabled = enabled;
+  job.loadingUnload.quota = quota;
+  job.loadingUnload.price = price;
+  job.loadingUnload.applicants = applicants;
+  job.loadingUnload.participants = participants;
+  job.loadingUnload.closed = closed;
+
+  // keep applicants tidy when closed (optional)
+  if (job.loadingUnload.closed) {
+    const keep = new Set(job.loadingUnload.participants);
+    job.loadingUnload.applicants = job.loadingUnload.applicants.filter((uid) => keep.has(uid));
+  }
+
+  return job.loadingUnload;
+}
+
+/* ===== job public view ===== */
+function jobPublicView(job) {
+  const { id, title, venue, description, startTime, endTime, headcount, transportOptions, roleCounts } =
+    job;
+
+  const lu = ensureLoadingUnload(job);
+
+  const appliedCount = Array.isArray(job.applications) ? job.applications.length : 0;
+  const approvedCount = Array.isArray(job.approved) ? job.approved.length : 0;
   const fullTimers = Array.isArray(job.fullTimers) ? job.fullTimers : [];
 
   return {
@@ -316,39 +327,30 @@ function jobPublicView(job) {
       applicants: lu.applicants?.length || 0,
       closed: !!lu.closed,
       participants: (lu.participants || []).length,
-      price: Number(lu.price || db.config.rates.loadingUnloading.amount)
+      price: Number(lu.price || db.config.rates.loadingUnloading.amount),
     },
-    // ✅ Always include emcee role counts, fallback to 0
     roleCounts: {
       junior: Number(roleCounts?.junior ?? 0),
       senior: Number(roleCounts?.senior ?? 0),
       lead: Number(roleCounts?.lead ?? 0),
       junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
-      senior_emcee: Number(roleCounts?.senior_emcee ?? 0)
+      senior_emcee: Number(roleCounts?.senior_emcee ?? 0),
     },
     appliedCount,
     approvedCount,
     fullTimersCount: fullTimers.length,
-    paySummary: paySummaryFromRate(job.rate || {})
+    paySummary: paySummaryFromRate(job.rate || {}),
   };
 }
 
 /* ===== full-timer helpers ===== */
-// Join job.fullTimers with db.users so API always returns name/phone/etc.
 function hydrateJobFullTimers(job) {
   if (!job || !Array.isArray(job.fullTimers)) return job;
 
   const enriched = job.fullTimers.map((ft) => {
     if (!ft || !ft.userId) return ft;
     const u = (db.users || []).find((x) => x.id === ft.userId) || {};
-
-    // "role" here is the staff role for this job (junior/senior/lead/etc.),
-    // not the account role (part-timer/pm/admin).
-    const role =
-      ft.role ||
-      ft.type ||
-      ft.grade ||
-      "junior";
+    const role = ft.role || ft.type || ft.grade || "junior";
 
     return {
       ...ft,
@@ -357,8 +359,7 @@ function hydrateJobFullTimers(job) {
       email: u.email || ft.email || "",
       phone: u.phone || ft.phone || "",
       grade: u.grade || ft.grade || "junior",
-      // user-level account role: part-timer / pm / admin
-      accountRole: u.role || ft.accountRole || ""
+      accountRole: u.role || ft.accountRole || "",
     };
   });
 
@@ -378,13 +379,10 @@ function normalizeAdjustments(obj, actor) {
       ts: x?.ts ? new Date(x.ts).toISOString() : new Date().toISOString(),
       by:
         x?.by && typeof x.by === "object"
-          ? {
-              id: x.by.id ?? actor?.id ?? null,
-              email: x.by.email ?? actor?.email ?? null
-            }
+          ? { id: x.by.id ?? actor?.id ?? null, email: x.by.email ?? actor?.email ?? null }
           : actor
           ? { id: actor.id ?? null, email: actor.email ?? null }
-          : null
+          : null,
     }));
   }
   return out;
@@ -400,15 +398,12 @@ function generateJobCSV(job) {
   const evStart = job.events?.startedAt || "";
   const evEnd = job.events?.endedAt || "";
 
+  ensureLoadingUnload(job);
+
   for (const u of job.applications) {
-    const luApplied = !!(job.loadingUnload?.applicants || []).includes(
-      u.userId
-    );
-    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(
-      u.userId
-    );
-    const present =
-      !!job.attendance?.[u.userId]?.in || !!job.attendance?.[u.userId]?.out;
+    const luApplied = !!(job.loadingUnload?.applicants || []).includes(u.userId);
+    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(u.userId);
+    const present = !!job.attendance?.[u.userId]?.in || !!job.attendance?.[u.userId]?.out;
 
     rows.push({
       section: "applications",
@@ -430,16 +425,14 @@ function generateJobCSV(job) {
       eventStartedAt: evStart,
       eventEndedAt: evEnd,
       luApplied,
-      luConfirmed
+      luConfirmed,
     });
   }
 
   for (const [userId, rec] of Object.entries(job.attendance || {})) {
     const app = job.applications.find((a) => a.userId === userId);
     const luApplied = !!(job.loadingUnload?.applicants || []).includes(userId);
-    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(
-      userId
-    );
+    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(userId);
     const present = !!rec.in || !!rec.out;
 
     rows.push({
@@ -462,7 +455,7 @@ function generateJobCSV(job) {
       eventStartedAt: evStart,
       eventEndedAt: evEnd,
       luApplied,
-      luConfirmed
+      luConfirmed,
     });
   }
 
@@ -482,7 +475,7 @@ function generateJobCSV(job) {
     "eventStartedAt",
     "eventEndedAt",
     "luApplied",
-    "luConfirmed"
+    "luConfirmed",
   ];
   return { headers, rows };
 }
@@ -505,8 +498,7 @@ let mutated = false;
 for (const u of db.users) {
   if (!u.username) {
     u.username =
-      (u.email && u.email.split("@")[0]) ||
-      `user_${u.id || Math.random().toString(36).slice(2, 8)}`;
+      (u.email && u.email.split("@")[0]) || `user_${u.id || Math.random().toString(36).slice(2, 8)}`;
     mutated = true;
   }
   if (!u.passwordHash) {
@@ -514,7 +506,6 @@ for (const u of db.users) {
     mutated = true;
   }
 
-  // ✅ normalize existing grades using clampGrade (adds emcee support safely)
   const normGrade = clampGrade(u.grade || "junior");
   if (u.grade !== normGrade) {
     u.grade = normGrade;
@@ -537,9 +528,8 @@ for (const u of db.users) {
     u.avatarUrl = "";
     mutated = true;
   }
-    // ✅ verification defaults (existing users remain usable)
   if (u.verified === undefined) {
-    u.verified = true; // IMPORTANT: keep old users verified
+    u.verified = true;
     mutated = true;
   }
   if (u.verificationStatus === undefined) {
@@ -558,7 +548,6 @@ for (const u of db.users) {
     u.verifiedBy = null;
     mutated = true;
   }
-
 }
 if (mutated) await saveDB(db);
 
@@ -575,31 +564,23 @@ for (const j of db.jobs) {
       bootMutated = true;
     }
   }
-  j.loadingUnload = j.loadingUnload || {
-    enabled: false,
-    quota: 0,
-    price: Number(db.config.rates.loadingUnloading.amount),
-    applicants: [],
-    participants: [],
-    closed: false
-  };
-  const apps = Array.isArray(j.loadingUnload.applicants)
-    ? Array.from(new Set(j.loadingUnload.applicants))
-    : [];
-  const parts = Array.isArray(j.loadingUnload.participants)
-    ? Array.from(new Set(j.loadingUnload.participants))
-    : [];
-  j.loadingUnload.applicants = apps;
-  j.loadingUnload.participants = parts;
-  if (j.loadingUnload.closed === undefined) j.loadingUnload.closed = false;
-  if (
-    Number(j.loadingUnload.quota || 0) > 0 &&
-    parts.length >= Number(j.loadingUnload.quota)
-  ) {
-    j.loadingUnload.closed = true;
-  }
 
-  // ✅ ensure fullTimers exists
+  // ✅ normalize L&U hard to prevent stale closed/disabled
+  if (!j.loadingUnload || typeof j.loadingUnload !== "object") {
+    j.loadingUnload = {
+      enabled: false,
+      quota: 0,
+      price: Number(db.config.rates.loadingUnloading.amount),
+      applicants: [],
+      participants: [],
+      closed: false,
+    };
+    bootMutated = true;
+  }
+  const beforeLU = JSON.stringify(j.loadingUnload);
+  ensureLoadingUnload(j);
+  if (JSON.stringify(j.loadingUnload) !== beforeLU) bootMutated = true;
+
   if (!Array.isArray(j.fullTimers)) {
     j.fullTimers = [];
     bootMutated = true;
@@ -661,16 +642,11 @@ async function sendResetEmail(to, link) {
     GMAIL_CLIENT_SECRET,
     GMAIL_REFRESH_TOKEN,
     GMAIL_SENDER,
-    RESEND_API_KEY
+    RESEND_API_KEY,
   } = process.env;
 
-  // 1) try Gmail API first
-  if (
-    GMAIL_CLIENT_ID &&
-    GMAIL_CLIENT_SECRET &&
-    GMAIL_REFRESH_TOKEN &&
-    GMAIL_SENDER
-  ) {
+  // 1) Gmail API
+  if (GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET && GMAIL_REFRESH_TOKEN && GMAIL_SENDER) {
     try {
       const oAuth2Client = new google.auth.OAuth2(
         GMAIL_CLIENT_ID,
@@ -690,7 +666,7 @@ async function sendResetEmail(to, link) {
         `Subject: ${subject}`,
         'Content-Type: text/plain; charset="UTF-8"',
         "",
-        messageText
+        messageText,
       ];
       const raw = Buffer.from(rawLines.join("\r\n"))
         .toString("base64")
@@ -700,38 +676,32 @@ async function sendResetEmail(to, link) {
 
       await gmail.users.messages.send({
         userId: "me",
-        requestBody: { raw }
+        requestBody: { raw },
       });
       console.log("[sendResetEmail] sent via Gmail API to", to);
       return;
     } catch (err) {
-      console.error(
-        "[sendResetEmail] Gmail API error:",
-        err?.response?.data || err
-      );
-      // fall through to resend/log
+      console.error("[sendResetEmail] Gmail API error:", err?.response?.data || err);
     }
   }
 
-  // 2) Resend fallback
+  // 2) Resend
   if (RESEND_API_KEY) {
     try {
       const from =
-        process.env.FROM_EMAIL ||
-        process.env.MAIL_FROM ||
-        "ATAG Jobs <onboarding@resend.dev>";
+        process.env.FROM_EMAIL || process.env.MAIL_FROM || "ATAG Jobs <onboarding@resend.dev>";
       const resp = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${RESEND_API_KEY}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           from,
           to: [to],
           subject: "Reset your ATAG Jobs password",
-          html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`
-        })
+          html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`,
+        }),
       });
       if (!resp.ok) {
         console.error("[sendResetEmail] Resend error:", await resp.text());
@@ -743,7 +713,6 @@ async function sendResetEmail(to, link) {
     }
   }
 
-  // 3) final fallback: just log
   console.log("[sendResetEmail] no email provider configured, link:", link);
 }
 
@@ -752,15 +721,13 @@ function saveDataUrlImage(dataUrl, absDir, fileBaseNoExt) {
   const m = s.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
   if (!m) throw new Error("invalid_image_data");
 
-  const mime = m[1];
   const extRaw = m[2].toLowerCase();
   const ext = extRaw === "jpeg" ? "jpg" : extRaw;
 
   const b64 = m[3];
   const buf = Buffer.from(b64, "base64");
 
-  // keep it smaller so your JSON payload stays safe
-  const MAX = 2 * 1024 * 1024; // 2MB
+  const MAX = 2 * 1024 * 1024;
   if (buf.length > MAX) throw new Error("image_too_large");
 
   fs.ensureDirSync(absDir);
@@ -768,18 +735,15 @@ function saveDataUrlImage(dataUrl, absDir, fileBaseNoExt) {
   const abs = path.join(absDir, filename);
   fs.writeFileSync(abs, buf);
 
-  // served by /uploads static
   return `/uploads/verifications/${filename}?v=${Date.now()}`;
 }
-
 
 /* -------------- auth --------------- */
 
 app.post("/login", async (req, res) => {
   const { identifier, email, username, password } = req.body || {};
   const id = identifier || email || username;
-  if (!id || !password)
-    return res.status(400).json({ error: "missing_credentials" });
+  if (!id || !password) return res.status(400).json({ error: "missing_credentials" });
 
   const user = findUserByIdentifier(id);
   if (!user) return res.status(401).json({ error: "unknown_user" });
@@ -788,14 +752,12 @@ app.post("/login", async (req, res) => {
     return res.status(401).json({ error: "invalid_password" });
   }
 
-    if (!user.verified) {
+  if (!user.verified) {
     return res.status(403).json({
       error: "pending_verification",
-      code: "PENDING_VERIFICATION"
+      code: "PENDING_VERIFICATION",
     });
   }
-
-  
 
   const token = signUserToken(user);
   addAudit("login", { identifier: id }, { user });
@@ -810,28 +772,18 @@ app.post("/login", async (req, res) => {
       username: user.username || "",
       phone: user.phone || "",
       discord: user.discord || "",
-      avatarUrl: user.avatarUrl || ""
-    }
+      avatarUrl: user.avatarUrl || "",
+    },
   });
 });
 
 app.post("/register", async (req, res) => {
-  const {
-    email,
-    username,
-    name,
-    password,
-    role,
-    phone,
-    discord,
-    verificationDataUrl
-  } = req.body || {};
+  const { email, username, name, password, role, phone, discord, verificationDataUrl } = req.body || {};
 
   if (!email || !password) {
     return res.status(400).json({ error: "email_and_password_required" });
   }
 
-  // ✅ MUST upload verification photo
   if (!verificationDataUrl || typeof verificationDataUrl !== "string") {
     return res.status(400).json({ error: "verification_photo_required" });
   }
@@ -856,11 +808,7 @@ app.post("/register", async (req, res) => {
 
   let verificationPhotoUrl = "";
   try {
-    verificationPhotoUrl = saveDataUrlImage(
-      verificationDataUrl,
-      verificationsDir,
-      `${id}-${Date.now()}`
-    );
+    verificationPhotoUrl = saveDataUrlImage(verificationDataUrl, verificationsDir, `${id}-${Date.now()}`);
   } catch (e) {
     return res.status(400).json({ error: e?.message || "invalid_verification_photo" });
   }
@@ -876,21 +824,17 @@ app.post("/register", async (req, res) => {
     phone: String(phone || ""),
     discord: String(discord || ""),
     avatarUrl: "",
-
-    // ✅ verification gate
     verified: false,
     verificationStatus: "PENDING",
     verificationPhotoUrl,
     verifiedAt: null,
-    verifiedBy: null
+    verifiedBy: null,
   };
 
   db.users.push(newUser);
   await saveDB(db);
   addAudit("register_pending_verification", { email, role: pickedRole }, { user: newUser });
 
-  // ✅ IMPORTANT: DO NOT return token.
-  // User cannot log in until admin verifies.
   res.json({
     ok: true,
     pending: true,
@@ -906,11 +850,10 @@ app.post("/register", async (req, res) => {
       avatarUrl: newUser.avatarUrl,
       verified: newUser.verified,
       verificationStatus: newUser.verificationStatus,
-      verificationPhotoUrl: newUser.verificationPhotoUrl
-    }
+      verificationPhotoUrl: newUser.verificationPhotoUrl,
+    },
   });
 });
-
 
 /* ---- forgot + reset password ---- */
 app.post("/forgot-password", async (req, res) => {
@@ -918,14 +861,9 @@ app.post("/forgot-password", async (req, res) => {
   if (!email) return res.status(400).json({ error: "email_required" });
 
   const emailLower = String(email).toLowerCase();
-  const user = db.users.find(
-    (u) => String(u.email || "").toLowerCase() === emailLower
-  );
+  const user = db.users.find((u) => String(u.email || "").toLowerCase() === emailLower);
 
-  // Always return ok
-  if (!user) {
-    return res.json({ ok: true });
-  }
+  if (!user) return res.json({ ok: true });
 
   const token = crypto.randomBytes(24).toString("hex");
   const expiresAt = Date.now() + 60 * 60 * 1000;
@@ -954,14 +892,9 @@ app.post("/forgot-password", async (req, res) => {
 
 app.post("/reset-password", async (req, res) => {
   const { token, password } = req.body || {};
-  if (!token || !password)
-    return res
-      .status(400)
-      .json({ error: "missing_token_or_password" });
+  if (!token || !password) return res.status(400).json({ error: "missing_token_or_password" });
 
-  const user = db.users.find(
-    (u) => u.resetToken && u.resetToken.token === token
-  );
+  const user = db.users.find((u) => u.resetToken && u.resetToken.token === token);
   if (!user) return res.status(400).json({ error: "invalid_token" });
 
   if (Date.now() > Number(user.resetToken.expiresAt)) {
@@ -987,7 +920,7 @@ app.post("/auth/reset", (req, res, next) => {
   app._router.handle(req, res, next);
 });
 
-/* ---- ME (current user) ---- */
+/* ---- ME ---- */
 app.get("/me", authMiddleware, (req, res) => {
   const user = db.users.find((u) => u.id === req.user.id);
   res.json({
@@ -1000,12 +933,11 @@ app.get("/me", authMiddleware, (req, res) => {
       username: user.username || "",
       phone: user.phone || "",
       discord: user.discord || "",
-      avatarUrl: user.avatarUrl || ""
-    }
+      avatarUrl: user.avatarUrl || "",
+    },
   });
 });
 
-// Update profile (email, username, name, phone, discord)
 async function handleUpdateMe(req, res) {
   const user = (db.users || []).find((u) => u.id === req.user.id);
   if (!user) return res.status(404).json({ error: "user_not_found" });
@@ -1047,58 +979,44 @@ async function handleUpdateMe(req, res) {
       grade: user.grade || "junior",
       phone: user.phone || "",
       discord: user.discord || "",
-      avatarUrl: user.avatarUrl || ""
-    }
+      avatarUrl: user.avatarUrl || "",
+    },
   });
 }
 app.patch("/me", authMiddleware, handleUpdateMe);
 app.post("/me/update", authMiddleware, handleUpdateMe);
-
-/* ✅ NEW: routes your frontend calls */
 app.post("/me/profile", authMiddleware, handleUpdateMe);
 app.patch("/me/profile", authMiddleware, handleUpdateMe);
 
-// Change password
 app.post("/me/password", authMiddleware, async (req, res) => {
   const user = (db.users || []).find((u) => u.id === req.user.id);
   if (!user) return res.status(404).json({ error: "user_not_found" });
   const { currentPassword, newPassword } = req.body || {};
-  if (!currentPassword || !newPassword) {
-    return res.status(400).json({ error: "missing_fields" });
-  }
-  if (!verifyPassword(currentPassword, user.passwordHash)) {
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: "missing_fields" });
+  if (!verifyPassword(currentPassword, user.passwordHash))
     return res.status(401).json({ error: "invalid_current_password" });
-  }
-  if (String(newPassword).length < 6) {
-    return res.status(400).json({ error: "weak_password" });
-  }
+  if (String(newPassword).length < 6) return res.status(400).json({ error: "weak_password" });
   user.passwordHash = hashPassword(String(newPassword));
   await saveDB(db);
   addAudit("me_change_password", { userId: user.id }, req);
   return res.json({ ok: true });
 });
 
-// Upload avatar (expects dataUrl: "data:image/...;base64,XXXX")
 app.post("/me/avatar", authMiddleware, async (req, res) => {
   const user = (db.users || []).find((u) => u.id === req.user.id);
   if (!user) return res.status(404).json({ error: "user_not_found" });
 
   const dataUrl = req.body?.dataUrl;
-  if (!dataUrl || typeof dataUrl !== "string") {
-    return res.status(400).json({ error: "dataUrl_required" });
-  }
+  if (!dataUrl || typeof dataUrl !== "string") return res.status(400).json({ error: "dataUrl_required" });
 
   const m = dataUrl.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
   if (!m) return res.status(400).json({ error: "invalid_image_data" });
 
-  const mime = m[1];
   const ext = m[2] === "jpeg" ? "jpg" : m[2];
   const b64 = m[3];
   const buf = Buffer.from(b64, "base64");
 
-  if (buf.length > 2 * 1024 * 1024) {
-    return res.status(400).json({ error: "image_too_large" });
-  }
+  if (buf.length > 2 * 1024 * 1024) return res.status(400).json({ error: "image_too_large" });
 
   const filename = `${user.id}.${ext}`;
   const abs = path.join(avatarsDir, filename);
@@ -1106,228 +1024,172 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
 
   user.avatarUrl = `/uploads/avatars/${filename}?v=${Date.now()}`;
   await saveDB(db);
-  addAudit("me_update_avatar", { userId: user.id, mime }, req);
+  addAudit("me_update_avatar", { userId: user.id, ext }, req);
 
   return res.json({ ok: true, avatarUrl: user.avatarUrl });
 });
 
 /* -------- Admin: users -------- */
-app.get(
-  "/admin/users",
-  authMiddleware,
-  requireRole("admin"),
-  (_req, res) => {
-   const list = (db.users || []).map((u) => ({
-  id: u.id,
-  email: u.email,
-  username: u.username,
-  name: u.name,
-  role: u.role,
-  grade: u.grade || "junior",
-  phone: u.phone || "",
-  discord: u.discord || "",
-  avatarUrl: u.avatarUrl || "",
+app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
+  const list = (db.users || []).map((u) => ({
+    id: u.id,
+    email: u.email,
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    grade: u.grade || "junior",
+    phone: u.phone || "",
+    discord: u.discord || "",
+    avatarUrl: u.avatarUrl || "",
+    verified: !!u.verified,
+    verificationStatus: u.verificationStatus || (u.verified ? "APPROVED" : "PENDING"),
+    verificationPhotoUrl: u.verificationPhotoUrl || "",
+    verifiedAt: u.verifiedAt || null,
+    verifiedBy: u.verifiedBy || null,
+  }));
 
-  // ✅ verification info
-  verified: !!u.verified,
-  verificationStatus: u.verificationStatus || (u.verified ? "APPROVED" : "PENDING"),
-  verificationPhotoUrl: u.verificationPhotoUrl || "",
-  verifiedAt: u.verifiedAt || null,
-  verifiedBy: u.verifiedBy || null
-}));
+  res.json(list);
+});
 
-    res.json(list);
+app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
+  const target = db.users.find((u) => u.id === req.params.id);
+  if (!target) return res.status(404).json({ error: "user_not_found" });
+
+  const { role, grade, verified, verificationStatus } = req.body || {};
+  const before = { role: target.role, grade: target.grade || "junior" };
+
+  if (role && clampRole(role) !== "admin" && target.role === "admin") {
+    const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
+    if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
   }
-);
 
-app.patch(
-  "/admin/users/:id",
-  authMiddleware,
-  requireRole("admin"),
-  async (req, res) => {
-    const target = db.users.find((u) => u.id === req.params.id);
-    if (!target) return res.status(404).json({ error: "user_not_found" });
+  if (role !== undefined) target.role = clampRole(role);
+  if (grade !== undefined) target.grade = clampGrade(grade);
 
-    const { role, grade, verified, verificationStatus } = req.body || {};
-    const before = { role: target.role, grade: target.grade || "junior" };
+  if (verified !== undefined) {
+    target.verified = !!verified;
+    target.verificationStatus = target.verified ? "APPROVED" : target.verificationStatus || "PENDING";
+    target.verifiedAt = target.verified ? dayjs().toISOString() : null;
+    target.verifiedBy = target.verified ? req.user.id : null;
+  }
 
-    if (role && clampRole(role) !== "admin" && target.role === "admin") {
-      const adminCount = (db.users || []).filter(
-        (u) => u.role === "admin"
-      ).length;
-      if (adminCount <= 1)
-        return res.status(400).json({ error: "last_admin" });
+  if (verificationStatus !== undefined) {
+    const s = String(verificationStatus || "").toUpperCase();
+    if (!["PENDING", "APPROVED", "REJECTED"].includes(s)) {
+      return res.status(400).json({ error: "bad_verificationStatus" });
     }
-
-    if (role !== undefined) target.role = clampRole(role);
-    if (grade !== undefined) target.grade = clampGrade(grade); // ✅ use clampGrade
-
-    // ✅ verification approve/reject
-if (verified !== undefined) {
-  target.verified = !!verified;
-  target.verificationStatus = target.verified ? "APPROVED" : (target.verificationStatus || "PENDING");
-  target.verifiedAt = target.verified ? dayjs().toISOString() : null;
-  target.verifiedBy = target.verified ? req.user.id : null;
-}
-
-if (verificationStatus !== undefined) {
-  const s = String(verificationStatus || "").toUpperCase();
-  if (!["PENDING", "APPROVED", "REJECTED"].includes(s)) {
-    return res.status(400).json({ error: "bad_verificationStatus" });
+    target.verificationStatus = s;
+    if (s === "APPROVED") {
+      target.verified = true;
+      target.verifiedAt = dayjs().toISOString();
+      target.verifiedBy = req.user.id;
+    }
+    if (s === "REJECTED" || s === "PENDING") {
+      target.verified = false;
+      target.verifiedAt = null;
+      target.verifiedBy = null;
+    }
   }
-  target.verificationStatus = s;
-  if (s === "APPROVED") {
-    target.verified = true;
-    target.verifiedAt = dayjs().toISOString();
-    target.verifiedBy = req.user.id;
-  }
-  if (s === "REJECTED" || s === "PENDING") {
-    target.verified = false;
-    target.verifiedAt = null;
-    target.verifiedBy = null;
-  }
-}
 
-    
-    await saveDB(db);
-    addAudit(
-      "admin_update_user_role_grade",
-      {
-        userId: target.id,
-        before,
-        after: { role: target.role, grade: target.grade }
-      },
-      req
-    );
+  await saveDB(db);
+  addAudit(
+    "admin_update_user_role_grade",
+    { userId: target.id, before, after: { role: target.role, grade: target.grade } },
+    req
+  );
 
-    try {
-      await notifyUsers([target.id], {
-        title: "Your account was updated",
-        body: `Role: ${target.role} • Grade: ${target.grade || "junior"} • Verified: ${target.verified ? "YES" : "NO"}`,
-        link: "/#/",
-        type: "account_update"
-      });
-    } catch {}
-
-    res.json({
-      ok: true,
-      user: {
-        id: target.id,
-        email: target.email,
-        username: target.username,
-        name: target.name,
-        role: target.role,
-        grade: target.grade || "junior",
-        phone: target.phone || "",
-        discord: target.discord || "",
-        avatarUrl: target.avatarUrl || "",
-        verified: !!target.verified,
-        verificationStatus: target.verificationStatus || (target.verified ? "APPROVED" : "PENDING"),
-        verificationPhotoUrl: target.verificationPhotoUrl || "",
-        verifiedAt: target.verifiedAt || null,
-        verifiedBy: target.verifiedBy || null
-
-      }
+  try {
+    await notifyUsers([target.id], {
+      title: "Your account was updated",
+      body: `Role: ${target.role} • Grade: ${target.grade || "junior"} • Verified: ${
+        target.verified ? "YES" : "NO"
+      }`,
+      link: "/#/",
+      type: "account_update",
     });
+  } catch {}
+
+  res.json({
+    ok: true,
+    user: {
+      id: target.id,
+      email: target.email,
+      username: target.username,
+      name: target.name,
+      role: target.role,
+      grade: target.grade || "junior",
+      phone: target.phone || "",
+      discord: target.discord || "",
+      avatarUrl: target.avatarUrl || "",
+      verified: !!target.verified,
+      verificationStatus: target.verificationStatus || (target.verified ? "APPROVED" : "PENDING"),
+      verificationPhotoUrl: target.verificationPhotoUrl || "",
+      verifiedAt: target.verifiedAt || null,
+      verifiedBy: target.verifiedBy || null,
+    },
+  });
+});
+
+app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
+  const uid = req.params.id;
+  const user = (db.users || []).find((u) => u.id === uid);
+  if (!user) return res.status(404).json({ error: "user_not_found" });
+
+  if (user.role === "admin") {
+    const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
+    if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
   }
-);
 
-// DELETE /admin/users/:id  — hard delete a user and purge references
-app.delete(
-  "/admin/users/:id",
-  authMiddleware,
-  requireRole("admin"),
-  async (req, res) => {
-    const uid = req.params.id;
-    const user = (db.users || []).find((u) => u.id === uid);
-    if (!user) return res.status(404).json({ error: "user_not_found" });
+  db.users = (db.users || []).filter((u) => u.id !== uid);
 
-    // Don't allow deleting the last admin
-    if (user.role === "admin") {
-      const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
-      if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
+  for (const j of db.jobs || []) {
+    j.applications = (j.applications || []).filter((a) => a.userId !== uid);
+    j.approved = (j.approved || []).filter((x) => x !== uid);
+    j.rejected = (j.rejected || []).filter((x) => x !== uid);
+    if (j.attendance && j.attendance[uid]) delete j.attendance[uid];
+
+    if (j.loadingUnload) {
+      ensureLoadingUnload(j);
+      j.loadingUnload.applicants = (j.loadingUnload.applicants || []).filter((x) => x !== uid);
+      j.loadingUnload.participants = (j.loadingUnload.participants || []).filter((x) => x !== uid);
+      ensureLoadingUnload(j);
     }
 
-    // Remove from users
-    db.users = (db.users || []).filter((u) => u.id !== uid);
-
-    // Purge references across jobs
-    for (const j of db.jobs || []) {
-      j.applications = (j.applications || []).filter((a) => a.userId !== uid);
-      j.approved = (j.approved || []).filter((x) => x !== uid);
-      j.rejected = (j.rejected || []).filter((x) => x !== uid);
-      if (j.attendance && j.attendance[uid]) delete j.attendance[uid];
-
-      if (j.loadingUnload) {
-        j.loadingUnload.applicants = (j.loadingUnload.applicants || []).filter((x) => x !== uid);
-        j.loadingUnload.participants = (j.loadingUnload.participants || []).filter((x) => x !== uid);
-        const quota = Number(j.loadingUnload.quota || 0);
-        const partCount = (j.loadingUnload.participants || []).length;
-        j.loadingUnload.closed = quota > 0 && partCount >= quota;
-      }
-
-      // ✅ also remove from fullTimers
-      if (Array.isArray(j.fullTimers)) {
-        j.fullTimers = j.fullTimers.filter((ft) => ft && ft.userId !== uid);
-      }
+    if (Array.isArray(j.fullTimers)) {
+      j.fullTimers = j.fullTimers.filter((ft) => ft && ft.userId !== uid);
     }
-
-    // Notifications / push subscriptions
-    delete db.notifications?.[uid];
-    delete db.pushSubs?.[uid];
-
-    await saveDB(db);
-    addAudit("admin_delete_user", { userId: uid, email: user.email }, req);
-    res.json({ ok: true, removed: { id: user.id, email: user.email } });
   }
-);
+
+  delete db.notifications?.[uid];
+  delete db.pushSubs?.[uid];
+
+  await saveDB(db);
+  addAudit("admin_delete_user", { userId: uid, email: user.email }, req);
+  res.json({ ok: true, removed: { id: user.id, email: user.email } });
+});
 
 /* -------- Config (Admin) -------- */
-app.get(
-  "/config/rates",
-  authMiddleware,
-  requireRole("admin"),
-  (_req, res) => {
-    res.json({
-      ...db.config.rates,
-      roleRatesDefaults: db.config.roleRatesDefaults
-    });
+app.get("/config/rates", authMiddleware, requireRole("admin"), (_req, res) => {
+  res.json({
+    ...db.config.rates,
+    roleRatesDefaults: db.config.roleRatesDefaults,
+  });
+});
+app.post("/config/rates", authMiddleware, requireRole("admin"), async (req, res) => {
+  const body = req.body || {};
+  db.config.rates = Object.keys(body).length ? { ...db.config.rates, ...body } : db.config.rates;
+  if (body.roleRatesDefaults && typeof body.roleRatesDefaults === "object") {
+    db.config.roleRatesDefaults = { ...db.config.roleRatesDefaults, ...body.roleRatesDefaults };
   }
-);
-app.post(
-  "/config/rates",
-  authMiddleware,
-  requireRole("admin"),
-  async (req, res) => {
-    const body = req.body || {};
-    db.config.rates = Object.keys(body).length
-      ? { ...db.config.rates, ...body }
-      : db.config.rates;
-    if (
-      body.roleRatesDefaults &&
-      typeof body.roleRatesDefaults === "object"
-    ) {
-      db.config.roleRatesDefaults = {
-        ...db.config.roleRatesDefaults,
-        ...body.roleRatesDefaults
-      };
-    }
-    await saveDB(db);
-    addAudit(
-      "update_rates_default",
-      {
-        rates: db.config.rates,
-        roleRatesDefaults: db.config.roleRatesDefaults
-      },
-      req
-    );
-    res.json({
-      ok: true,
-      rates: db.config.rates,
-      roleRatesDefaults: db.config.roleRatesDefaults
-    });
-  }
-);
+  // ensure earlyCall thresholdHours exists after updates
+  db.config.rates.earlyCall = db.config.rates.earlyCall || {};
+  if (db.config.rates.earlyCall.thresholdHours == null)
+    db.config.rates.earlyCall.thresholdHours = DEFAULT_RATES.earlyCall.thresholdHours;
+
+  await saveDB(db);
+  addAudit("update_rates_default", { rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults }, req);
+  res.json({ ok: true, rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults });
+});
 
 /* -------------- jobs --------------- */
 app.get("/jobs", (_req, res) => {
@@ -1340,727 +1202,534 @@ app.get("/jobs", (_req, res) => {
 app.get("/jobs/:id", (req, res) => {
   const job = db.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
+  ensureLoadingUnload(job);
   const hydrated = hydrateJobFullTimers(job);
   res.json({ ...hydrated, status: computeStatus(hydrated) });
 });
 
-app.post(
-  "/jobs",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const {
-      title,
-      venue,
-      description,
-      startTime,
-      endTime,
-      headcount,
-      transportOptions,
-      rate,
-      earlyCall,
-      loadingUnload,
-      ldu,
-      roleCounts,
-      roleRates
-    } = req.body || {};
-    if (!title || !venue || !startTime || !endTime)
-      return res.status(400).json({ error: "missing_fields" });
+app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const {
+    title,
+    venue,
+    description,
+    startTime,
+    endTime,
+    headcount,
+    transportOptions,
+    rate,
+    earlyCall,
+    loadingUnload,
+    ldu,
+    roleCounts,
+    roleRates,
+  } = req.body || {};
+  if (!title || !venue || !startTime || !endTime) return res.status(400).json({ error: "missing_fields" });
 
-    const id = "j" + Math.random().toString(36).slice(2, 8);
-    const lduBody = ldu || loadingUnload || {};
+  const id = "j" + Math.random().toString(36).slice(2, 8);
+  const lduBody = ldu || loadingUnload || {};
 
-    // ✅ counts now include emcee grades
-    const counts = {
-      junior: Number(roleCounts?.junior ?? 0),
-      senior: Number(roleCounts?.senior ?? 0),
-      lead: Number(roleCounts?.lead ?? 0),
-      junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
-      senior_emcee: Number(roleCounts?.senior_emcee ?? 0)
+  const counts = {
+    junior: Number(roleCounts?.junior ?? 0),
+    senior: Number(roleCounts?.senior ?? 0),
+    lead: Number(roleCounts?.lead ?? 0),
+    junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
+    senior_emcee: Number(roleCounts?.senior_emcee ?? 0),
+  };
+  const countsSum =
+    counts.junior + counts.senior + counts.lead + counts.junior_emcee + counts.senior_emcee;
+
+  const rrDef = db.config.roleRatesDefaults || {};
+  const roleRatesMerged = {};
+  for (const r of STAFF_ROLES) {
+    roleRatesMerged[r] = {
+      payMode: roleRates?.[r]?.payMode ?? rrDef?.[r]?.payMode ?? "hourly",
+      base: Number(roleRates?.[r]?.base ?? rrDef?.[r]?.base ?? 0),
+      specificPayment: roleRates?.[r]?.specificPayment ?? rrDef?.[r]?.specificPayment ?? null,
+      otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? rrDef?.[r]?.otMultiplier ?? 0),
     };
-    const countsSum =
-      counts.junior +
-      counts.senior +
-      counts.lead +
-      counts.junior_emcee +
-      counts.senior_emcee;
-
-    const rrDef = db.config.roleRatesDefaults || {};
-    const roleRatesMerged = {};
-    for (const r of STAFF_ROLES) {
-      roleRatesMerged[r] = {
-        payMode: roleRates?.[r]?.payMode ?? rrDef?.[r]?.payMode ?? "hourly",
-        base: Number(roleRates?.[r]?.base ?? rrDef?.[r]?.base ?? 0),
-        specificPayment:
-          roleRates?.[r]?.specificPayment ?? rrDef?.[r]?.specificPayment ?? null,
-        otMultiplier: Number(
-          roleRates?.[r]?.otMultiplier ?? rrDef?.[r]?.otMultiplier ?? 0
-        )
-      };
-    }
-
-    const job = {
-      id,
-      title,
-      venue,
-      description: description || "",
-      startTime,
-      endTime,
-      status: "upcoming",
-      headcount: Number(headcount || countsSum || 5),
-      transportOptions: transportOptions || { bus: true, own: true },
-      rate: rate
-        ? { ...db.config.rates, ...rate }
-        : JSON.parse(JSON.stringify(db.config.rates)),
-      roleCounts: counts,
-      roleRates: roleRatesMerged,
-      earlyCall: {
-        enabled: !!earlyCall?.enabled,
-        amount: Number(
-          earlyCall?.amount ??
-            db.config.rates.earlyCall?.defaultAmount ??
-            20
-        ),
-        thresholdHours: Number(earlyCall?.thresholdHours ?? 3),
-        participants: Array.isArray(earlyCall?.participants) ? earlyCall.participants : [],
-      },
-      loadingUnload: {
-        enabled: !!lduBody.enabled,
-        quota: Number(lduBody.quota ?? 0),
-        price: Number(
-          lduBody.price ?? db.config.rates.loadingUnloading.amount
-        ),
-        applicants: [],
-        participants: [],
-        closed: false
-      },
-      applications: [],
-      approved: [],
-      rejected: [],
-      attendance: {},
-      events: { startedAt: null, endedAt: null, scanner: null },
-      adjustments: {},
-      fullTimers: [] // ✅ initialise empty full-timer list
-    };
-
-    db.jobs.push(job);
-    await saveDB(db);
-    addAudit("create_job", { jobId: id, title }, req);
-
-    try {
-      const recipients = (db.users || []).map((u) => u.id);
-      notifyUsers(recipients, {
-        title: `New job: ${title}`,
-        body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
-        link: `/#/jobs/${id}`,
-        type: "job_new"
-      }).catch(() => {});
-    } catch {}
-
-    res.json(job);
   }
-);
 
-app.patch(
-  "/jobs/:id",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const {
-      title,
-      venue,
-      description,
-      startTime,
-      endTime,
-      headcount,
-      rate,
-      transportOptions,
-      earlyCall,
-      loadingUnload,
-      ldu,
-      roleCounts,
-      roleRates
-    } = req.body || {};
-
-    if (title !== undefined) job.title = title;
-    if (venue !== undefined) job.venue = venue;
-    if (description !== undefined) job.description = description;
-    if (startTime !== undefined) job.startTime = startTime;
-    if (endTime !== undefined) job.endTime = endTime;
-    if (headcount !== undefined) job.headcount = Number(headcount);
-    if (transportOptions)
-      job.transportOptions = {
-        bus: !!transportOptions.bus,
-        own: !!transportOptions.own
-      };
-
-    if (rate && typeof rate === "object") {
-      job.rate = { ...job.rate, ...rate };
-    }
-
-    if (earlyCall) {
-      job.earlyCall = {
-        enabled: !!earlyCall.enabled,
-        amount: Number(
-          earlyCall.amount ??
-            job.earlyCall?.amount ??
-            db.config.rates.earlyCall?.defaultAmount ??
-            20
-        ),
-        thresholdHours: Number(
-          earlyCall.thresholdHours ?? job.earlyCall?.thresholdHours ?? 3
-        )
-      };
-    }
-
-    const lduBody = ldu || loadingUnload;
-    if (lduBody) {
-      const prevClosed = !!job.loadingUnload?.closed;
-      job.loadingUnload = {
-        enabled:
-          lduBody.enabled !== undefined
-            ? !!lduBody.enabled
-            : !!job.loadingUnload?.enabled,
-        quota: Number(lduBody.quota ?? job.loadingUnload?.quota ?? 0),
-        price: Number(
-          lduBody.price ??
-            job.loadingUnload?.price ??
-            db.config.rates.loadingUnloading.amount
-        ),
-        applicants: Array.isArray(job.loadingUnload?.applicants)
-          ? Array.from(new Set(job.loadingUnload.applicants))
-          : [],
-        participants: Array.isArray(job.loadingUnload?.participants)
-          ? Array.from(new Set(job.loadingUnload.participants))
-          : [],
-        closed: prevClosed
-      };
-      if (
-        job.loadingUnload.quota > 0 &&
-        job.loadingUnload.participants.length >= job.loadingUnload.quota
-      ) {
-        job.loadingUnload.closed = true;
-      }
-      if (lduBody.closed === false) job.loadingUnload.closed = false;
-      if (lduBody.closed === true) job.loadingUnload.closed = true;
-    }
-
-    // ✅ roleCounts with emcee support
-    if (roleCounts && typeof roleCounts === "object") {
-      job.roleCounts = {
-        junior: Number(roleCounts.junior ?? job.roleCounts?.junior ?? 0),
-        senior: Number(roleCounts.senior ?? job.roleCounts?.senior ?? 0),
-        lead: Number(roleCounts.lead ?? job.roleCounts?.lead ?? 0),
-        junior_emcee: Number(
-          roleCounts.junior_emcee ?? job.roleCounts?.junior_emcee ?? 0
-        ),
-        senior_emcee: Number(
-          roleCounts.senior_emcee ?? job.roleCounts?.senior_emcee ?? 0
-        )
-      };
-      const sum =
-        job.roleCounts.junior +
-        job.roleCounts.senior +
-        job.roleCounts.lead +
-        job.roleCounts.junior_emcee +
-        job.roleCounts.senior_emcee;
-      if (!headcount) job.headcount = Number(job.headcount || sum || 5);
-    }
-
-    if (roleRates && typeof roleRates === "object") {
-      job.roleRates = job.roleRates || {};
-      for (const r of STAFF_ROLES) {
-        job.roleRates[r] = {
-          payMode:
-            roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(
-            roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0
-          ),
-          specificPayment:
-            roleRates?.[r]?.specificPayment ??
-            job.roleRates?.[r]?.specificPayment ??
-            null,
-          otMultiplier: Number(
-            roleRates?.[r]?.otMultiplier ??
-              job.roleRates?.[r]?.otMultiplier ??
-              0
-          )
-        };
-      }
-    }
-
-    if (req.body && typeof req.body.adjustments === "object") {
-      job.adjustments = normalizeAdjustments(req.body.adjustments, req.user);
-    }
-
-    await saveDB(db);
-    addAudit("edit_job", { jobId: job.id }, req);
-    res.json(job);
-  }
-);
-
-app.post(
-  "/jobs/:id/rate",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const {
-      base,
-      transportBus,
-      ownTransport,
-      payMode,
-      specificPayment,
-      paymentPrice,
-      lduPrice,
-      lduEnabled,
-      earlyCallAmount,
-      earlyCallThresholdHours,
-      roleRates
-    } = req.body || {};
-
-    job.rate = job.rate || {};
-    if (base !== undefined) job.rate.base = Number(base);
-    if (transportBus !== undefined)
-      job.rate.transportBus = Number(transportBus);
-    if (ownTransport !== undefined)
-      job.rate.ownTransport = Number(ownTransport);
-    if (payMode !== undefined) job.rate.payMode = String(payMode);
-    if (specificPayment !== undefined)
-      job.rate.specificPayment = Number(specificPayment);
-    if (paymentPrice !== undefined)
-      job.rate.specificPayment = Number(paymentPrice);
-    if (lduPrice !== undefined) job.rate.lduPrice = Number(lduPrice);
-
-    job.loadingUnload = job.loadingUnload || {
-      enabled: false,
-      quota: 0,
-      price: Number(db.config.rates.loadingUnloading.amount),
+  const job = {
+    id,
+    title,
+    venue,
+    description: description || "",
+    startTime,
+    endTime,
+    status: "upcoming",
+    headcount: Number(headcount || countsSum || 5),
+    transportOptions: transportOptions || { bus: true, own: true },
+    rate: rate ? { ...db.config.rates, ...rate } : JSON.parse(JSON.stringify(db.config.rates)),
+    roleCounts: counts,
+    roleRates: roleRatesMerged,
+    earlyCall: {
+      enabled: !!earlyCall?.enabled,
+      amount: Number(earlyCall?.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20),
+      thresholdHours: Number(earlyCall?.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3),
+      participants: Array.isArray(earlyCall?.participants) ? earlyCall.participants : [],
+    },
+    loadingUnload: {
+      enabled: Boolean(lduBody.enabled) || Number(lduBody.quota || 0) > 0,
+      quota: Number(lduBody.quota ?? 0),
+      price: Number(lduBody.price ?? db.config.rates.loadingUnloading.amount),
       applicants: [],
       participants: [],
-      closed: false
-    };
-    if (lduEnabled !== undefined) job.loadingUnload.enabled = !!lduEnabled;
-    if (lduPrice !== undefined) job.loadingUnload.price = Number(lduPrice);
+      closed: false,
+    },
+    applications: [],
+    approved: [],
+    rejected: [],
+    attendance: {},
+    events: { startedAt: null, endedAt: null, scanner: null },
+    adjustments: {},
+    fullTimers: [],
+  };
 
-    job.earlyCall = job.earlyCall || {
-      enabled: false,
-      amount: Number(db.config.rates.earlyCall?.defaultAmount ?? 20),
-      thresholdHours: 3
-    };
-    if (earlyCallAmount !== undefined)
-      job.earlyCall.amount = Number(earlyCallAmount);
-    if (earlyCallThresholdHours !== undefined)
-      job.earlyCall.thresholdHours = Number(earlyCallThresholdHours);
+  ensureLoadingUnload(job);
 
-    if (roleRates && typeof roleRates === "object") {
-      job.roleRates = job.roleRates || {};
-      for (const r of STAFF_ROLES) {
-        job.roleRates[r] = {
-          payMode:
-            roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-          base: Number(
-            roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0
-          ),
-          specificPayment:
-            roleRates?.[r]?.specificPayment ??
-            job.roleRates?.[r]?.specificPayment ??
-            null,
-          otMultiplier: Number(
-            roleRates?.[r]?.otMultiplier ??
-              job.roleRates?.[r]?.otMultiplier ??
-              0
-          )
-        };
-      }
-    }
+  db.jobs.push(job);
+  await saveDB(db);
+  addAudit("create_job", { jobId: id, title }, req);
 
-    await saveDB(db);
-    addAudit("update_job_rate", { jobId: job.id }, req);
-    res.json({
-      ok: true,
-      rate: job.rate,
-      earlyCall: job.earlyCall,
-      loadingUnload: job.loadingUnload,
-      roleRates: job.roleRates
-    });
+  try {
+    const recipients = (db.users || []).map((u) => u.id);
+    notifyUsers(recipients, {
+      title: `New job: ${title}`,
+      body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
+      link: `/#/jobs/${id}`,
+      type: "job_new",
+    }).catch(() => {});
+  } catch {}
+
+  res.json(job);
+});
+
+app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  const {
+    title,
+    venue,
+    description,
+    startTime,
+    endTime,
+    headcount,
+    rate,
+    transportOptions,
+    earlyCall,
+    loadingUnload,
+    ldu,
+    roleCounts,
+    roleRates,
+  } = req.body || {};
+
+  if (title !== undefined) job.title = title;
+  if (venue !== undefined) job.venue = venue;
+  if (description !== undefined) job.description = description;
+  if (startTime !== undefined) job.startTime = startTime;
+  if (endTime !== undefined) job.endTime = endTime;
+  if (headcount !== undefined) job.headcount = Number(headcount);
+  if (transportOptions)
+    job.transportOptions = { bus: !!transportOptions.bus, own: !!transportOptions.own };
+
+  if (rate && typeof rate === "object") {
+    job.rate = { ...job.rate, ...rate };
   }
-);
+
+  // ✅ FIX: do NOT wipe participants when editing earlyCall config
+  if (earlyCall) {
+    const ec = ensureEarlyCall(job);
+    ec.enabled = !!earlyCall.enabled;
+    ec.amount = Number(
+      earlyCall.amount ?? ec.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20
+    );
+    ec.thresholdHours = Number(
+      earlyCall.thresholdHours ?? ec.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3
+    );
+    if (Array.isArray(earlyCall.participants)) {
+      ec.participants = Array.from(new Set(earlyCall.participants.filter(Boolean)));
+    }
+    job.earlyCall = ec;
+  }
+
+  const lduBody = ldu || loadingUnload;
+  if (lduBody) {
+    ensureLoadingUnload(job);
+    if (lduBody.enabled !== undefined) job.loadingUnload.enabled = !!lduBody.enabled;
+    if (lduBody.quota !== undefined) job.loadingUnload.quota = Number(lduBody.quota ?? 0);
+    if (lduBody.price !== undefined)
+      job.loadingUnload.price = Number(lduBody.price ?? db.config.rates.loadingUnloading.amount);
+    if (lduBody.closed === false) job.loadingUnload.closed = false;
+    if (lduBody.closed === true) job.loadingUnload.closed = true;
+
+    // ✅ re-normalize after changes (fixes stale closed when quota becomes 0)
+    ensureLoadingUnload(job);
+  }
+
+  if (roleCounts && typeof roleCounts === "object") {
+    job.roleCounts = {
+      junior: Number(roleCounts.junior ?? job.roleCounts?.junior ?? 0),
+      senior: Number(roleCounts.senior ?? job.roleCounts?.senior ?? 0),
+      lead: Number(roleCounts.lead ?? job.roleCounts?.lead ?? 0),
+      junior_emcee: Number(roleCounts.junior_emcee ?? job.roleCounts?.junior_emcee ?? 0),
+      senior_emcee: Number(roleCounts.senior_emcee ?? job.roleCounts?.senior_emcee ?? 0),
+    };
+    const sum =
+      job.roleCounts.junior +
+      job.roleCounts.senior +
+      job.roleCounts.lead +
+      job.roleCounts.junior_emcee +
+      job.roleCounts.senior_emcee;
+    if (!headcount) job.headcount = Number(job.headcount || sum || 5);
+  }
+
+  if (roleRates && typeof roleRates === "object") {
+    job.roleRates = job.roleRates || {};
+    for (const r of STAFF_ROLES) {
+      job.roleRates[r] = {
+        payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
+        base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+        specificPayment:
+          roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
+        otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
+      };
+    }
+  }
+
+  if (req.body && typeof req.body.adjustments === "object") {
+    job.adjustments = normalizeAdjustments(req.body.adjustments, req.user);
+  }
+
+  await saveDB(db);
+  addAudit("edit_job", { jobId: job.id }, req);
+  res.json(job);
+});
+
+app.post("/jobs/:id/rate", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  const {
+    base,
+    transportBus,
+    ownTransport,
+    payMode,
+    specificPayment,
+    paymentPrice,
+    lduPrice,
+    lduEnabled,
+    earlyCallAmount,
+    earlyCallThresholdHours,
+    roleRates,
+  } = req.body || {};
+
+  job.rate = job.rate || {};
+  if (base !== undefined) job.rate.base = Number(base);
+  if (transportBus !== undefined) job.rate.transportBus = Number(transportBus);
+  if (ownTransport !== undefined) job.rate.ownTransport = Number(ownTransport);
+  if (payMode !== undefined) job.rate.payMode = String(payMode);
+  if (specificPayment !== undefined) job.rate.specificPayment = Number(specificPayment);
+  if (paymentPrice !== undefined) job.rate.specificPayment = Number(paymentPrice);
+  if (lduPrice !== undefined) job.rate.lduPrice = Number(lduPrice);
+
+  ensureLoadingUnload(job);
+  if (lduEnabled !== undefined) job.loadingUnload.enabled = !!lduEnabled;
+  if (lduPrice !== undefined) job.loadingUnload.price = Number(lduPrice);
+  ensureLoadingUnload(job);
+
+  job.earlyCall = job.earlyCall || {
+    enabled: false,
+    amount: Number(db.config.rates.earlyCall?.defaultAmount ?? 20),
+    thresholdHours: Number(db.config.rates.earlyCall?.thresholdHours ?? 3),
+    participants: [],
+  };
+  if (earlyCallAmount !== undefined) job.earlyCall.amount = Number(earlyCallAmount);
+  if (earlyCallThresholdHours !== undefined) job.earlyCall.thresholdHours = Number(earlyCallThresholdHours);
+
+  if (roleRates && typeof roleRates === "object") {
+    job.roleRates = job.roleRates || {};
+    for (const r of STAFF_ROLES) {
+      job.roleRates[r] = {
+        payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
+        base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
+        specificPayment:
+          roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
+        otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
+      };
+    }
+  }
+
+  await saveDB(db);
+  addAudit("update_job_rate", { jobId: job.id }, req);
+  res.json({
+    ok: true,
+    rate: job.rate,
+    earlyCall: job.earlyCall,
+    loadingUnload: job.loadingUnload,
+    roleRates: job.roleRates,
+  });
+});
 
 /* ---- adjustments endpoint ---- */
-app.post(
-  "/jobs/:id/adjustments",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+app.post("/jobs/:id/adjustments", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    const incoming = req.body?.adjustments || {};
-    job.adjustments = normalizeAdjustments(incoming, req.user);
+  const incoming = req.body?.adjustments || {};
+  job.adjustments = normalizeAdjustments(incoming, req.user);
 
-    await saveDB(db);
-    addAudit(
-      "update_adjustments",
-      {
-        jobId: job.id,
-        entries: Object.values(job.adjustments).reduce(
-          (s, a) => s + (Array.isArray(a) ? a.length : 0),
-          0
-        )
-      },
-      req
-    );
+  await saveDB(db);
+  addAudit(
+    "update_adjustments",
+    {
+      jobId: job.id,
+      entries: Object.values(job.adjustments).reduce(
+        (s, a) => s + (Array.isArray(a) ? a.length : 0),
+        0
+      ),
+    },
+    req
+  );
 
-    const hydrated = hydrateJobFullTimers(job);
-    return res.json({
-      ok: true,
-      job: { ...hydrated, status: computeStatus(hydrated) }
-    });
-  }
-);
+  const hydrated = hydrateJobFullTimers(job);
+  return res.json({ ok: true, job: { ...hydrated, status: computeStatus(hydrated) } });
+});
 
 /* ---- delete job ---- */
-app.delete(
-  "/jobs/:id",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const idx = db.jobs.findIndex((j) => j.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: "job_not_found" });
-    const removed = db.jobs.splice(idx, 1)[0];
-    await saveDB(db);
-    addAudit("delete_job", { jobId: removed.id }, req);
-    res.json({ ok: true });
-  }
-);
+app.delete("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const idx = db.jobs.findIndex((j) => j.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: "job_not_found" });
+  const removed = db.jobs.splice(idx, 1)[0];
+  await saveDB(db);
+  addAudit("delete_job", { jobId: removed.id }, req);
+  res.json({ ok: true });
+});
 
 /* ---- apply ---- */
-app.post(
-  "/jobs/:id/apply",
-  authMiddleware,
-  requireRole("part-timer"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    let { transport, wantsLU } = req.body || {};
-    const opts = job.transportOptions || { bus: true, own: true };
-    const bothDisabled = !opts.bus && !opts.own;
+  let { transport, wantsLU } = req.body || {};
+  const opts = job.transportOptions || { bus: true, own: true };
+  const bothDisabled = !opts.bus && !opts.own;
 
-    if (!transport || !["ATAG Bus", "Own Transport"].includes(transport)) {
-      transport = "Own Transport";
+  if (!transport || !["ATAG Bus", "Own Transport"].includes(transport)) {
+    transport = "Own Transport";
+  }
+
+  if (!bothDisabled) {
+    if (!["ATAG Bus", "Own Transport"].includes(transport)) {
+      return res.status(400).json({ error: "invalid_transport" });
     }
-
-    if (!bothDisabled) {
-      if (!["ATAG Bus", "Own Transport"].includes(transport)) {
-        return res.status(400).json({ error: "invalid_transport" });
-      }
-      if (
-        (transport === "ATAG Bus" && !opts.bus) ||
-        (transport === "Own Transport" && !opts.own)
-      ) {
-        return res.status(400).json({ error: "transport_not_allowed" });
-      }
+    if (
+      (transport === "ATAG Bus" && !opts.bus) ||
+      (transport === "Own Transport" && !opts.own)
+    ) {
+      return res.status(400).json({ error: "transport_not_allowed" });
     }
+  }
 
-    const lu = job.loadingUnload || {
-      enabled: false,
-      quota: 0,
-      price: Number(db.config.rates.loadingUnloading.amount),
-      applicants: [],
-      participants: [],
-      closed: false
-    };
-    const luEnabled = lu.enabled ?? lu.quota > 0;
+  ensureLoadingUnload(job);
+  const luEnabled = !!job.loadingUnload.enabled || Number(job.loadingUnload.quota || 0) > 0;
 
-    let exists = job.applications.find((a) => a.userId === req.user.id);
-    if (exists) {
-      const wasRejected = job.rejected.includes(req.user.id);
-      if (wasRejected) {
-        if ((job.approved?.length || 0) >= Number(job.headcount || 0)) {
-          return res.status(409).json({ error: "job_full_no_reapply" });
-        }
-        exists.transport = transport;
-        exists.appliedAt = dayjs().toISOString();
-        job.rejected = job.rejected.filter((u) => u !== req.user.id);
-        job.approved = job.approved.filter((u) => u !== req.user.id);
-
-        if (wantsLU === true) {
-          if (!luEnabled || lu.closed === true) {
-            // ignore
-          } else {
-            job.loadingUnload = lu;
-            const a = job.loadingUnload.applicants || [];
-            if (!a.includes(req.user.id)) a.push(req.user.id);
-            job.loadingUnload.applicants = a;
-          }
-        } else if (wantsLU === false && job.loadingUnload?.applicants) {
-          job.loadingUnload.applicants =
-            job.loadingUnload.applicants.filter(
-              (u) => u !== req.user.id
-            );
-        }
-
-        await saveDB(db);
-        exportJobCSV(job);
-        addAudit(
-          "reapply",
-          {
-            jobId: job.id,
-            userId: req.user.id,
-            transport,
-            wantsLU: !!wantsLU
-          },
-          req
-        );
-        return res.json({ ok: true, reapply: true });
+  let exists = job.applications.find((a) => a.userId === req.user.id);
+  if (exists) {
+    const wasRejected = job.rejected.includes(req.user.id);
+    if (wasRejected) {
+      if ((job.approved?.length || 0) >= Number(job.headcount || 0)) {
+        return res.status(409).json({ error: "job_full_no_reapply" });
       }
-
       exists.transport = transport;
+      exists.appliedAt = dayjs().toISOString();
+      job.rejected = job.rejected.filter((u) => u !== req.user.id);
+      job.approved = job.approved.filter((u) => u !== req.user.id);
 
       if (wantsLU === true) {
-        if (!luEnabled || lu.closed === true) {
-          // ignore
-        } else {
-          job.loadingUnload = lu;
+        if (luEnabled && !job.loadingUnload.closed) {
           const a = job.loadingUnload.applicants || [];
           if (!a.includes(req.user.id)) a.push(req.user.id);
           job.loadingUnload.applicants = a;
+          ensureLoadingUnload(job);
         }
-        await saveDB(db);
-        exportJobCSV(job);
-        return res.json({ ok: true, updated: true });
+      } else if (wantsLU === false && job.loadingUnload?.applicants) {
+        job.loadingUnload.applicants = job.loadingUnload.applicants.filter((u) => u !== req.user.id);
+        ensureLoadingUnload(job);
       }
 
-      if (wantsLU === false && job.loadingUnload?.applicants) {
-        job.loadingUnload.applicants =
-          job.loadingUnload.applicants.filter(
-            (u) => u !== req.user.id
-          );
-        await saveDB(db);
-        exportJobCSV(job);
-        return res.json({ ok: true, updated: true });
-      }
-
-      return res.json({ message: "already_applied" });
+      await saveDB(db);
+      exportJobCSV(job);
+      addAudit("reapply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
+      return res.json({ ok: true, reapply: true });
     }
 
-    // first-time apply
-    job.applications.push({
-      userId: req.user.id,
-      email: req.user.email,
-      transport,
-      appliedAt: dayjs().toISOString()
-    });
+    exists.transport = transport;
 
     if (wantsLU === true) {
-      if (!luEnabled || lu.closed === true) {
-        // ignore
-      } else {
-        job.loadingUnload = lu;
+      if (luEnabled && !job.loadingUnload.closed) {
         const a = job.loadingUnload.applicants || [];
         if (!a.includes(req.user.id)) a.push(req.user.id);
         job.loadingUnload.applicants = a;
+        ensureLoadingUnload(job);
       }
+      await saveDB(db);
+      exportJobCSV(job);
+      return res.json({ ok: true, updated: true });
     }
 
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit(
-      "apply",
-      {
-        jobId: job.id,
-        userId: req.user.id,
-        transport,
-        wantsLU: !!wantsLU
-      },
-      req
-    );
-    res.json({ ok: true });
+    if (wantsLU === false && job.loadingUnload?.applicants) {
+      job.loadingUnload.applicants = job.loadingUnload.applicants.filter((u) => u !== req.user.id);
+      ensureLoadingUnload(job);
+      await saveDB(db);
+      exportJobCSV(job);
+      return res.json({ ok: true, updated: true });
+    }
+
+    return res.json({ message: "already_applied" });
   }
-);
+
+  job.applications.push({
+    userId: req.user.id,
+    email: req.user.email,
+    transport,
+    appliedAt: dayjs().toISOString(),
+  });
+
+  if (wantsLU === true) {
+    if (luEnabled && !job.loadingUnload.closed) {
+      const a = job.loadingUnload.applicants || [];
+      if (!a.includes(req.user.id)) a.push(req.user.id);
+      job.loadingUnload.applicants = a;
+      ensureLoadingUnload(job);
+    }
+  }
+
+  await saveDB(db);
+  exportJobCSV(job);
+  addAudit("apply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
+  res.json({ ok: true });
+});
 
 /* ---- part-timer "my jobs" ---- */
-app.get(
-  "/me/jobs",
-  authMiddleware,
-  requireRole("part-timer"),
-  (req, res) => {
-    const result = [];
-    for (const j of db.jobs) {
-      const applied = j.applications.find((a) => a.userId === req.user.id);
-      if (applied) {
-        const state = j.approved.includes(req.user.id)
-          ? "approved"
-          : j.rejected.includes(req.user.id)
-          ? "rejected"
-          : "applied";
-        const luApplied = !!(j.loadingUnload?.applicants || []).includes(
-          req.user.id
-        );
-        const luConfirmed = !!(j.loadingUnload?.participants || []).includes(
-          req.user.id
-        );
-        result.push({
-          id: j.id,
-          title: j.title,
-          venue: j.venue,
-          startTime: j.startTime,
-          endTime: j.endTime,
-          status: computeStatus(j),
-          myStatus: state,
-          luApplied,
-          luConfirmed
-        });
-      }
-    }
-    result.sort((a, b) => dayjs(a.startTime) - dayjs(b.startTime));
-    res.json(result);
-  }
-);
-
-/* ---- PM: applicants list + approve ---- */
-app.get(
-  "/jobs/:id/applicants",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-    const list = job.applications.map((a) => {
-      let state = "applied";
-      if (job.approved.includes(a.userId)) state = "approved";
-      if (job.rejected.includes(a.userId)) state = "rejected";
-      const luApplied = !!(job.loadingUnload?.applicants || []).includes(
-        a.userId
-      );
-      const luConfirmed = !!(job.loadingUnload?.participants || []).includes(
-        a.userId
-      );
-      const u = db.users.find((x) => x.id === a.userId);
-      return {
-        ...a,
-        status: state,
-        userId: a.userId,
+app.get("/me/jobs", authMiddleware, requireRole("part-timer"), (req, res) => {
+  const result = [];
+  for (const j of db.jobs) {
+    const applied = j.applications.find((a) => a.userId === req.user.id);
+    if (applied) {
+      ensureLoadingUnload(j);
+      const state = j.approved.includes(req.user.id)
+        ? "approved"
+        : j.rejected.includes(req.user.id)
+        ? "rejected"
+        : "applied";
+      const luApplied = !!(j.loadingUnload?.applicants || []).includes(req.user.id);
+      const luConfirmed = !!(j.loadingUnload?.participants || []).includes(req.user.id);
+      result.push({
+        id: j.id,
+        title: j.title,
+        venue: j.venue,
+        startTime: j.startTime,
+        endTime: j.endTime,
+        status: computeStatus(j),
+        myStatus: state,
         luApplied,
         luConfirmed,
-        name: u?.name || "",
-        phone: u?.phone || "",
-        discord: u?.discord || "",
-        avatarUrl: u?.avatarUrl || ""
-      };
-    });
-    res.json(list);
-  }
-);
-app.post(
-  "/jobs/:id/approve",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const { userId, approve } = req.body || {};
-    if (!userId || typeof approve !== "boolean")
-      return res.status(400).json({ error: "bad_request" });
-
-    // We now ALWAYS allow changing decisions (no more one-shot lock)
-
-    // If we're trying to approve, make sure we don't exceed headcount
-    // NOTE: we check *other* approved people only.
-    if (approve) {
-      const otherApprovedCount = job.approved.filter((u) => u !== userId).length;
-      if (otherApprovedCount >= Number(job.headcount || 0)) {
-        return res.status(409).json({ error: "job_full" });
-      }
+      });
     }
-
-    const applied = job.applications.find((a) => a.userId === userId);
-    if (!applied) return res.status(400).json({ error: "user_not_applied" });
-
-    // Clear existing decision first
-    job.approved = job.approved.filter((u) => u !== userId);
-    job.rejected = job.rejected.filter((u) => u !== userId);
-
-    if (approve) {
-      job.approved.push(userId);
-
-      // Handle L&U participants if they had applied
-      job.loadingUnload = job.loadingUnload || {
-        enabled: false,
-        quota: 0,
-        price: Number(db.config.rates.loadingUnloading.amount),
-        applicants: [],
-        participants: [],
-        closed: false
-      };
-
-      const wantsLU = (job.loadingUnload.applicants || []).includes(userId);
-      const partsSet = new Set(job.loadingUnload.participants || []);
-      const quota = Number(job.loadingUnload.quota || 0);
-
-      if (wantsLU && !job.loadingUnload.closed && quota > 0) {
-        if (partsSet.size < quota) {
-          partsSet.add(userId);
-          job.loadingUnload.participants = Array.from(partsSet);
-        }
-        if (partsSet.size >= quota) {
-          job.loadingUnload.closed = true;
-          const keep = new Set(job.loadingUnload.participants || []);
-          job.loadingUnload.applicants = (
-            job.loadingUnload.applicants || []
-          ).filter((uid) => keep.has(uid));
-        }
-      }
-    } else {
-      // Mark as rejected
-      job.rejected.push(userId);
-
-      // Optional: if they were in L&U participants, you might want to remove them:
-      // const parts = new Set(job.loadingUnload?.participants || []);
-      // parts.delete(userId);
-      // job.loadingUnload.participants = Array.from(parts);
-    }
-
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
-
-    try {
-      const msg = approve ? "approved ✅" : "rejected ❌";
-      notifyUsers([userId], {
-        title: `Your application ${msg}`,
-        body: job.title,
-        link: `/#/jobs/${job.id}`,
-        type: approve ? "app_approved" : "app_rejected"
-      }).catch(() => {});
-    } catch {}
-
-    res.json({ ok: true });
   }
-);
+  result.sort((a, b) => dayjs(a.startTime) - dayjs(b.startTime));
+  res.json(result);
+});
+
+/* ---- PM: applicants list + approve ---- */
+app.get("/jobs/:id/applicants", authMiddleware, requireRole("pm", "admin"), (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  ensureLoadingUnload(job);
+
+  const list = job.applications.map((a) => {
+    let state = "applied";
+    if (job.approved.includes(a.userId)) state = "approved";
+    if (job.rejected.includes(a.userId)) state = "rejected";
+    const luApplied = !!(job.loadingUnload?.applicants || []).includes(a.userId);
+    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(a.userId);
+    const u = db.users.find((x) => x.id === a.userId);
+    return {
+      ...a,
+      status: state,
+      userId: a.userId,
+      luApplied,
+      luConfirmed,
+      name: u?.name || "",
+      phone: u?.phone || "",
+      discord: u?.discord || "",
+      avatarUrl: u?.avatarUrl || "",
+    };
+  });
+  res.json(list);
+});
+
+app.post("/jobs/:id/approve", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  const { userId, approve } = req.body || {};
+  if (!userId || typeof approve !== "boolean") return res.status(400).json({ error: "bad_request" });
+
+  if (approve) {
+    const otherApprovedCount = job.approved.filter((u) => u !== userId).length;
+    if (otherApprovedCount >= Number(job.headcount || 0)) {
+      return res.status(409).json({ error: "job_full" });
+    }
+  }
+
+  const applied = job.applications.find((a) => a.userId === userId);
+  if (!applied) return res.status(400).json({ error: "user_not_applied" });
+
+  job.approved = job.approved.filter((u) => u !== userId);
+  job.rejected = job.rejected.filter((u) => u !== userId);
+
+  ensureLoadingUnload(job);
+
+  if (approve) {
+    job.approved.push(userId);
+
+    const wantsLU = (job.loadingUnload.applicants || []).includes(userId);
+    const partsSet = new Set(job.loadingUnload.participants || []);
+    const quota = Number(job.loadingUnload.quota || 0);
+
+    // ✅ allow unlimited quota (0) to still add participants
+    if (wantsLU && !job.loadingUnload.closed) {
+      if (quota <= 0 || partsSet.size < quota) {
+        partsSet.add(userId);
+        job.loadingUnload.participants = Array.from(partsSet);
+      }
+      ensureLoadingUnload(job);
+    }
+  } else {
+    job.rejected.push(userId);
+  }
+
+  await saveDB(db);
+  exportJobCSV(job);
+  addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
+
+  try {
+    const msg = approve ? "approved ✅" : "rejected ❌";
+    notifyUsers([userId], {
+      title: `Your application ${msg}`,
+      body: job.title,
+      link: `/#/jobs/${job.id}`,
+      type: approve ? "app_approved" : "app_rejected",
+    }).catch(() => {});
+  } catch {}
+
+  res.json({ ok: true });
+});
 
 /* ---- Early Call (per-person toggles) ---- */
-/**
- * job.earlyCall shape:
- * {
- *   enabled: boolean,
- *   amount: number,
- *   thresholdHours: number,
- *   participants: string[]
- * }
- *
- * Backward compatibility:
- * - If participants is empty, UI/pay calculation may still fall back to automatic eligibility (check-in time vs threshold).
- * - If participants has items, it can be used as manual override list.
- */
 function ensureEarlyCall(job) {
   const defaultAmount = Number(db.config?.rates?.earlyCall?.defaultAmount ?? 0);
   const defaultThreshold = Number(db.config?.rates?.earlyCall?.thresholdHours ?? 0);
@@ -2074,7 +1743,6 @@ function ensureEarlyCall(job) {
     };
   }
 
-  // normalize fields
   job.earlyCall.enabled = Boolean(job.earlyCall.enabled);
   job.earlyCall.amount = Number.isFinite(Number(job.earlyCall.amount))
     ? Number(job.earlyCall.amount)
@@ -2085,7 +1753,6 @@ function ensureEarlyCall(job) {
 
   if (!Array.isArray(job.earlyCall.participants)) job.earlyCall.participants = [];
 
-  // de-dup + clean
   job.earlyCall.participants = Array.from(
     new Set(job.earlyCall.participants.filter((x) => typeof x === "string" && x.trim()))
   );
@@ -2093,439 +1760,228 @@ function ensureEarlyCall(job) {
   return job.earlyCall;
 }
 
-app.get(
-  "/jobs/:id/earlycall",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+app.get("/jobs/:id/earlycall", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    const ec = ensureEarlyCall(job);
-    const participantDetails = ec.participants
-      .map((uid) => {
-        const u = db.users.find((x) => x.id === uid);
-        if (!u) return null;
-        return {
-          userId: u.id,
-          email: u.email,
-          name: u.name || "",
-          phone: u.phone || "",
-          discord: u.discord || "",
-        };
-      })
-      .filter(Boolean);
+  const ec = ensureEarlyCall(job);
+  const participantDetails = ec.participants
+    .map((uid) => {
+      const u = db.users.find((x) => x.id === uid);
+      if (!u) return null;
+      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
+    })
+    .filter(Boolean);
 
-    return res.json({ ...ec, participantDetails });
+  return res.json({ ...ec, participantDetails });
+});
+
+app.post("/jobs/:id/earlycall/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  const { userId } = req.body || {};
+  const present =
+    typeof req.body?.present === "boolean"
+      ? req.body.present
+      : typeof req.body?.enabled === "boolean"
+      ? req.body.enabled
+      : undefined;
+
+  if (!userId || typeof userId !== "string") return res.status(400).json({ error: "userId_required" });
+  if (typeof present !== "boolean") return res.status(400).json({ error: "present_boolean_required" });
+
+  const ec = ensureEarlyCall(job);
+  const set = new Set(ec.participants);
+
+  if (present) set.add(userId);
+  else set.delete(userId);
+
+  ec.participants = Array.from(set);
+
+  await saveDB(db);
+
+  const participantDetails = ec.participants
+    .map((uid) => {
+      const u = db.users.find((x) => x.id === uid);
+      if (!u) return null;
+      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
+    })
+    .filter(Boolean);
+
+  return res.json({ ok: true, participants: ec.participants, participantDetails });
+});
+
+app.post("/jobs/:id/earlycall/config", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  const ec = ensureEarlyCall(job);
+  const { enabled, amount, thresholdHours } = req.body || {};
+
+  if (typeof enabled === "boolean") ec.enabled = enabled;
+  if (amount !== undefined) {
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "amount_must_be_non_negative_number" });
+    ec.amount = n;
   }
-);
-
-app.post(
-  "/jobs/:id/earlycall/mark",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const { userId } = req.body || {};
-    const present =
-      typeof req.body?.present === "boolean"
-        ? req.body.present
-        : typeof req.body?.enabled === "boolean"
-          ? req.body.enabled
-          : undefined;
-
-    if (!userId || typeof userId !== "string") {
-      return res.status(400).json({ error: "userId_required" });
-    }
-    if (typeof present !== "boolean") {
-      return res.status(400).json({ error: "present_boolean_required" });
-    }
-
-    const ec = ensureEarlyCall(job);
-    const set = new Set(ec.participants);
-
-    if (present) set.add(userId);
-    else set.delete(userId);
-
-    ec.participants = Array.from(set);
-
-    await saveDB(db);
-
-    const participantDetails = ec.participants
-      .map((uid) => {
-        const u = db.users.find((x) => x.id === uid);
-        if (!u) return null;
-        return {
-          userId: u.id,
-          email: u.email,
-          name: u.name || "",
-          phone: u.phone || "",
-          discord: u.discord || "",
-        };
-      })
-      .filter(Boolean);
-
-    return res.json({ ok: true, participants: ec.participants, participantDetails });
+  if (thresholdHours !== undefined) {
+    const n = Number(thresholdHours);
+    if (!Number.isFinite(n) || n < 0)
+      return res.status(400).json({ error: "thresholdHours_must_be_non_negative_number" });
+    ec.thresholdHours = n;
   }
-);
 
-app.post(
-  "/jobs/:id/earlycall/config",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+  await saveDB(db);
+  return res.json({ ok: true, earlyCall: ec });
+});
 
-    const ec = ensureEarlyCall(job);
-
-    const { enabled, amount, thresholdHours } = req.body || {};
-
-    if (typeof enabled === "boolean") ec.enabled = enabled;
-
-    if (amount !== undefined) {
-      const n = Number(amount);
-      if (!Number.isFinite(n) || n < 0) {
-        return res.status(400).json({ error: "amount_must_be_non_negative_number" });
-      }
-      ec.amount = n;
-    }
-
-    if (thresholdHours !== undefined) {
-      const n = Number(thresholdHours);
-      if (!Number.isFinite(n) || n < 0) {
-        return res.status(400).json({ error: "thresholdHours_must_be_non_negative_number" });
-      }
-      ec.thresholdHours = n;
-    }
-
-    await saveDB(db);
-    return res.json({ ok: true, earlyCall: ec });
-  }
-);
-
-// ✅ aliases to match frontend calls: /early-call
-app.get(
-  "/jobs/:id/early-call",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    req.url = `/jobs/${req.params.id}/earlycall`;
-    app._router.handle(req, res);
-  }
-);
-
-app.post(
-  "/jobs/:id/early-call/mark",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    req.url = `/jobs/${req.params.id}/earlycall/mark`;
-    app._router.handle(req, res);
-  }
-);
-
+// aliases
+app.get("/jobs/:id/early-call", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  req.url = `/jobs/${req.params.id}/earlycall`;
+  app._router.handle(req, res);
+});
+app.post("/jobs/:id/early-call/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  req.url = `/jobs/${req.params.id}/earlycall/mark`;
+  app._router.handle(req, res);
+});
 
 /* ---- Loading & Unloading (per-person toggles) ---- */
+app.get("/jobs/:id/loading", authMiddleware, requireRole("pm", "admin"), (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
 
-app.get(
-  "/jobs/:id/loading",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-    const l =
-      job.loadingUnload || {
-        enabled: false,
-        price: db.config.rates.loadingUnloading.amount,
-        quota: 0,
-        applicants: [],
-        participants: [],
-        closed: false
-      };
+  const l = ensureLoadingUnload(job);
 
-    const details = (ids) =>
-      ids.map((uid) => {
-        const u =
-          db.users.find((x) => x.id === uid) || { email: "unknown", id: uid };
-        return { userId: uid, email: u.email, name: u.name || "" };
-      });
-
-    res.json({
-      enabled: !!l.enabled,
-      price: Number(l.price || 0),
-      quota: l.quota || 0,
-      closed: !!l.closed,
-      applicants: details(l.applicants || []),
-      participants: details(l.participants || [])
+  const details = (ids) =>
+    ids.map((uid) => {
+      const u = db.users.find((x) => x.id === uid) || { email: "unknown", id: uid };
+      return { userId: uid, email: u.email, name: u.name || "" };
     });
+
+  res.json({
+    enabled: !!l.enabled,
+    price: Number(l.price || 0),
+    quota: Number(l.quota || 0),
+    closed: !!l.closed,
+    applicants: details(l.applicants || []),
+    participants: details(l.participants || []),
+  });
+});
+
+app.post("/jobs/:id/loading/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  const { userId } = req.body || {};
+  const present =
+    typeof req.body?.present === "boolean"
+      ? req.body.present
+      : typeof req.body?.enabled === "boolean"
+      ? req.body.enabled
+      : undefined;
+
+  if (!userId || typeof present !== "boolean") {
+    return res.status(400).json({ error: "bad_request" });
   }
-);
 
-app.post(
-  "/jobs/:id/loading/mark",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+  ensureLoadingUnload(job);
 
-    const { userId, present } = req.body || {};
-    if (!userId || typeof present !== "boolean") {
-      return res.status(400).json({ error: "bad_request" });
+  const quota = Number(job.loadingUnload.quota || 0); // 0 = unlimited
+  const p = new Set(job.loadingUnload.participants || []);
+  const alreadyIn = p.has(userId);
+
+  // ✅ critical: if quota<=0, force not closed (prevents stale 409)
+  if (quota <= 0) job.loadingUnload.closed = false;
+
+  if (present) {
+    // block only when adding NEW user AND quota>0 AND full
+    if (!alreadyIn && quota > 0 && p.size >= quota) {
+      return res.status(409).json({ error: "lu_quota_full", quota, count: p.size });
     }
-
-    job.loadingUnload = job.loadingUnload || {
-      enabled: false,
-      quota: 0,
-      price: db.config.rates.loadingUnloading.amount,
-      applicants: [],
-      participants: [],
-      closed: false
-    };
-
-    const quota = Number(job.loadingUnload.quota || 0); // ✅ 0/<=0 = unlimited
-    const p = new Set(job.loadingUnload.participants || []);
-    const alreadyIn = p.has(userId);
-
-    if (present) {
-      // If closed, only block NEW adds
-      if (job.loadingUnload.closed && !alreadyIn) {
-        return res.status(409).json({ error: "lu_closed" });
-      }
-
-      // ✅ enforce quota ONLY when quota > 0 AND adding a new user
-      if (!alreadyIn && quota > 0 && p.size >= quota) {
-        return res.status(409).json({
-          error: "lu_quota_full",
-          quota,
-          count: p.size
-        });
-      }
-
-      p.add(userId);
-    } else {
-      p.delete(userId);
-    }
-
-    job.loadingUnload.participants = [...p];
-
-    // ✅ only close when quota > 0
-    if (quota > 0 && p.size >= quota) {
-      job.loadingUnload.closed = true;
-      const keep = new Set(job.loadingUnload.participants);
-      job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(
-        (uid) => keep.has(uid)
-      );
-    } else {
-      // optional: auto reopen if below quota
-      job.loadingUnload.closed = false;
-    }
-
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit("lu_mark", { jobId: job.id, userId, present }, req);
-
-    return res.json({
-      ok: true,
-      participants: job.loadingUnload.participants,
-      closed: job.loadingUnload.closed,
-      quota
-    });
+    p.add(userId);
+  } else {
+    p.delete(userId);
   }
-);
 
+  job.loadingUnload.participants = [...p];
+  ensureLoadingUnload(job);
 
-/* ---- Full-timer assignments ---- */
-app.get(
-  "/jobs/:id/fulltimers",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+  await saveDB(db);
+  exportJobCSV(job);
+  addAudit("lu_mark", { jobId: job.id, userId, present }, req);
 
-    const hydrated = hydrateJobFullTimers(job);
-    const list = Array.isArray(hydrated.fullTimers)
-      ? hydrated.fullTimers.map((ft) => ({
-          userId: ft.userId,
-          role: ft.role || "junior",       // job-specific role (junior, senior, etc.)
-          note: ft.note || "",
-          name: ft.name || "",
-          email: ft.email || "",
-          phone: ft.phone || "",
-          grade: ft.grade || "junior",     // staff grade
-          accountRole: ft.accountRole || "" // account-level role (part-timer/pm/admin)
-        }))
-      : [];
-    res.json(list);
-  }
-);
-
-app.post(
-  "/jobs/:id/fulltimers",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    let list =
-      req.body?.fullTimers ||
-      req.body?.items ||
-      req.body?.staff ||
-      req.body?.records ||
-      req.body?.assignments ||
-      [];
-
-    if (!Array.isArray(list) && Array.isArray(req.body)) {
-      list = req.body;
-    }
-    if (!Array.isArray(list)) {
-      return res.status(400).json({ error: "fullTimers_array_required" });
-    }
-
-    const normalized = [];
-    for (const item of list) {
-      if (!item || !item.userId) continue;
-      const u = (db.users || []).find((x) => x.id === item.userId);
-      if (!u) continue;
-
-      // Accept both new shape (role) and old shape (type/grade)
-      const role =
-        item.role ||
-        item.type ||
-        item.grade ||
-        "junior";
-
-      normalized.push({
-        userId: u.id,
-        role: String(role),
-        note: String(item.note || "")
-      });
-    }
-
-    job.fullTimers = normalized;
-    await saveDB(db);
-    addAudit(
-      "update_fulltimers",
-      { jobId: job.id, count: job.fullTimers.length },
-      req
-    );
-
-    const hydrated = hydrateJobFullTimers(job);
-    const responseList = Array.isArray(hydrated.fullTimers)
-      ? hydrated.fullTimers.map((ft) => ({
-          userId: ft.userId,
-          role: ft.role || "junior",
-          note: ft.note || "",
-          name: ft.name || "",
-          email: ft.email || "",
-          phone: ft.phone || "",
-          grade: ft.grade || "junior",
-          accountRole: ft.accountRole || ""
-        }))
-      : [];
-
-    res.json({ ok: true, fullTimers: responseList });
-  }
-);
+  return res.json({
+    ok: true,
+    participants: job.loadingUnload.participants,
+    closed: job.loadingUnload.closed,
+    quota: job.loadingUnload.quota,
+  });
+});
 
 /* ---- Manual attendance ---- */
-app.post(
-  "/jobs/:id/attendance/mark",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    const { userId, inAt, outAt, clear } = req.body || {};
-    if (!userId) return res.status(400).json({ error: "userId_required" });
+  const { userId, inAt, outAt, clear } = req.body || {};
+  if (!userId) return res.status(400).json({ error: "userId_required" });
 
-    job.attendance = job.attendance || {};
+  job.attendance = job.attendance || {};
 
-    if (clear === true) {
-      delete job.attendance[userId];
-      await saveDB(db);
-      exportJobCSV(job);
-      addAudit("attendance_clear", { jobId: job.id, userId }, req);
-      return res.json({ ok: true, record: null });
-    }
-
-    const rec = job.attendance[userId] || {
-      in: null,
-      out: null,
-      lateMinutes: 0
-    };
-
-    if (inAt !== undefined && inAt !== null) {
-      const d = dayjs(inAt);
-      if (!d.isValid()) return res.status(400).json({ error: "invalid_inAt" });
-      rec.in = d.toISOString();
-      rec.lateMinutes = Math.max(0, d.diff(dayjs(job.startTime), "minute"));
-    }
-
-    if (outAt !== undefined && outAt !== null) {
-      const d2 = dayjs(outAt);
-      if (!d2.isValid())
-        return res.status(400).json({ error: "invalid_outAt" });
-      rec.out = d2.toISOString();
-    }
-
-    job.attendance[userId] = rec;
+  if (clear === true) {
+    delete job.attendance[userId];
     await saveDB(db);
     exportJobCSV(job);
-    addAudit("attendance_mark", { jobId: job.id, userId, inAt, outAt }, req);
-
-    return res.json({
-      ok: true,
-      record: rec,
-      jobId: job.id,
-      status: computeStatus(job)
-    });
+    addAudit("attendance_clear", { jobId: job.id, userId }, req);
+    return res.json({ ok: true, record: null });
   }
-);
+
+  const rec = job.attendance[userId] || { in: null, out: null, lateMinutes: 0 };
+
+  if (inAt !== undefined && inAt !== null) {
+    const d = dayjs(inAt);
+    if (!d.isValid()) return res.status(400).json({ error: "invalid_inAt" });
+    rec.in = d.toISOString();
+    rec.lateMinutes = Math.max(0, d.diff(dayjs(job.startTime), "minute"));
+  }
+
+  if (outAt !== undefined && outAt !== null) {
+    const d2 = dayjs(outAt);
+    if (!d2.isValid()) return res.status(400).json({ error: "invalid_outAt" });
+    rec.out = d2.toISOString();
+  }
+
+  job.attendance[userId] = rec;
+  await saveDB(db);
+  exportJobCSV(job);
+  addAudit("attendance_mark", { jobId: job.id, userId, inAt, outAt }, req);
+
+  return res.json({ ok: true, record: rec, jobId: job.id, status: computeStatus(job) });
+});
 
 /* ---- Start / End / Reset ---- */
-app.post(
-  "/jobs/:id/start",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-    job.events = job.events || {};
-    if (job.events.startedAt)
-      return res.json({
-        message: "already_started",
-        startedAt: job.events.startedAt
-      });
-    job.events.startedAt = dayjs().toISOString();
-    await saveDB(db);
-    addAudit("start_event", { jobId: job.id }, req);
-    res.json({ ok: true, startedAt: job.events.startedAt });
-  }
-);
+app.post("/jobs/:id/start", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+  job.events = job.events || {};
+  if (job.events.startedAt) return res.json({ message: "already_started", startedAt: job.events.startedAt });
+  job.events.startedAt = dayjs().toISOString();
+  await saveDB(db);
+  addAudit("start_event", { jobId: job.id }, req);
+  res.json({ ok: true, startedAt: job.events.startedAt });
+});
 
-app.post(
-  "/jobs/:id/end",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-    job.events = job.events || {};
-    job.events.endedAt = dayjs().toISOString();
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit("end_event", { jobId: job.id }, req);
-    res.json({ ok: true, endedAt: job.events.endedAt });
-  }
-);
+app.post("/jobs/:id/end", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+  job.events = job.events || {};
+  job.events.endedAt = dayjs().toISOString();
+  await saveDB(db);
+  exportJobCSV(job);
+  addAudit("end_event", { jobId: job.id }, req);
+  res.json({ ok: true, endedAt: job.events.endedAt });
+});
 
 async function handleReset(req, res) {
   const job = db.jobs.find((j) => j.id === req.params.id);
@@ -2533,7 +1989,7 @@ async function handleReset(req, res) {
 
   const keepAttendance = !!req.body?.keepAttendance;
   job.events = { startedAt: null, endedAt: null, scanner: null };
-  if (!keepAttendance) job.attendance = {}; // Reset all attendance
+  if (!keepAttendance) job.attendance = {};
 
   await saveDB(db);
   exportJobCSV(job);
@@ -2544,74 +2000,45 @@ async function handleReset(req, res) {
   res.json({ ok: true, job: { ...hydrated, status } });
 }
 
-app.post(
-  "/jobs/:id/reset",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  handleReset
-);
-app.patch(
-  "/jobs/:id/reset",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  handleReset
-);
+app.post("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleReset);
+app.patch("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleReset);
 
 /* ---- QR + scan ---- */
-app.post(
-  "/jobs/:id/qr",
-  authMiddleware,
-  requireRole("part-timer"),
-  (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    const state = job.approved.includes(req.user.id)
-      ? "approved"
-      : job.rejected.includes(req.user.id)
-      ? "rejected"
-      : "applied";
-    if (state !== "approved")
-      return res.status(400).json({ error: "not_approved" });
-    if (!job.events?.startedAt)
-      return res.status(400).json({ error: "event_not_started" });
+  const state = job.approved.includes(req.user.id)
+    ? "approved"
+    : job.rejected.includes(req.user.id)
+    ? "rejected"
+    : "applied";
+  if (state !== "approved") return res.status(400).json({ error: "not_approved" });
+  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
 
-    const { direction, lat, lng } = req.body || {};
-    const latN = Number(lat),
-      lngN = Number(lng);
-    if (!["in", "out"].includes(direction))
-      return res.status(400).json({ error: "bad_direction" });
-    if (!isValidCoord(latN, lngN))
-      return res.status(400).json({ error: "location_required" });
+  const { direction, lat, lng } = req.body || {};
+  const latN = Number(lat),
+    lngN = Number(lng);
+  if (!["in", "out"].includes(direction)) return res.status(400).json({ error: "bad_direction" });
+  if (!isValidCoord(latN, lngN)) return res.status(400).json({ error: "location_required" });
 
-    const encLat = Math.round(latN * 1e5) / 1e5;
-    const encLng = Math.round(lngN * 1e5) / 1e5;
+  const encLat = Math.round(latN * 1e5) / 1e5;
+  const encLng = Math.round(lngN * 1e5) / 1e5;
 
-    const payload = {
-      typ: "scan",
-      j: job.id,
-      u: req.user.id,
-      dir: direction,
-      lat: encLat,
-      lng: encLng,
-      iat: Math.floor(Date.now() / 1000),
-      nonce: uuidv4()
-    };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "60s" });
-    addAudit(
-      "gen_qr",
-      {
-        jobId: job.id,
-        dir: direction,
-        userId: req.user.id,
-        lat: encLat,
-        lng: encLng
-      },
-      req
-    );
-    res.json({ token, maxDistanceMeters: MAX_DISTANCE_METERS });
-  }
-);
+  const payload = {
+    typ: "scan",
+    j: job.id,
+    u: req.user.id,
+    dir: direction,
+    lat: encLat,
+    lng: encLng,
+    iat: Math.floor(Date.now() / 1000),
+    nonce: uuidv4(),
+  };
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "60s" });
+  addAudit("gen_qr", { jobId: job.id, dir: direction, userId: req.user.id, lat: encLat, lng: encLng }, req);
+  res.json({ token, maxDistanceMeters: MAX_DISTANCE_METERS });
+});
 
 app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const { token, scannerLat, scannerLng } = req.body || {};
@@ -2631,33 +2058,28 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   if (!job) return res.status(404).json({ error: "job_not_found" });
   if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
 
-  const sLat = Number(scannerLat), sLng = Number(scannerLng);
+  const sLat = Number(scannerLat),
+    sLng = Number(scannerLng);
   if (!isValidCoord(payload.lat, payload.lng)) return res.status(400).json({ error: "token_missing_location" });
   if (!isValidCoord(sLat, sLng)) return res.status(400).json({ error: "scanner_location_required" });
 
   const dist = haversineMeters(payload.lat, payload.lng, sLat, sLng);
   if (dist > MAX_DISTANCE_METERS) {
     addAudit("scan_rejected_distance", { jobId: job.id, userId: payload.u, dist }, req);
-    return res.status(400).json({ error: "too_far", distanceMeters: Math.round(dist), maxDistanceMeters: MAX_DISTANCE_METERS });
+    return res.status(400).json({
+      error: "too_far",
+      distanceMeters: Math.round(dist),
+      maxDistanceMeters: MAX_DISTANCE_METERS,
+    });
   }
 
-  // Check if the user has already checked in or out
   const userAttendance = job.attendance[payload.u];
-  if (userAttendance?.in && payload.dir === "in") {
-    return res.status(400).json({ error: "already_checked_in" });
-  }
-
-  if (userAttendance?.out && payload.dir === "out") {
-    return res.status(400).json({ error: "already_checked_out" });
-  }
+  if (userAttendance?.in && payload.dir === "in") return res.status(400).json({ error: "already_checked_in" });
+  if (userAttendance?.out && payload.dir === "out") return res.status(400).json({ error: "already_checked_out" });
 
   job.attendance = job.attendance || {};
   const now = dayjs();
-  job.attendance[payload.u] = job.attendance[payload.u] || {
-    in: null,
-    out: null,
-    lateMinutes: 0
-  };
+  job.attendance[payload.u] = job.attendance[payload.u] || { in: null, out: null, lateMinutes: 0 };
 
   if (payload.dir === "in") {
     job.attendance[payload.u].in = now.toISOString();
@@ -2676,47 +2098,30 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     userId: payload.u,
     direction: payload.dir,
     time: now.toISOString(),
-    record: job.attendance[payload.u]
+    record: job.attendance[payload.u],
   });
 });
 
 /* ---- CSV download ---- */
-app.get(
-  "/jobs/:id/csv",
-  authMiddleware,
-  requireRole("admin"),
-  (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-    const { headers, rows } = generateJobCSV(job);
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="job-${job.id}.csv"`
-    );
-    res.write(headers.join(",") + "\n");
-    for (const r of rows) {
-      const line = headers
-        .map((h) =>
-          r[h] !== undefined ? String(r[h]).replace(/"/g, '""') : ""
-        )
-        .join(",");
-      res.write(line + "\n");
-    }
-    res.end();
+app.get("/jobs/:id/csv", authMiddleware, requireRole("admin"), (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+  const { headers, rows } = generateJobCSV(job);
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="job-${job.id}.csv"`);
+  res.write(headers.join(",") + "\n");
+  for (const r of rows) {
+    const line = headers.map((h) => (r[h] !== undefined ? String(r[h]).replace(/"/g, '""') : "")).join(",");
+    res.write(line + "\n");
   }
-);
+  res.end();
+});
 
 /* ---- audit & misc ---- */
-app.get(
-  "/admin/audit",
-  authMiddleware,
-  requireRole("admin"),
-  (req, res) => {
-    const limit = Number(req.query.limit || 200);
-    res.json((db.audit || []).slice(0, limit));
-  }
-);
+app.get("/admin/audit", authMiddleware, requireRole("admin"), (req, res) => {
+  const limit = Number(req.query.limit || 200);
+  res.json((db.audit || []).slice(0, limit));
+});
 
 /* ---- Push + Notifications API ---- */
 app.get("/push/public-key", (_req, res) => {
@@ -2725,8 +2130,7 @@ app.get("/push/public-key", (_req, res) => {
 
 app.post("/push/subscribe", authMiddleware, async (req, res) => {
   const sub = req.body?.subscription;
-  if (!sub || !sub.endpoint)
-    return res.status(400).json({ error: "bad_subscription" });
+  if (!sub || !sub.endpoint) return res.status(400).json({ error: "bad_subscription" });
   const uid = req.user.id;
   const list = db.pushSubs[uid] || [];
   const exists = new Set(list.map((s) => s && s.endpoint));
@@ -2741,9 +2145,7 @@ app.post("/push/unsubscribe", authMiddleware, async (req, res) => {
   const ep = req.body?.endpoint;
   const uid = req.user.id;
   if (!ep) return res.status(400).json({ error: "endpoint_required" });
-  db.pushSubs[uid] = (db.pushSubs[uid] || []).filter(
-    (s) => (s && s.endpoint) !== ep
-  );
+  db.pushSubs[uid] = (db.pushSubs[uid] || []).filter((s) => (s && s.endpoint) !== ep);
   await saveDB(db);
   addAudit("push_unsubscribe", { userId: uid }, req);
   res.json({ ok: true });
@@ -2756,6 +2158,7 @@ app.get("/notifications", authMiddleware, (req, res) => {
   if (onlyUnread) items = items.filter((n) => !n.read);
   res.json(items);
 });
+
 app.post("/notifications/:id/read", authMiddleware, async (req, res) => {
   const uid = req.user.id;
   const list = db.notifications[uid] || [];
@@ -2767,38 +2170,22 @@ app.post("/notifications/:id/read", authMiddleware, async (req, res) => {
 });
 
 app.get("/me/notifications", authMiddleware, (req, res) => {
-  const items = (db.notifications[req.user.id] || []).slice(
-    0,
-    Number(req.query.limit || 50)
-  );
+  const items = (db.notifications[req.user.id] || []).slice(0, Number(req.query.limit || 50));
   res.json({ items });
 });
-app.post(
-  "/me/notifications/read-all",
-  authMiddleware,
-  async (req, res) => {
-    const uid = req.user.id;
-    const list = db.notifications[uid] || [];
-    for (const it of list) it.read = true;
-    await saveDB(db);
-    res.json({ ok: true });
-  }
-);
 
-app.post(
-  "/push/test",
-  authMiddleware,
-  requireRole("admin"),
-  async (req, res) => {
-    await notifyUsers([req.user.id], {
-      title: "Test notification",
-      body: "Push is working ✅",
-      link: "/#/",
-      type: "test"
-    });
-    res.json({ ok: true });
-  }
-);
+app.post("/me/notifications/read-all", authMiddleware, async (req, res) => {
+  const uid = req.user.id;
+  const list = db.notifications[uid] || [];
+  for (const it of list) it.read = true;
+  await saveDB(db);
+  res.json({ ok: true });
+});
+
+app.post("/push/test", authMiddleware, requireRole("admin"), async (req, res) => {
+  await notifyUsers([req.user.id], { title: "Test notification", body: "Push is working ✅", link: "/#/", type: "test" });
+  res.json({ ok: true });
+});
 
 /* ---- reset + health ---- */
 app.post("/__reset", async (_req, res) => {
@@ -2812,31 +2199,23 @@ function setScannerLocation(job, lat, lng) {
   job.events = job.events || {};
   job.events.scanner = { lat, lng, updatedAt: dayjs().toISOString() };
 }
-app.post(
-  "/jobs/:id/scanner/heartbeat",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-    if (!job.events?.startedAt)
-      return res.status(400).json({ error: "event_not_started" });
-    const { lat, lng } = req.body || {};
-    const latN = Number(lat),
-      lngN = Number(lng);
-    if (!isValidCoord(latN, lngN))
-      return res.status(400).json({ error: "scanner_location_required" });
-    setScannerLocation(job, latN, lngN);
-    await saveDB(db);
-    addAudit("scanner_heartbeat", { jobId: job.id, lat: latN, lng: lngN }, req);
-    res.json({ ok: true, updatedAt: job.events.scanner.updatedAt });
-  }
-);
+app.post("/jobs/:id/scanner/heartbeat", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
+  const { lat, lng } = req.body || {};
+  const latN = Number(lat),
+    lngN = Number(lng);
+  if (!isValidCoord(latN, lngN)) return res.status(400).json({ error: "scanner_location_required" });
+  setScannerLocation(job, latN, lngN);
+  await saveDB(db);
+  addAudit("scanner_heartbeat", { jobId: job.id, lat: latN, lng: lngN }, req);
+  res.json({ ok: true, updatedAt: job.events.scanner.updatedAt });
+});
 app.get("/jobs/:id/scanner", authMiddleware, (req, res) => {
   const job = db.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
-  if (!job.events?.startedAt)
-    return res.status(400).json({ error: "event_not_started" });
+  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
   const s = job.events?.scanner;
   if (!s) return res.status(404).json({ error: "scanner_unknown" });
   res.json({ lat: s.lat, lng: s.lng, updatedAt: s.updatedAt });
