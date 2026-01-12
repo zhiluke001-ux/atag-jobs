@@ -1,6 +1,6 @@
 // web/src/pages/Admin.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPatch } from "../api";
+import React, { useEffect, useMemo, useState, useRef } from "react";
+import { apiGet, apiPost, apiGetBlob, apiPatch } from "../api";
 
 /* ---------------- helpers ---------------- */
 function money(n) {
@@ -31,6 +31,22 @@ const fmtRange = (start, end) => {
         minute: "2-digit",
       });
     return same ? `${dt(s)} — ${t(e)}` : `${dt(s)} — ${dt(e)}`;
+  } catch {
+    return "";
+  }
+};
+const fmtDateTime = (value) => {
+  if (!value) return "";
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    if (!d || Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   } catch {
     return "";
   }
@@ -378,9 +394,7 @@ export default function Admin({ navigate, user }) {
     const kind = j?.rate?.sessionKind;
     if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)) return kind;
     const legacy = j?.session?.physicalType || j?.physicalType || j?.physicalSubtype;
-    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy)
-      ? legacy
-      : "half_day";
+    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy) ? legacy : "half_day";
   }
 
   /* ===== Load selected job details ===== */
@@ -627,111 +641,6 @@ export default function Admin({ navigate, user }) {
     setDeductions((prev) => ({ ...prev, [uid]: Math.max(0, N(val, 0)) }));
   };
 
-  // --- NEW: job details summary for Payroll header + CSV header section ---
-  const payrollJobDetails = useMemo(() => {
-    if (!job) return null;
-
-    const rate = job.rate || {};
-    const kind = rate.sessionKind || "virtual";
-    const tr = rate.tierRates || {};
-    const flat = rate.flatHourly || {};
-
-    const pa =
-      (Number.isFinite(rate.parkingAllowance) ? rate.parkingAllowance : undefined) ??
-      (Number.isFinite(rate.transportAllowance) ? rate.transportAllowance : undefined) ??
-      (Number.isFinite(rate.transportBus) ? rate.transportBus : 0);
-
-    const ec = job.earlyCall || {};
-    const ldu = job.loadingUnload || {};
-
-    const sessionLabel =
-      kind === "virtual"
-        ? "Virtual"
-        : kind === "half_day"
-        ? "Physical • Half Day"
-        : kind === "full_day"
-        ? "Physical • Full Day"
-        : kind === "2d1n"
-        ? "Physical • 2D1N"
-        : kind === "3d2n"
-        ? "Physical • 3D2N"
-        : kind === "hourly_by_role"
-        ? "Physical • Hourly (by role)"
-        : kind === "hourly_flat"
-        ? "Physical • Backend (flat hourly)"
-        : String(kind);
-
-    const lines = [];
-
-    // Rate breakdown by session kind (simple + useful)
-    if (kind === "virtual" || kind === "hourly_by_role") {
-      const jr = tr.junior || {};
-      const sr = tr.senior || {};
-      const lead = tr.lead || {};
-      lines.push(`Pay: Hourly by role`);
-      lines.push(`- Junior: ${money(jr.base)}/hr, OT ${money(jr.otRatePerHour)}/hr`);
-      lines.push(`- Senior: ${money(sr.base)}/hr, OT ${money(sr.otRatePerHour)}/hr`);
-      lines.push(`- Lead: ${money(lead.base)}/hr, OT ${money(lead.otRatePerHour)}/hr`);
-    } else if (kind === "hourly_flat") {
-      lines.push(`Pay: Flat hourly for all`);
-      lines.push(`- Base: ${money(flat.base)}/hr, OT ${money(flat.otRatePerHour)}/hr`);
-    } else if (isSessionKind(kind)) {
-      const priceProp = KIND_PROP[kind];
-      const priceOrZero = (obj) => {
-        if (!obj) return 0;
-        if (obj.specificPayment != null) return N(obj.specificPayment, 0);
-        if (priceProp && obj[priceProp] != null) return N(obj[priceProp], 0);
-        return 0;
-      };
-
-      const jr = tr.junior || {};
-      const sr = tr.senior || {};
-      const lead = tr.lead || {};
-      const jrEmcee = tr.junior_emcee || {};
-      const srEmcee = tr.senior_emcee || {};
-
-      const hourlyEnabled = [jr, sr, lead, jrEmcee, srEmcee].some((x) => x?.payMode === "specific_plus_hourly");
-
-      lines.push(`Pay: Session (per person)`);
-      lines.push(`- Junior: ${money(priceOrZero(jr))}`);
-      lines.push(`- Senior: ${money(priceOrZero(sr))}`);
-      lines.push(`- Lead Host: ${money(priceOrZero(lead))}`);
-      lines.push(`- Junior Emcee: ${money(priceOrZero(jrEmcee))}`);
-      lines.push(`- Senior Emcee: ${money(priceOrZero(srEmcee))}`);
-      lines.push(`Hourly add-on: ${hourlyEnabled ? "Enabled (plus hourly/OT)" : "Disabled"}`);
-
-      if (hourlyEnabled) {
-        lines.push(
-          `- Hourly: JR ${money(jr.base)}/hr, SR ${money(sr.base)}/hr, Lead ${money(lead.base)}/hr`
-        );
-        lines.push(
-          `- OT: JR ${money(jr.otRatePerHour)}/hr, SR ${money(sr.otRatePerHour)}/hr, Lead ${money(lead.otRatePerHour)}/hr`
-        );
-      }
-    } else {
-      lines.push(`Pay: (Unknown rate config)`);
-    }
-
-    // Add-ons
-    const parkingEnabled = !!job?.transportOptions?.bus;
-    lines.push(`Parking / ATAG Transport allowance: ${parkingEnabled ? money(pa) : "Disabled"}`);
-
-    const ecOn = !!ec.enabled && N(ec.amount, 0) > 0;
-    lines.push(`Early Call: ${ecOn ? `${money(ec.amount)} (PM checked only)` : "Off"}`);
-
-    const lduOn = !!ldu.enabled && N(ldu.price, 0) > 0;
-    lines.push(`Loading / Unloading: ${lduOn ? `${money(ldu.price)} per helper` : "Off"}`);
-
-    return {
-      title: job.title || "-",
-      venue: job.venue || "-",
-      when: fmtRange(job.startTime, job.endTime),
-      status: job.status || "-",
-      sessionLabel,
-      lines,
-    };
-  }, [job]);
-
   function calcWages() {
     if (!job) {
       setRows([]);
@@ -794,10 +703,8 @@ export default function Admin({ navigate, user }) {
       if (["junior", "jr"].includes(v)) return "junior";
       if (["senior", "sr"].includes(v)) return "senior";
       if (["lead", "lead host", "leader"].includes(v)) return "lead";
-      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc"))
-        return "junior_emcee";
-      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc"))
-        return "senior_emcee";
+      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc")) return "junior_emcee";
+      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc")) return "senior_emcee";
       if (v.includes("junior") && v.includes("marshal")) return "junior";
       if (v.includes("senior") && v.includes("marshal")) return "senior";
       return null;
@@ -805,7 +712,9 @@ export default function Admin({ navigate, user }) {
 
     const tierKeyForUser = (uid, appRec) => {
       const jobRoles = job.roleByUser || job.tierByUser || {};
-      const raw = (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) || jobRoles[uid];
+      const raw =
+        (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) ||
+        jobRoles[uid];
 
       const mapped = mapRoleToTierKey(raw) || raw;
       if (["junior", "senior", "lead", "junior_emcee", "senior_emcee"].includes(mapped)) return mapped;
@@ -814,10 +723,16 @@ export default function Admin({ navigate, user }) {
 
     const pushRowForPerson = (uid, appRec) => {
       // ✅ attendance might be keyed by userId OR email (safe across backend versions)
-      const rec = attendance?.[uid] || (appRec?.email ? attendance?.[appRec.email] : null) || {};
+      const rec =
+        attendance?.[uid] ||
+        (appRec?.email ? attendance?.[appRec.email] : null) ||
+        {};
 
       const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
+
+      const scanInStr = fmtDateTime(inTime);
+      const scanOutStr = fmtDateTime(outTime);
 
       let workedHours = scheduledHours;
       if (inTime && outTime) workedHours = hrs(inTime, outTime);
@@ -864,8 +779,10 @@ export default function Admin({ navigate, user }) {
       // Early Call: ONLY add when PM checked for this person (no auto "arrived early" rule)
       const ecAmt = N(ec.amount, 0);
 
-      const earlyFromJob = (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
-      const earlyListRaw = (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
+      const earlyFromJob =
+        (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
+      const earlyListRaw =
+        (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
 
       const earlyLists = []
         .concat(Array.isArray(earlyFromJob) ? earlyFromJob : [earlyFromJob])
@@ -880,13 +797,17 @@ export default function Admin({ navigate, user }) {
         return key === uid || (appRec?.email && key === appRec.email);
       });
 
-      const earlyChecked = !!rec?.earlyCall || !!appRec?.earlyCallConfirmed || !!appRec?.addOns?.earlyCall || earlyCheckedByList;
+      const earlyChecked =
+        !!rec?.earlyCall ||
+        !!appRec?.earlyCallConfirmed ||
+        !!appRec?.addOns?.earlyCall ||
+        earlyCheckedByList;
 
-      if (ec.enabled && ecAmt > 0 && earlyChecked) {
-        allowances += ecAmt;
-      }
+      const gotEarlyCall = !!(ec.enabled && ecAmt > 0 && earlyChecked);
+      if (gotEarlyCall) allowances += ecAmt;
 
-      if (lduOn && lduHelpers.has(uid)) allowances += lduPriceNum;
+      const gotLDU = !!(lduOn && lduHelpers.has(uid));
+      if (gotLDU) allowances += lduPriceNum;
 
       const gross = basePay + otPay + specificPay + allowances;
       const deduction = Math.max(0, N(deductions[uid], 0));
@@ -896,7 +817,9 @@ export default function Admin({ navigate, user }) {
       const coreUser = userMap[uid] || {};
 
       const combinedAppName =
-        appRec && (appRec.firstName || appRec.lastName) ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim() : "";
+        appRec && (appRec.firstName || appRec.lastName)
+          ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim()
+          : "";
 
       const name =
         pick(
@@ -932,15 +855,23 @@ export default function Admin({ navigate, user }) {
         email,
         phone,
         jobTitle: job.title,
-        hours: Number(workedHours.toFixed(2)),
+        hours: Number(workedHours.toFixed(2)), // still used in summary
         transport,
+
+        scanIn: scanInStr,
+        scanOut: scanOutStr,
+
         wageGross: gross,
         deduction,
         wageNet: net,
+
         _basePay: basePay,
         _otPay: otPay,
         _specific: specificPay,
         _allowances: allowances,
+
+        _gotEarlyCall: gotEarlyCall,
+        _gotLDU: gotLDU,
       });
     };
 
@@ -950,7 +881,10 @@ export default function Admin({ navigate, user }) {
 
       const appRec = apps.find((a) => a.userId === uid) || {};
 
-      const rec = attendance?.[uid] || (appRec?.email ? attendance?.[appRec.email] : null) || {};
+      const rec =
+        attendance?.[uid] ||
+        (appRec?.email ? attendance?.[appRec.email] : null) ||
+        {};
 
       // ✅ include ONLY if there is an IN or OUT record
       if (!rec?.in && !rec?.out) return;
@@ -963,11 +897,15 @@ export default function Admin({ navigate, user }) {
       .filter((r) => {
         if (!search.trim()) return true;
         const q = search.trim().toLowerCase();
-        return (r.name || "").toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q) || (r.phone || "").toLowerCase().includes(q);
+        return (
+          (r.name || "").toLowerCase().includes(q) ||
+          (r.email || "").toLowerCase().includes(q) ||
+          (r.phone || "").toLowerCase().includes(q)
+        );
       });
 
     const employees = filtered.length;
-    const hoursSum = filtered.reduce((s, r) => s + r.hours, 0);
+    const hoursSum = filtered.reduce((s, r) => s + (Number.isFinite(r.hours) ? r.hours : 0), 0);
     const wagesSum = filtered.reduce((s, r) => s + r.wageNet, 0);
 
     setRows(filtered);
@@ -979,56 +917,176 @@ export default function Admin({ navigate, user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job, deductions, userMap, search]);
 
-  // --- NEW: Payroll CSV with header section at top ---
+  /* ===== Payroll meta (UI + CSV header block) ===== */
+  const kindLabel = (kind) => {
+    if (kind === "virtual") return "Virtual (Hourly)";
+    if (kind === "hourly_by_role") return "Physical — Hourly (by role)";
+    if (kind === "hourly_flat") return "Physical — Flat hourly";
+    if (kind === "half_day") return "Physical — Half Day";
+    if (kind === "full_day") return "Physical — Full Day";
+    if (kind === "2d1n") return "Physical — 2D1N";
+    if (kind === "3d2n") return "Physical — 3D2N";
+    return String(kind || "-");
+  };
+
+  const buildPayrollMetaPairs = (j) => {
+    if (!j) return [];
+    const rate = j.rate || {};
+    const tierRates = rate.tierRates || {};
+    const flat = rate.flatHourly || {};
+    const kind = rate.sessionKind || "virtual";
+    const priceProp = KIND_PROP[kind];
+
+    const parkingAmt =
+      (Number.isFinite(rate.parkingAllowance) ? rate.parkingAllowance : undefined) ??
+      (Number.isFinite(rate.transportAllowance) ? rate.transportAllowance : undefined) ??
+      (Number.isFinite(rate.transportBus) ? rate.transportBus : 0);
+
+    const ec = j.earlyCall || {};
+    const ldu = j.loadingUnload || {};
+
+    const tierLabel = {
+      junior: "Junior",
+      senior: "Senior",
+      lead: "Lead Host",
+      junior_emcee: "Junior Emcee",
+      senior_emcee: "Senior Emcee",
+    };
+
+    const getSpecific = (tierKey) => {
+      const rr = tierRates[tierKey] || {};
+      if (rr.specificPayment != null) return N(rr.specificPayment, 0);
+      if (priceProp && rr[priceProp] != null) return N(rr[priceProp], 0);
+      return 0;
+    };
+
+    const hasHourlyAddon =
+      isSessionKind(kind) &&
+      ["junior", "senior", "lead"].some((k) => (tierRates[k]?.payMode || "") === "specific_plus_hourly");
+
+    let paySetup = "-";
+    let hourlyAddonLine = "";
+
+    if (kind === "virtual" || kind === "hourly_by_role") {
+      const jr = tierRates.junior || {};
+      const sr = tierRates.senior || {};
+      const ld = tierRates.lead || {};
+      paySetup =
+        `Junior ${money(jr.base)}/hr (OT ${money(jr.otRatePerHour)}/hr) | ` +
+        `Senior ${money(sr.base)}/hr (OT ${money(sr.otRatePerHour)}/hr) | ` +
+        `Lead ${money(ld.base)}/hr (OT ${money(ld.otRatePerHour)}/hr)`;
+    } else if (kind === "hourly_flat") {
+      paySetup = `Rate ${money(flat.base)}/hr (OT ${money(flat.otRatePerHour)}/hr)`;
+    } else if (isSessionKind(kind)) {
+      const parts = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"]
+        .map((k) => `${tierLabel[k]} ${money(getSpecific(k))}`)
+        .join(" | ");
+      paySetup = parts || "-";
+
+      if (hasHourlyAddon) {
+        const jr = tierRates.junior || {};
+        const sr = tierRates.senior || {};
+        const ld = tierRates.lead || {};
+        hourlyAddonLine =
+          `Junior ${money(jr.base)}/hr (OT ${money(jr.otRatePerHour)}/hr) | ` +
+          `Senior ${money(sr.base)}/hr (OT ${money(sr.otRatePerHour)}/hr) | ` +
+          `Lead ${money(ld.base)}/hr (OT ${money(ld.otRatePerHour)}/hr)`;
+      }
+    }
+
+    const pairs = [
+      ["Job Title", j.title || "-"],
+      ["Venue", j.venue || "-"],
+      ["When", fmtRange(j.startTime, j.endTime)],
+      ["Status", j.status || "-"],
+      ["Session Type", kindLabel(kind)],
+      ["Pay Setup", paySetup],
+    ];
+
+    if (hasHourlyAddon && hourlyAddonLine) {
+      pairs.push(["Hourly Add-on", hourlyAddonLine]);
+    }
+
+    if (N(parkingAmt, 0) > 0) {
+      pairs.push(["Parking Allowance", `${money(parkingAmt)} (applies only when ATAG Transport selected)`]);
+    }
+
+    if (ec?.enabled && N(ec?.amount, 0) > 0) {
+      pairs.push(["Early Call", `Enabled — ${money(ec.amount)} per person (PM marked only)`]);
+    } else if (ec?.enabled) {
+      pairs.push(["Early Call", "Enabled"]);
+    }
+
+    if (ldu?.enabled && N(ldu?.price, 0) > 0) {
+      const helperCount = Array.isArray(ldu.participants) ? ldu.participants.length : 0;
+      pairs.push(["Loading & Unloading", `Enabled — ${money(ldu.price)} per helper (helpers: ${helperCount})`]);
+    } else if (ldu?.enabled) {
+      pairs.push(["Loading & Unloading", "Enabled"]);
+    }
+
+    return pairs;
+  };
+
+  const payrollMetaUI = useMemo(() => {
+    if (!job) return [];
+    const keep = new Set(["Session Type", "Pay Setup", "Hourly Add-on", "Parking Allowance", "Early Call", "Loading & Unloading"]);
+    return buildPayrollMetaPairs(job).filter(([k]) => keep.has(k));
+  }, [job]);
+
   async function exportPayrollCSV() {
     if (!rows.length) {
       alert("No rows to export.");
       return;
     }
 
-    const csvEscape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+
+    // ✅ Job details block at TOP, then 1 blank line, then list
+    const metaPairs = buildPayrollMetaPairs(job);
 
     const lines = [];
+    metaPairs.forEach(([k, v]) => {
+      lines.push(`${q(k)},${q(v)}`);
+    });
+    lines.push(""); // one blank line
 
-    // Header section (job details)
-    if (payrollJobDetails) {
-      lines.push(`Job Details,`);
-      lines.push(`Title,${csvEscape(payrollJobDetails.title)}`);
-      lines.push(`Venue,${csvEscape(payrollJobDetails.venue)}`);
-      lines.push(`When,${csvEscape(payrollJobDetails.when)}`);
-      lines.push(`Status,${csvEscape(payrollJobDetails.status)}`);
-      lines.push(`Session Type,${csvEscape(payrollJobDetails.sessionLabel)}`);
-
-      // Pay rules lines
-      payrollJobDetails.lines.forEach((ln) => {
-        lines.push(`Info,${csvEscape(ln)}`);
-      });
-
-      // blank line
-      lines.push("");
-    }
-
-    // Table headers (REMOVED: Job, Hours, Base, OT)
-    const headers = ["No", "Name", "Email", "Phone", "Transport", "Specific", "Allowances", "Gross", "Deduction", "Net"];
+    // ✅ Removed: Job, Hours, Base, OT
+    // ✅ Added: Scan In, Scan Out
+    const headers = [
+      "No",
+      "Name",
+      "Email",
+      "Phone",
+      "Transport",
+      "Scan In",
+      "Scan Out",
+      "Session Pay",
+      "Allowances",
+      "Gross",
+      "Deduction",
+      "Net",
+    ];
     lines.push(headers.join(","));
 
     rows.forEach((r, idx) => {
       const line = [
         idx + 1,
-        csvEscape(r.name),
-        csvEscape(r.email),
-        csvEscape(r.phone),
-        csvEscape(r.transport),
-        Math.round(r._specific),
-        Math.round(r._allowances),
-        Math.round(r.wageGross),
-        Math.round(r.deduction),
-        Math.round(r.wageNet),
+        q(r.name || ""),
+        q(r.email || ""),
+        q(r.phone || ""),
+        q(r.transport || ""),
+        q(r.scanIn || ""),
+        q(r.scanOut || ""),
+        Math.round(N(r._specific, 0)),
+        Math.round(N(r._allowances, 0)),
+        Math.round(N(r.wageGross, 0)),
+        Math.round(N(r.deduction, 0)),
+        Math.round(N(r.wageNet, 0)),
       ].join(",");
       lines.push(line);
     });
 
-    lines.push("");
+    lines.push(""); // optional spacer before totals
     lines.push(`Total Employees,${summary.employees}`);
     lines.push(`Total Hours,${summary.hours.toFixed(2)}`);
     lines.push(`Total Net Wages,${Math.round(summary.wages)}`);
@@ -1092,7 +1150,9 @@ export default function Admin({ navigate, user }) {
           <input style={styles.input} value={flatOT} onChange={(e) => setFlatOT(e.target.value)} inputMode="decimal" />
         </Field>
       </div>
-      <div style={{ fontSize: 12, color: "#6b7280" }}>Everyone is paid the same hourly and OT rate regardless of role.</div>
+      <div style={{ fontSize: 12, color: "#6b7280" }}>
+        Everyone is paid the same hourly and OT rate regardless of role.
+      </div>
     </div>
   );
 
@@ -1193,7 +1253,12 @@ export default function Admin({ navigate, user }) {
         )}
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input id="hourlyToggle" type="checkbox" checked={hourlyAddon} onChange={(e) => setHourlyAddon(e.target.checked)} />
+          <input
+            id="hourlyToggle"
+            type="checkbox"
+            checked={hourlyAddon}
+            onChange={(e) => setHourlyAddon(e.target.checked)}
+          />
           <label htmlFor="hourlyToggle" style={{ userSelect: "none", fontWeight: 800 }}>
             Enable hourly add-on (in addition to session price)
           </label>
@@ -1211,7 +1276,9 @@ export default function Admin({ navigate, user }) {
   return (
     <div className="container" style={styles.page}>
       {error ? (
-        <div style={{ ...styles.panel, borderColor: "#fecaca", background: "#fff1f2", color: "#b91c1c" }}>{String(error)}</div>
+        <div style={{ ...styles.panel, borderColor: "#fecaca", background: "#fff1f2", color: "#b91c1c" }}>
+          {String(error)}
+        </div>
       ) : null}
 
       {/* Tabs */}
@@ -1313,128 +1380,38 @@ export default function Admin({ navigate, user }) {
             <div style={{ marginTop: 12, display: "grid", gap: 14 }}>
               <div style={{ fontWeight: 900 }}>Half Day</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={gHalfJr} onChange={(e) => setGHalfJr(e.target.value)} />
-                </Field>
-                <Field label="Senior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={gHalfSr} onChange={(e) => setGHalfSr(e.target.value)} />
-                </Field>
-                <Field label="Lead Host (RM)">
-                  <input style={styles.input} inputMode="decimal" value={gHalfLead} onChange={(e) => setGHalfLead(e.target.value)} />
-                </Field>
-                <Field label="Junior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={gHalfJrEmcee}
-                    onChange={(e) => setGHalfJrEmcee(e.target.value)}
-                  />
-                </Field>
-                <Field label="Senior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={gHalfSrEmcee}
-                    onChange={(e) => setGHalfSrEmcee(e.target.value)}
-                  />
-                </Field>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJr} onChange={(e) => setGHalfJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSr} onChange={(e) => setGHalfSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gHalfLead} onChange={(e) => setGHalfLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJrEmcee} onChange={(e) => setGHalfJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSrEmcee} onChange={(e) => setGHalfSrEmcee(e.target.value)} /></Field>
               </div>
 
               <div style={{ fontWeight: 900 }}>Full Day</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={gFullJr} onChange={(e) => setGFullJr(e.target.value)} />
-                </Field>
-                <Field label="Senior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={gFullSr} onChange={(e) => setGFullSr(e.target.value)} />
-                </Field>
-                <Field label="Lead Host (RM)">
-                  <input style={styles.input} inputMode="decimal" value={gFullLead} onChange={(e) => setGFullLead(e.target.value)} />
-                </Field>
-                <Field label="Junior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={gFullJrEmcee}
-                    onChange={(e) => setGFullJrEmcee(e.target.value)}
-                  />
-                </Field>
-                <Field label="Senior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={gFullSrEmcee}
-                    onChange={(e) => setGFullSrEmcee(e.target.value)}
-                  />
-                </Field>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gFullJr} onChange={(e) => setGFullJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gFullSr} onChange={(e) => setGFullSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gFullLead} onChange={(e) => setGFullLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullJrEmcee} onChange={(e) => setGFullJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullSrEmcee} onChange={(e) => setGFullSrEmcee(e.target.value)} /></Field>
               </div>
 
               <div style={{ fontWeight: 900 }}>2D1N</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={g2d1nJr} onChange={(e) => setG2d1nJr(e.target.value)} />
-                </Field>
-                <Field label="Senior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={g2d1nSr} onChange={(e) => setG2d1nSr(e.target.value)} />
-                </Field>
-                <Field label="Lead Host (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={g2d1nLead}
-                    onChange={(e) => setG2d1nLead(e.target.value)}
-                  />
-                </Field>
-                <Field label="Junior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={g2d1nJrEmcee}
-                    onChange={(e) => setG2d1nJrEmcee(e.target.value)}
-                  />
-                </Field>
-                <Field label="Senior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={g2d1nSrEmcee}
-                    onChange={(e) => setG2d1nSrEmcee(e.target.value)}
-                  />
-                </Field>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJr} onChange={(e) => setG2d1nJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSr} onChange={(e) => setG2d1nSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nLead} onChange={(e) => setG2d1nLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJrEmcee} onChange={(e) => setG2d1nJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSrEmcee} onChange={(e) => setG2d1nSrEmcee(e.target.value)} /></Field>
               </div>
 
               <div style={{ fontWeight: 900 }}>3D2N</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={g3d2nJr} onChange={(e) => setG3d2nJr(e.target.value)} />
-                </Field>
-                <Field label="Senior (RM)">
-                  <input style={styles.input} inputMode="decimal" value={g3d2nSr} onChange={(e) => setG3d2nSr(e.target.value)} />
-                </Field>
-                <Field label="Lead Host (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={g3d2nLead}
-                    onChange={(e) => setG3d2nLead(e.target.value)}
-                  />
-                </Field>
-                <Field label="Junior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={g3d2nJrEmcee}
-                    onChange={(e) => setG3d2nJrEmcee(e.target.value)}
-                  />
-                </Field>
-                <Field label="Senior Emcee (RM)">
-                  <input
-                    style={styles.input}
-                    inputMode="decimal"
-                    value={g3d2nSrEmcee}
-                    onChange={(e) => setG3d2nSrEmcee(e.target.value)}
-                  />
-                </Field>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJr} onChange={(e) => setG3d2nJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSr} onChange={(e) => setG3d2nSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nLead} onChange={(e) => setG3d2nLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJrEmcee} onChange={(e) => setG3d2nJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSrEmcee} onChange={(e) => setG3d2nSrEmcee(e.target.value)} /></Field>
               </div>
             </div>
           </details>
@@ -1457,7 +1434,11 @@ export default function Admin({ navigate, user }) {
         >
           <div style={styles.grid2}>
             <Field label="Select Job">
-              <select style={styles.select} value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+              <select
+                style={styles.select}
+                value={selectedId}
+                onChange={(e) => setSelectedId(e.target.value)}
+              >
                 <option value="">Select a job…</option>
                 {jobs.map((j) => (
                   <option key={j.id} value={j.id}>
@@ -1467,12 +1448,8 @@ export default function Admin({ navigate, user }) {
               </select>
               {job ? (
                 <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
-                  <div>
-                    <b>Venue:</b> {job.venue || "-"}
-                  </div>
-                  <div>
-                    <b>When:</b> {fmtRange(job.startTime, job.endTime)}
-                  </div>
+                  <div><b>Venue:</b> {job.venue || "-"}</div>
+                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
                 </div>
               ) : null}
             </Field>
@@ -1511,7 +1488,12 @@ export default function Admin({ navigate, user }) {
                     : "ATAG Transport isn't enabled on this job — allowance won’t apply."
                 }
               >
-                <input style={styles.input} inputMode="decimal" value={parkingAllowance} onChange={(e) => setParkingAllowance(e.target.value)} />
+                <input
+                  style={styles.input}
+                  inputMode="decimal"
+                  value={parkingAllowance}
+                  onChange={(e) => setParkingAllowance(e.target.value)}
+                />
               </Field>
             </div>
           </div>
@@ -1533,7 +1515,7 @@ export default function Admin({ navigate, user }) {
       {tab === "payroll" && (
         <Panel
           title="Payroll Summary"
-          subtitle="Job details & pay rules shown on top. Deductions are editable. Export CSV includes job header section."
+          subtitle="Job details shown at top. Then table includes Scan In/Out. Export CSV includes job details header block."
           right={
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>
@@ -1544,7 +1526,11 @@ export default function Admin({ navigate, user }) {
         >
           <div style={styles.grid2}>
             <Field label="Selected Job">
-              <select style={styles.select} value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+              <select
+                style={styles.select}
+                value={selectedId}
+                onChange={(e) => setSelectedId(e.target.value)}
+              >
                 <option value="">Select a job…</option>
                 {jobs.map((j) => (
                   <option key={j.id} value={j.id}>
@@ -1552,42 +1538,32 @@ export default function Admin({ navigate, user }) {
                   </option>
                 ))}
               </select>
+              {job ? (
+                <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
+                  <div><b>Status:</b> {job.status || "-"}</div>
+                </div>
+              ) : null}
             </Field>
 
             <Field label="Search">
-              <input style={styles.input} placeholder="Search name / email / phone…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input
+                style={styles.input}
+                placeholder="Search name / email / phone…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
             </Field>
           </div>
 
-          {/* NEW: Job Details Header Block (top of payroll) */}
-          {payrollJobDetails ? (
-            <div style={{ marginTop: 12, border: "1px solid #eef2f7", borderRadius: 16, padding: 14, background: "#fafafa" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ display: "grid", gap: 6 }}>
-                  <div style={{ fontWeight: 900, fontSize: 14, color: "#111827" }}>{payrollJobDetails.title}</div>
-                  <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
-                    <div>
-                      <b>Venue:</b> {payrollJobDetails.venue}
-                    </div>
-                    <div>
-                      <b>When:</b> {payrollJobDetails.when}
-                    </div>
-                    <div>
-                      <b>Status:</b> {payrollJobDetails.status}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ display: "grid", gap: 6, minWidth: 260 }}>
-                  <div style={{ fontWeight: 900, fontSize: 12, color: "#111827" }}>Session Type</div>
-                  <div style={{ fontSize: 12, color: "#111827" }}>{payrollJobDetails.sessionLabel}</div>
-                  <div style={{ fontWeight: 900, fontSize: 12, color: "#111827", marginTop: 6 }}>Pay Rules</div>
-                  <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.65 }}>
-                    {payrollJobDetails.lines.map((ln, i) => (
-                      <div key={i}>• {ln}</div>
-                    ))}
-                  </div>
-                </div>
+          {/* ✅ Job details at top (session type + pay + early call / loading) */}
+          {job ? (
+            <div style={{ ...styles.details, marginTop: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 8 }}>Job Details</div>
+              <div style={{ display: "grid", gap: 6, fontSize: 12, color: "#111827", lineHeight: 1.6 }}>
+                {payrollMetaUI.map(([k, v]) => (
+                  <div key={k}><b>{k}:</b> {v}</div>
+                ))}
               </div>
             </div>
           ) : null}
@@ -1598,61 +1574,38 @@ export default function Admin({ navigate, user }) {
             <table width="100%" cellPadding="10" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
               <thead>
                 <tr style={{ background: "#f9fafb" }}>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb", width: 40 }}>
-                    #
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Name
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Email
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Phone
-                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb", width: 40 }}>#</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Name</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Email</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Phone</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Transport</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan In</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan Out</th>
 
-                  {/* REMOVED: Job, Hours, Base, OT */}
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Transport
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Specific
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Allowances
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Gross
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Deduct
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Net
-                  </th>
+                  {/* ✅ Removed: Job, Hours, Base, OT */}
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Session Pay</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Allowances</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Gross</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Deduct</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Net</th>
                 </tr>
               </thead>
 
               <tbody>
                 {rows.map((r, idx) => (
                   <tr key={r.userId} style={{ borderTop: "1px solid #eef2f7" }}>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {idx + 1}.
-                    </td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{idx + 1}.</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.name}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.email}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.phone}</td>
-
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.transport}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {money(r._specific)}
-                    </td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {money(r._allowances)}
-                    </td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {money(r.wageGross)}
-                    </td>
+                    <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanIn || "-"}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanOut || "-"}</td>
+
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._specific)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._allowances)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r.wageGross)}</td>
+
                     <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
                       <input
                         style={{ ...styles.input, width: 90, textAlign: "right", padding: "8px 10px" }}
@@ -1669,13 +1622,13 @@ export default function Admin({ navigate, user }) {
 
                 {!job ? (
                   <tr>
-                    <td colSpan={10} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
                       Select a job to view payroll.
                     </td>
                   </tr>
                 ) : !rows.length ? (
                   <tr>
-                    <td colSpan={10} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
                       No approved part-timers found (or filtered out by search).
                     </td>
                   </tr>
@@ -1688,6 +1641,7 @@ export default function Admin({ navigate, user }) {
             <span style={styles.pill("#eef2ff", "#3730a3")}>Employees: {summary.employees}</span>
             <span style={styles.pill("#ecfeff", "#155e75")}>Hours: {summary.hours.toFixed(2)}</span>
             <span style={styles.pill("#f0fdf4", "#166534")}>Total Net: {money(summary.wages)}</span>
+            <span style={styles.pill("#f3f4f6", "#111827")}>Jobs: {summary.jobs}</span>
           </div>
         </Panel>
       )}
