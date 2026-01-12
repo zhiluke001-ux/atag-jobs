@@ -1,6 +1,6 @@
 // web/src/pages/Admin.jsx
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import { apiGet, apiPost, apiGetBlob, apiPatch } from "../api";
+import React, { useEffect, useMemo, useState } from "react";
+import { apiGet, apiPatch } from "../api";
 
 /* ---------------- helpers ---------------- */
 function money(n) {
@@ -378,7 +378,9 @@ export default function Admin({ navigate, user }) {
     const kind = j?.rate?.sessionKind;
     if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)) return kind;
     const legacy = j?.session?.physicalType || j?.physicalType || j?.physicalSubtype;
-    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy) ? legacy : "half_day";
+    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy)
+      ? legacy
+      : "half_day";
   }
 
   /* ===== Load selected job details ===== */
@@ -625,6 +627,111 @@ export default function Admin({ navigate, user }) {
     setDeductions((prev) => ({ ...prev, [uid]: Math.max(0, N(val, 0)) }));
   };
 
+  // --- NEW: job details summary for Payroll header + CSV header section ---
+  const payrollJobDetails = useMemo(() => {
+    if (!job) return null;
+
+    const rate = job.rate || {};
+    const kind = rate.sessionKind || "virtual";
+    const tr = rate.tierRates || {};
+    const flat = rate.flatHourly || {};
+
+    const pa =
+      (Number.isFinite(rate.parkingAllowance) ? rate.parkingAllowance : undefined) ??
+      (Number.isFinite(rate.transportAllowance) ? rate.transportAllowance : undefined) ??
+      (Number.isFinite(rate.transportBus) ? rate.transportBus : 0);
+
+    const ec = job.earlyCall || {};
+    const ldu = job.loadingUnload || {};
+
+    const sessionLabel =
+      kind === "virtual"
+        ? "Virtual"
+        : kind === "half_day"
+        ? "Physical • Half Day"
+        : kind === "full_day"
+        ? "Physical • Full Day"
+        : kind === "2d1n"
+        ? "Physical • 2D1N"
+        : kind === "3d2n"
+        ? "Physical • 3D2N"
+        : kind === "hourly_by_role"
+        ? "Physical • Hourly (by role)"
+        : kind === "hourly_flat"
+        ? "Physical • Backend (flat hourly)"
+        : String(kind);
+
+    const lines = [];
+
+    // Rate breakdown by session kind (simple + useful)
+    if (kind === "virtual" || kind === "hourly_by_role") {
+      const jr = tr.junior || {};
+      const sr = tr.senior || {};
+      const lead = tr.lead || {};
+      lines.push(`Pay: Hourly by role`);
+      lines.push(`- Junior: ${money(jr.base)}/hr, OT ${money(jr.otRatePerHour)}/hr`);
+      lines.push(`- Senior: ${money(sr.base)}/hr, OT ${money(sr.otRatePerHour)}/hr`);
+      lines.push(`- Lead: ${money(lead.base)}/hr, OT ${money(lead.otRatePerHour)}/hr`);
+    } else if (kind === "hourly_flat") {
+      lines.push(`Pay: Flat hourly for all`);
+      lines.push(`- Base: ${money(flat.base)}/hr, OT ${money(flat.otRatePerHour)}/hr`);
+    } else if (isSessionKind(kind)) {
+      const priceProp = KIND_PROP[kind];
+      const priceOrZero = (obj) => {
+        if (!obj) return 0;
+        if (obj.specificPayment != null) return N(obj.specificPayment, 0);
+        if (priceProp && obj[priceProp] != null) return N(obj[priceProp], 0);
+        return 0;
+      };
+
+      const jr = tr.junior || {};
+      const sr = tr.senior || {};
+      const lead = tr.lead || {};
+      const jrEmcee = tr.junior_emcee || {};
+      const srEmcee = tr.senior_emcee || {};
+
+      const hourlyEnabled = [jr, sr, lead, jrEmcee, srEmcee].some((x) => x?.payMode === "specific_plus_hourly");
+
+      lines.push(`Pay: Session (per person)`);
+      lines.push(`- Junior: ${money(priceOrZero(jr))}`);
+      lines.push(`- Senior: ${money(priceOrZero(sr))}`);
+      lines.push(`- Lead Host: ${money(priceOrZero(lead))}`);
+      lines.push(`- Junior Emcee: ${money(priceOrZero(jrEmcee))}`);
+      lines.push(`- Senior Emcee: ${money(priceOrZero(srEmcee))}`);
+      lines.push(`Hourly add-on: ${hourlyEnabled ? "Enabled (plus hourly/OT)" : "Disabled"}`);
+
+      if (hourlyEnabled) {
+        lines.push(
+          `- Hourly: JR ${money(jr.base)}/hr, SR ${money(sr.base)}/hr, Lead ${money(lead.base)}/hr`
+        );
+        lines.push(
+          `- OT: JR ${money(jr.otRatePerHour)}/hr, SR ${money(sr.otRatePerHour)}/hr, Lead ${money(lead.otRatePerHour)}/hr`
+        );
+      }
+    } else {
+      lines.push(`Pay: (Unknown rate config)`);
+    }
+
+    // Add-ons
+    const parkingEnabled = !!job?.transportOptions?.bus;
+    lines.push(`Parking / ATAG Transport allowance: ${parkingEnabled ? money(pa) : "Disabled"}`);
+
+    const ecOn = !!ec.enabled && N(ec.amount, 0) > 0;
+    lines.push(`Early Call: ${ecOn ? `${money(ec.amount)} (PM checked only)` : "Off"}`);
+
+    const lduOn = !!ldu.enabled && N(ldu.price, 0) > 0;
+    lines.push(`Loading / Unloading: ${lduOn ? `${money(ldu.price)} per helper` : "Off"}`);
+
+    return {
+      title: job.title || "-",
+      venue: job.venue || "-",
+      when: fmtRange(job.startTime, job.endTime),
+      status: job.status || "-",
+      sessionLabel,
+      lines,
+    };
+  }, [job]);
+
   function calcWages() {
     if (!job) {
       setRows([]);
@@ -687,8 +794,10 @@ export default function Admin({ navigate, user }) {
       if (["junior", "jr"].includes(v)) return "junior";
       if (["senior", "sr"].includes(v)) return "senior";
       if (["lead", "lead host", "leader"].includes(v)) return "lead";
-      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc")) return "junior_emcee";
-      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc")) return "senior_emcee";
+      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc"))
+        return "junior_emcee";
+      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc"))
+        return "senior_emcee";
       if (v.includes("junior") && v.includes("marshal")) return "junior";
       if (v.includes("senior") && v.includes("marshal")) return "senior";
       return null;
@@ -696,9 +805,7 @@ export default function Admin({ navigate, user }) {
 
     const tierKeyForUser = (uid, appRec) => {
       const jobRoles = job.roleByUser || job.tierByUser || {};
-      const raw =
-        (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) ||
-        jobRoles[uid];
+      const raw = (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) || jobRoles[uid];
 
       const mapped = mapRoleToTierKey(raw) || raw;
       if (["junior", "senior", "lead", "junior_emcee", "senior_emcee"].includes(mapped)) return mapped;
@@ -707,10 +814,7 @@ export default function Admin({ navigate, user }) {
 
     const pushRowForPerson = (uid, appRec) => {
       // ✅ attendance might be keyed by userId OR email (safe across backend versions)
-      const rec =
-        attendance?.[uid] ||
-        (appRec?.email ? attendance?.[appRec.email] : null) ||
-        {};
+      const rec = attendance?.[uid] || (appRec?.email ? attendance?.[appRec.email] : null) || {};
 
       const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
@@ -760,10 +864,8 @@ export default function Admin({ navigate, user }) {
       // Early Call: ONLY add when PM checked for this person (no auto "arrived early" rule)
       const ecAmt = N(ec.amount, 0);
 
-      const earlyFromJob =
-        (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
-      const earlyListRaw =
-        (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
+      const earlyFromJob = (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
+      const earlyListRaw = (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
 
       const earlyLists = []
         .concat(Array.isArray(earlyFromJob) ? earlyFromJob : [earlyFromJob])
@@ -778,11 +880,7 @@ export default function Admin({ navigate, user }) {
         return key === uid || (appRec?.email && key === appRec.email);
       });
 
-      const earlyChecked =
-        !!rec?.earlyCall ||
-        !!appRec?.earlyCallConfirmed ||
-        !!appRec?.addOns?.earlyCall ||
-        earlyCheckedByList;
+      const earlyChecked = !!rec?.earlyCall || !!appRec?.earlyCallConfirmed || !!appRec?.addOns?.earlyCall || earlyCheckedByList;
 
       if (ec.enabled && ecAmt > 0 && earlyChecked) {
         allowances += ecAmt;
@@ -798,9 +896,7 @@ export default function Admin({ navigate, user }) {
       const coreUser = userMap[uid] || {};
 
       const combinedAppName =
-        appRec && (appRec.firstName || appRec.lastName)
-          ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim()
-          : "";
+        appRec && (appRec.firstName || appRec.lastName) ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim() : "";
 
       const name =
         pick(
@@ -854,10 +950,7 @@ export default function Admin({ navigate, user }) {
 
       const appRec = apps.find((a) => a.userId === uid) || {};
 
-      const rec =
-        attendance?.[uid] ||
-        (appRec?.email ? attendance?.[appRec.email] : null) ||
-        {};
+      const rec = attendance?.[uid] || (appRec?.email ? attendance?.[appRec.email] : null) || {};
 
       // ✅ include ONLY if there is an IN or OUT record
       if (!rec?.in && !rec?.out) return;
@@ -870,11 +963,7 @@ export default function Admin({ navigate, user }) {
       .filter((r) => {
         if (!search.trim()) return true;
         const q = search.trim().toLowerCase();
-        return (
-          (r.name || "").toLowerCase().includes(q) ||
-          (r.email || "").toLowerCase().includes(q) ||
-          (r.phone || "").toLowerCase().includes(q)
-        );
+        return (r.name || "").toLowerCase().includes(q) || (r.email || "").toLowerCase().includes(q) || (r.phone || "").toLowerCase().includes(q);
       });
 
     const employees = filtered.length;
@@ -890,28 +979,55 @@ export default function Admin({ navigate, user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job, deductions, userMap, search]);
 
+  // --- NEW: Payroll CSV with header section at top ---
   async function exportPayrollCSV() {
     if (!rows.length) {
       alert("No rows to export.");
       return;
     }
-    const headers = ["No", "Name", "Email", "Phone", "Job", "Hours", "Transport", "Gross", "Deduction", "Net"];
-    const lines = [headers.join(",")];
+
+    const csvEscape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+
+    const lines = [];
+
+    // Header section (job details)
+    if (payrollJobDetails) {
+      lines.push(`Job Details,`);
+      lines.push(`Title,${csvEscape(payrollJobDetails.title)}`);
+      lines.push(`Venue,${csvEscape(payrollJobDetails.venue)}`);
+      lines.push(`When,${csvEscape(payrollJobDetails.when)}`);
+      lines.push(`Status,${csvEscape(payrollJobDetails.status)}`);
+      lines.push(`Session Type,${csvEscape(payrollJobDetails.sessionLabel)}`);
+
+      // Pay rules lines
+      payrollJobDetails.lines.forEach((ln) => {
+        lines.push(`Info,${csvEscape(ln)}`);
+      });
+
+      // blank line
+      lines.push("");
+    }
+
+    // Table headers (REMOVED: Job, Hours, Base, OT)
+    const headers = ["No", "Name", "Email", "Phone", "Transport", "Specific", "Allowances", "Gross", "Deduction", "Net"];
+    lines.push(headers.join(","));
+
     rows.forEach((r, idx) => {
       const line = [
         idx + 1,
-        `"${String(r.name || "").replace(/"/g, '""')}"`,
-        `"${String(r.email || "").replace(/"/g, '""')}"`,
-        `"${String(r.phone || "").replace(/"/g, '""')}"`,
-        `"${String(r.jobTitle || "").replace(/"/g, '""')}"`,
-        r.hours.toFixed(2),
-        `"${r.transport}"`,
+        csvEscape(r.name),
+        csvEscape(r.email),
+        csvEscape(r.phone),
+        csvEscape(r.transport),
+        Math.round(r._specific),
+        Math.round(r._allowances),
         Math.round(r.wageGross),
         Math.round(r.deduction),
         Math.round(r.wageNet),
       ].join(",");
       lines.push(line);
     });
+
     lines.push("");
     lines.push(`Total Employees,${summary.employees}`);
     lines.push(`Total Hours,${summary.hours.toFixed(2)}`);
@@ -976,9 +1092,7 @@ export default function Admin({ navigate, user }) {
           <input style={styles.input} value={flatOT} onChange={(e) => setFlatOT(e.target.value)} inputMode="decimal" />
         </Field>
       </div>
-      <div style={{ fontSize: 12, color: "#6b7280" }}>
-        Everyone is paid the same hourly and OT rate regardless of role.
-      </div>
+      <div style={{ fontSize: 12, color: "#6b7280" }}>Everyone is paid the same hourly and OT rate regardless of role.</div>
     </div>
   );
 
@@ -1079,12 +1193,7 @@ export default function Admin({ navigate, user }) {
         )}
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input
-            id="hourlyToggle"
-            type="checkbox"
-            checked={hourlyAddon}
-            onChange={(e) => setHourlyAddon(e.target.checked)}
-          />
+          <input id="hourlyToggle" type="checkbox" checked={hourlyAddon} onChange={(e) => setHourlyAddon(e.target.checked)} />
           <label htmlFor="hourlyToggle" style={{ userSelect: "none", fontWeight: 800 }}>
             Enable hourly add-on (in addition to session price)
           </label>
@@ -1102,9 +1211,7 @@ export default function Admin({ navigate, user }) {
   return (
     <div className="container" style={styles.page}>
       {error ? (
-        <div style={{ ...styles.panel, borderColor: "#fecaca", background: "#fff1f2", color: "#b91c1c" }}>
-          {String(error)}
-        </div>
+        <div style={{ ...styles.panel, borderColor: "#fecaca", background: "#fff1f2", color: "#b91c1c" }}>{String(error)}</div>
       ) : null}
 
       {/* Tabs */}
@@ -1206,38 +1313,128 @@ export default function Admin({ navigate, user }) {
             <div style={{ marginTop: 12, display: "grid", gap: 14 }}>
               <div style={{ fontWeight: 900 }}>Half Day</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJr} onChange={(e) => setGHalfJr(e.target.value)} /></Field>
-                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSr} onChange={(e) => setGHalfSr(e.target.value)} /></Field>
-                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gHalfLead} onChange={(e) => setGHalfLead(e.target.value)} /></Field>
-                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJrEmcee} onChange={(e) => setGHalfJrEmcee(e.target.value)} /></Field>
-                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSrEmcee} onChange={(e) => setGHalfSrEmcee(e.target.value)} /></Field>
+                <Field label="Junior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={gHalfJr} onChange={(e) => setGHalfJr(e.target.value)} />
+                </Field>
+                <Field label="Senior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={gHalfSr} onChange={(e) => setGHalfSr(e.target.value)} />
+                </Field>
+                <Field label="Lead Host (RM)">
+                  <input style={styles.input} inputMode="decimal" value={gHalfLead} onChange={(e) => setGHalfLead(e.target.value)} />
+                </Field>
+                <Field label="Junior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={gHalfJrEmcee}
+                    onChange={(e) => setGHalfJrEmcee(e.target.value)}
+                  />
+                </Field>
+                <Field label="Senior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={gHalfSrEmcee}
+                    onChange={(e) => setGHalfSrEmcee(e.target.value)}
+                  />
+                </Field>
               </div>
 
               <div style={{ fontWeight: 900 }}>Full Day</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gFullJr} onChange={(e) => setGFullJr(e.target.value)} /></Field>
-                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gFullSr} onChange={(e) => setGFullSr(e.target.value)} /></Field>
-                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gFullLead} onChange={(e) => setGFullLead(e.target.value)} /></Field>
-                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullJrEmcee} onChange={(e) => setGFullJrEmcee(e.target.value)} /></Field>
-                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullSrEmcee} onChange={(e) => setGFullSrEmcee(e.target.value)} /></Field>
+                <Field label="Junior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={gFullJr} onChange={(e) => setGFullJr(e.target.value)} />
+                </Field>
+                <Field label="Senior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={gFullSr} onChange={(e) => setGFullSr(e.target.value)} />
+                </Field>
+                <Field label="Lead Host (RM)">
+                  <input style={styles.input} inputMode="decimal" value={gFullLead} onChange={(e) => setGFullLead(e.target.value)} />
+                </Field>
+                <Field label="Junior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={gFullJrEmcee}
+                    onChange={(e) => setGFullJrEmcee(e.target.value)}
+                  />
+                </Field>
+                <Field label="Senior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={gFullSrEmcee}
+                    onChange={(e) => setGFullSrEmcee(e.target.value)}
+                  />
+                </Field>
               </div>
 
               <div style={{ fontWeight: 900 }}>2D1N</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJr} onChange={(e) => setG2d1nJr(e.target.value)} /></Field>
-                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSr} onChange={(e) => setG2d1nSr(e.target.value)} /></Field>
-                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nLead} onChange={(e) => setG2d1nLead(e.target.value)} /></Field>
-                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJrEmcee} onChange={(e) => setG2d1nJrEmcee(e.target.value)} /></Field>
-                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSrEmcee} onChange={(e) => setG2d1nSrEmcee(e.target.value)} /></Field>
+                <Field label="Junior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={g2d1nJr} onChange={(e) => setG2d1nJr(e.target.value)} />
+                </Field>
+                <Field label="Senior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={g2d1nSr} onChange={(e) => setG2d1nSr(e.target.value)} />
+                </Field>
+                <Field label="Lead Host (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={g2d1nLead}
+                    onChange={(e) => setG2d1nLead(e.target.value)}
+                  />
+                </Field>
+                <Field label="Junior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={g2d1nJrEmcee}
+                    onChange={(e) => setG2d1nJrEmcee(e.target.value)}
+                  />
+                </Field>
+                <Field label="Senior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={g2d1nSrEmcee}
+                    onChange={(e) => setG2d1nSrEmcee(e.target.value)}
+                  />
+                </Field>
               </div>
 
               <div style={{ fontWeight: 900 }}>3D2N</div>
               <div style={styles.grid5}>
-                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJr} onChange={(e) => setG3d2nJr(e.target.value)} /></Field>
-                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSr} onChange={(e) => setG3d2nSr(e.target.value)} /></Field>
-                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nLead} onChange={(e) => setG3d2nLead(e.target.value)} /></Field>
-                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJrEmcee} onChange={(e) => setG3d2nJrEmcee(e.target.value)} /></Field>
-                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSrEmcee} onChange={(e) => setG3d2nSrEmcee(e.target.value)} /></Field>
+                <Field label="Junior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={g3d2nJr} onChange={(e) => setG3d2nJr(e.target.value)} />
+                </Field>
+                <Field label="Senior (RM)">
+                  <input style={styles.input} inputMode="decimal" value={g3d2nSr} onChange={(e) => setG3d2nSr(e.target.value)} />
+                </Field>
+                <Field label="Lead Host (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={g3d2nLead}
+                    onChange={(e) => setG3d2nLead(e.target.value)}
+                  />
+                </Field>
+                <Field label="Junior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={g3d2nJrEmcee}
+                    onChange={(e) => setG3d2nJrEmcee(e.target.value)}
+                  />
+                </Field>
+                <Field label="Senior Emcee (RM)">
+                  <input
+                    style={styles.input}
+                    inputMode="decimal"
+                    value={g3d2nSrEmcee}
+                    onChange={(e) => setG3d2nSrEmcee(e.target.value)}
+                  />
+                </Field>
               </div>
             </div>
           </details>
@@ -1260,11 +1457,7 @@ export default function Admin({ navigate, user }) {
         >
           <div style={styles.grid2}>
             <Field label="Select Job">
-              <select
-                style={styles.select}
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
-              >
+              <select style={styles.select} value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
                 <option value="">Select a job…</option>
                 {jobs.map((j) => (
                   <option key={j.id} value={j.id}>
@@ -1274,8 +1467,12 @@ export default function Admin({ navigate, user }) {
               </select>
               {job ? (
                 <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
-                  <div><b>Venue:</b> {job.venue || "-"}</div>
-                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
+                  <div>
+                    <b>Venue:</b> {job.venue || "-"}
+                  </div>
+                  <div>
+                    <b>When:</b> {fmtRange(job.startTime, job.endTime)}
+                  </div>
                 </div>
               ) : null}
             </Field>
@@ -1314,12 +1511,7 @@ export default function Admin({ navigate, user }) {
                     : "ATAG Transport isn't enabled on this job — allowance won’t apply."
                 }
               >
-                <input
-                  style={styles.input}
-                  inputMode="decimal"
-                  value={parkingAllowance}
-                  onChange={(e) => setParkingAllowance(e.target.value)}
-                />
+                <input style={styles.input} inputMode="decimal" value={parkingAllowance} onChange={(e) => setParkingAllowance(e.target.value)} />
               </Field>
             </div>
           </div>
@@ -1341,7 +1533,7 @@ export default function Admin({ navigate, user }) {
       {tab === "payroll" && (
         <Panel
           title="Payroll Summary"
-          subtitle="Auto-calculated (part-timers only). Use deductions if needed, then export CSV."
+          subtitle="Job details & pay rules shown on top. Deductions are editable. Export CSV includes job header section."
           right={
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>
@@ -1352,11 +1544,7 @@ export default function Admin({ navigate, user }) {
         >
           <div style={styles.grid2}>
             <Field label="Selected Job">
-              <select
-                style={styles.select}
-                value={selectedId}
-                onChange={(e) => setSelectedId(e.target.value)}
-              >
+              <select style={styles.select} value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
                 <option value="">Select a job…</option>
                 {jobs.map((j) => (
                   <option key={j.id} value={j.id}>
@@ -1364,23 +1552,45 @@ export default function Admin({ navigate, user }) {
                   </option>
                 ))}
               </select>
-              {job ? (
-                <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
-                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
-                  <div><b>Status:</b> {job.status || "-"}</div>
-                </div>
-              ) : null}
             </Field>
 
             <Field label="Search">
-              <input
-                style={styles.input}
-                placeholder="Search name / email / phone…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
+              <input style={styles.input} placeholder="Search name / email / phone…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </Field>
           </div>
+
+          {/* NEW: Job Details Header Block (top of payroll) */}
+          {payrollJobDetails ? (
+            <div style={{ marginTop: 12, border: "1px solid #eef2f7", borderRadius: 16, padding: 14, background: "#fafafa" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ display: "grid", gap: 6 }}>
+                  <div style={{ fontWeight: 900, fontSize: 14, color: "#111827" }}>{payrollJobDetails.title}</div>
+                  <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                    <div>
+                      <b>Venue:</b> {payrollJobDetails.venue}
+                    </div>
+                    <div>
+                      <b>When:</b> {payrollJobDetails.when}
+                    </div>
+                    <div>
+                      <b>Status:</b> {payrollJobDetails.status}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: 6, minWidth: 260 }}>
+                  <div style={{ fontWeight: 900, fontSize: 12, color: "#111827" }}>Session Type</div>
+                  <div style={{ fontSize: 12, color: "#111827" }}>{payrollJobDetails.sessionLabel}</div>
+                  <div style={{ fontWeight: 900, fontSize: 12, color: "#111827", marginTop: 6 }}>Pay Rules</div>
+                  <div style={{ fontSize: 12, color: "#374151", lineHeight: 1.65 }}>
+                    {payrollJobDetails.lines.map((ln, i) => (
+                      <div key={i}>• {ln}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div style={{ height: 12 }} />
 
@@ -1388,35 +1598,61 @@ export default function Admin({ navigate, user }) {
             <table width="100%" cellPadding="10" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
               <thead>
                 <tr style={{ background: "#f9fafb" }}>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb", width: 40 }}>#</th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Name</th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Email</th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Phone</th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Job</th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Hours</th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Transport</th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Base</th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>OT</th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Specific</th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Allowances</th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Deduct</th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Net</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb", width: 40 }}>
+                    #
+                  </th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Name
+                  </th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Email
+                  </th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Phone
+                  </th>
+
+                  {/* REMOVED: Job, Hours, Base, OT */}
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Transport
+                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Specific
+                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Allowances
+                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Gross
+                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Deduct
+                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Net
+                  </th>
                 </tr>
               </thead>
+
               <tbody>
                 {rows.map((r, idx) => (
                   <tr key={r.userId} style={{ borderTop: "1px solid #eef2f7" }}>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{idx + 1}.</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                      {idx + 1}.
+                    </td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.name}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.email}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.phone}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.jobTitle}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{r.hours.toFixed(2)}</td>
+
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.transport}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._basePay)}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._otPay)}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._specific)}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._allowances)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                      {money(r._specific)}
+                    </td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                      {money(r._allowances)}
+                    </td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                      {money(r.wageGross)}
+                    </td>
                     <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
                       <input
                         style={{ ...styles.input, width: 90, textAlign: "right", padding: "8px 10px" }}
@@ -1430,15 +1666,16 @@ export default function Admin({ navigate, user }) {
                     </td>
                   </tr>
                 ))}
+
                 {!job ? (
                   <tr>
-                    <td colSpan={13} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={10} style={{ padding: 14, color: "#6b7280" }}>
                       Select a job to view payroll.
                     </td>
                   </tr>
                 ) : !rows.length ? (
                   <tr>
-                    <td colSpan={13} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={10} style={{ padding: 14, color: "#6b7280" }}>
                       No approved part-timers found (or filtered out by search).
                     </td>
                   </tr>
@@ -1451,7 +1688,6 @@ export default function Admin({ navigate, user }) {
             <span style={styles.pill("#eef2ff", "#3730a3")}>Employees: {summary.employees}</span>
             <span style={styles.pill("#ecfeff", "#155e75")}>Hours: {summary.hours.toFixed(2)}</span>
             <span style={styles.pill("#f0fdf4", "#166534")}>Total Net: {money(summary.wages)}</span>
-            <span style={styles.pill("#f3f4f6", "#111827")}>Jobs: {summary.jobs}</span>
           </div>
         </Panel>
       )}
