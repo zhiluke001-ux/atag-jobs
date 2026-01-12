@@ -194,6 +194,27 @@ const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000"
 // geo options similar to PMJobDetails
 const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 };
 
+/* ---- Parking receipt upload helpers ---- */
+const MAX_RECEIPT_BYTES = 3 * 1024 * 1024; // keep safe for JSON base64 uploads (server json limit ~5mb)
+async function fileToDataUrl(file) {
+  return await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error("Failed to read image."));
+    r.readAsDataURL(file);
+  });
+}
+function getParkingReceiptUrl(job) {
+  return (
+    job?.parkingReceiptUrl ||
+    job?.parkingReceiptImageUrl ||
+    job?.parkingReceipt ||
+    job?.myParkingReceiptUrl ||
+    job?.myParkingReceipt ||
+    null
+  );
+}
+
 /* ========================== Page ========================== */
 export default function MyJobs({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
@@ -211,6 +232,25 @@ export default function MyJobs({ navigate, user }) {
   const [qrDir, setQrDir] = useState("in"); // "in" | "out"
   const [qrJob, setQrJob] = useState(null);
   const [qrError, setQrError] = useState("");
+
+  // Parking receipt (per job) state
+  // draft[jobId] = { fileName, mime, dataUrl, uploading, error, okMsg }
+  const [receiptDraft, setReceiptDraft] = useState({});
+  const [imgOpen, setImgOpen] = useState(null); // url/dataUrl for preview modal
+
+  function setReceipt(jobId, patch) {
+    setReceiptDraft((prev) => ({
+      ...prev,
+      [jobId]: { ...(prev[jobId] || {}), ...patch },
+    }));
+  }
+  function clearReceipt(jobId) {
+    setReceiptDraft((prev) => {
+      const next = { ...prev };
+      delete next[jobId];
+      return next;
+    });
+  }
 
   // load "my jobs"
   useEffect(() => {
@@ -303,11 +343,9 @@ export default function MyJobs({ navigate, user }) {
         if (j.status !== "ongoing") continue;
         try {
           const s = await apiGet(`/jobs/${j.id}/scanner`);
-          // we store lat/lng first; dist will be recomputed when loc changes
           map[j.id] = {
             ...s,
-            dist:
-              s && loc ? haversineMeters(loc, { lat: s.lat, lng: s.lng }) : null,
+            dist: s && loc ? haversineMeters(loc, { lat: s.lat, lng: s.lng }) : null,
           };
         } catch {
           /* ignore */
@@ -321,7 +359,7 @@ export default function MyJobs({ navigate, user }) {
     return () => clearInterval(timer);
   }, [jobs, loc]);
 
-  /* ---------- when user location changes, recompute distances (like PM page) ---------- */
+  /* ---------- when user location changes, recompute distances ---------- */
   useEffect(() => {
     if (!loc) return;
     setScannerInfo((prev) => {
@@ -419,6 +457,99 @@ export default function MyJobs({ navigate, user }) {
     )}`;
   }, [qrToken]);
 
+  /* ---------- Parking receipt upload ---------- */
+  async function onPickReceipt(jobId, file) {
+    if (!file) return;
+
+    if (!String(file.type || "").startsWith("image/")) {
+      setReceipt(jobId, {
+        error: "Please select an image file (jpg/png/heic).",
+        okMsg: null,
+      });
+      return;
+    }
+    if (file.size > MAX_RECEIPT_BYTES) {
+      setReceipt(jobId, {
+        error: `Image is too large. Max ${(MAX_RECEIPT_BYTES / 1024 / 1024).toFixed(0)}MB.`,
+        okMsg: null,
+      });
+      return;
+    }
+
+    try {
+      setReceipt(jobId, { uploading: true, error: null, okMsg: null });
+      const dataUrl = await fileToDataUrl(file);
+      setReceipt(jobId, {
+        uploading: false,
+        fileName: file.name || "receipt.jpg",
+        mime: file.type || "image/jpeg",
+        dataUrl,
+        error: null,
+        okMsg: null,
+      });
+    } catch {
+      setReceipt(jobId, { uploading: false, error: "Failed to load image preview." });
+    }
+  }
+
+  async function uploadReceipt(job) {
+    const jobId = job.id;
+    const d = receiptDraft[jobId];
+    if (!d?.dataUrl) {
+      setReceipt(jobId, { error: "Please choose a receipt image first." });
+      return;
+    }
+
+    try {
+      setReceipt(jobId, { uploading: true, error: null, okMsg: null });
+
+      // ✅ Backend endpoint suggestion:
+      // POST /jobs/:id/parking-receipt
+      // body: { imageDataUrl, fileName, mime }
+      const res = await apiPost(`/jobs/${jobId}/parking-receipt`, {
+        imageDataUrl: d.dataUrl,
+        fileName: d.fileName,
+        mime: d.mime,
+      });
+
+      const url =
+        res?.parkingReceiptUrl ||
+        res?.receiptUrl ||
+        res?.imageUrl ||
+        res?.url ||
+        null;
+
+      if (url) {
+        setJobs((old) =>
+          old.map((x) =>
+            x.id === jobId
+              ? {
+                  ...x,
+                  parkingReceiptUrl: url,
+                  parkingReceiptImageUrl: x.parkingReceiptImageUrl || undefined,
+                }
+              : x
+          )
+        );
+      }
+
+      setReceipt(jobId, {
+        uploading: false,
+        error: null,
+        okMsg: "Uploaded ✅",
+      });
+
+      // keep preview, but you can clear it if you want:
+      // clearReceipt(jobId);
+    } catch (e) {
+      const msg =
+        e?.payload?.error ||
+        e?.message ||
+        "Upload failed. Please try again.";
+      setReceipt(jobId, { uploading: false, error: msg, okMsg: null });
+    }
+  }
+
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div className="card">
@@ -445,6 +576,11 @@ export default function MyJobs({ navigate, user }) {
             const ec = j.earlyCall || {};
             const payForViewer = buildPayForViewer(j, user);
 
+            const receiptUrl = getParkingReceiptUrl(j);
+            const draft = receiptDraft[j.id] || {};
+            const canShowReceiptUI =
+              !!j?.transportOptions?.own || pa != null; // show if own transport / allowance exists
+
             return (
               <div key={j.id} className="card" style={{ marginBottom: 10 }}>
                 <div
@@ -454,7 +590,7 @@ export default function MyJobs({ navigate, user }) {
                     gap: 8,
                   }}
                 >
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: 16 }}>
                       {j.title}
                     </div>
@@ -478,29 +614,19 @@ export default function MyJobs({ navigate, user }) {
                       </div>
                       <div>
                         <strong>Description</strong>
-                        <div
-                          style={{
-                            marginTop: 4,
-                            color: "#374151",
-                          }}
-                        >
+                        <div style={{ marginTop: 4, color: "#374151" }}>
                           {j.description || "-"}
                         </div>
                       </div>
+
                       <div>
                         <strong>Transport</strong>
                         <div style={{ marginTop: 6 }}>
                           <TransportBadges job={j} />
                         </div>
                         {pa != null && (
-                          <div
-                            style={{
-                              fontSize: 12,
-                              color: "#6b7280",
-                              marginTop: 4,
-                            }}
-                          >
-                            ATAG Bus allowance: RM{pa} per person (if selected)
+                          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                            Transport / parking allowance: RM{pa} (if applicable)
                           </div>
                         )}
                       </div>
@@ -513,17 +639,17 @@ export default function MyJobs({ navigate, user }) {
                         <div style={{ fontSize: 14, color: "#374151" }}>
                           Early Call:{" "}
                           {ec?.enabled
-                            ? `Yes (RM${Number(
-                                ec.amount || 0
-                              )}, ≥ ${Number(ec.thresholdHours || 0)}h)`
+                            ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(
+                                ec.thresholdHours || 0
+                              )}h)`
                             : "No"}
                         </div>
                         <div style={{ fontSize: 14, color: "#374151" }}>
                           Loading & Unloading:{" "}
                           {lu?.enabled
-                            ? `Yes (RM${Number(
-                                lu.price || 0
-                              )} / helper, quota ${Number(lu.quota || 0)})`
+                            ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(
+                                lu.quota || 0
+                              )})`
                             : "No"}
                         </div>
                       </div>
@@ -543,6 +669,92 @@ export default function MyJobs({ navigate, user }) {
                           {payForViewer}
                         </div>
                       </div>
+
+                      {/* ✅ Parking receipt upload */}
+                      {canShowReceiptUI && (
+                        <div style={{ marginTop: 4 }}>
+                          <strong>Parking Receipt</strong>
+
+                          <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                            {/* existing uploaded */}
+                            {receiptUrl && (
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 10,
+                                  alignItems: "center",
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <span
+                                  className="status"
+                                  style={{
+                                    background: "#ecfdf5",
+                                    color: "#065f46",
+                                    border: "1px solid #6ee7b7",
+                                  }}
+                                >
+                                  Uploaded ✅
+                                </span>
+                                <button className="btn" onClick={() => setImgOpen(receiptUrl)}>
+                                  View uploaded
+                                </button>
+                              </div>
+                            )}
+
+                            {/* pick + preview */}
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 10,
+                                alignItems: "center",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <input
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                onChange={(e) => onPickReceipt(j.id, e.target.files?.[0])}
+                              />
+
+                              {draft?.dataUrl && (
+                                <>
+                                  <button className="btn" onClick={() => setImgOpen(draft.dataUrl)}>
+                                    Preview
+                                  </button>
+                                  <button className="btn" onClick={() => clearReceipt(j.id)}>
+                                    Clear
+                                  </button>
+                                </>
+                              )}
+
+                              <button
+                                className="btn primary"
+                                disabled={!!draft.uploading || !draft?.dataUrl}
+                                onClick={() => uploadReceipt(j)}
+                              >
+                                {draft.uploading ? "Uploading..." : "Upload receipt"}
+                              </button>
+                            </div>
+
+                            <div style={{ fontSize: 12, color: "#6b7280" }}>
+                              Tip: snap a clear photo of the receipt. Max {(MAX_RECEIPT_BYTES / 1024 / 1024).toFixed(0)}MB.
+                            </div>
+
+                            {draft?.error && (
+                              <div style={{ color: "crimson", fontSize: 13 }}>
+                                {draft.error}
+                              </div>
+                            )}
+                            {draft?.okMsg && (
+                              <div style={{ color: "#065f46", fontSize: 13, fontWeight: 700 }}>
+                                {draft.okMsg}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ marginTop: 10, fontSize: 14 }}>
@@ -588,17 +800,8 @@ export default function MyJobs({ navigate, user }) {
                     </div>
                   </div>
 
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      alignItems: "start",
-                    }}
-                  >
-                    <button
-                      className="btn"
-                      onClick={() => navigate(`#/jobs/${j.id}`)}
-                    >
+                  <div style={{ display: "flex", gap: 8, alignItems: "start" }}>
+                    <button className="btn" onClick={() => navigate(`#/jobs/${j.id}`)}>
                       View details
                     </button>
                     {j.myStatus === "approved" && (
@@ -617,18 +820,8 @@ export default function MyJobs({ navigate, user }) {
 
                 {/* Actions */}
                 {!isVirtual && (
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 10,
-                      marginTop: 10,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <button
-                      className="btn primary"
-                      onClick={() => openQR(j, "in")}
-                    >
+                  <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                    <button className="btn primary" onClick={() => openQR(j, "in")}>
                       Get Check-in QR
                     </button>
                     <button className="btn" onClick={() => openQR(j, "out")}>
@@ -638,8 +831,7 @@ export default function MyJobs({ navigate, user }) {
                 )}
                 {isVirtual && (
                   <div style={{ marginTop: 10, fontSize: 13, color: "#6b7280" }}>
-                    This is a virtual job — no scanning needed. The PM/Admin will
-                    tick your attendance.
+                    This is a virtual job — no scanning needed. The PM/Admin will tick your attendance.
                   </div>
                 )}
               </div>
@@ -675,38 +867,24 @@ export default function MyJobs({ navigate, user }) {
               boxShadow: "0 10px 30px rgba(0,0,0,.25)",
             }}
           >
-            <div
-              style={{
-                fontWeight: 800,
-                fontSize: 16,
-                marginBottom: 8,
-              }}
-            >
-              {qrJob
-                ? `${qrDir === "in" ? "Check-in" : "Check-out"} QR — ${qrJob.title}`
-                : "QR"}
+            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>
+              {qrJob ? `${qrDir === "in" ? "Check-in" : "Check-out"} QR — ${qrJob.title}` : "QR"}
             </div>
 
             {qrError ? (
               <div
                 style={{
-                    padding: 10,
-                    border: "1px solid var(--red)",
-                    borderRadius: 8,
-                    color: "var(--red)",
-                  }}
+                  padding: 10,
+                  border: "1px solid var(--red)",
+                  borderRadius: 8,
+                  color: "var(--red)",
+                }}
               >
                 {qrError}
               </div>
             ) : (
               <>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "center",
-                    margin: "6px 0 10px",
-                  }}
-                >
+                <div style={{ display: "flex", justifyContent: "center", margin: "6px 0 10px" }}>
                   {qrToken ? (
                     <img
                       src={qrImgSrc}
@@ -722,15 +900,8 @@ export default function MyJobs({ navigate, user }) {
                     <div style={{ color: "#6b7280" }}>Generating QR…</div>
                   )}
                 </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: "#6b7280",
-                    marginTop: 4,
-                  }}
-                >
-                  Show this QR to the PM scanner. Token is valid for about 60
-                  seconds.
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                  Show this QR to the PM scanner. Token is valid for about 60 seconds.
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <label style={{ fontWeight: 700 }}>Token (fallback)</label>
@@ -739,25 +910,61 @@ export default function MyJobs({ navigate, user }) {
               </>
             )}
 
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                marginTop: 14,
-              }}
-            >
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
               <button className="btn" onClick={closeQR}>
                 Close
               </button>
               {!qrError && qrJob && (
-                <button
-                  className="btn primary"
-                  onClick={() => openQR(qrJob, qrDir)}
-                >
+                <button className="btn primary" onClick={() => openQR(qrJob, qrDir)}>
                   Regenerate
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Image preview MODAL (receipt) ---------- */}
+      {imgOpen && (
+        <div
+          onClick={() => setImgOpen(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 70,
+            background: "rgba(0,0,0,.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            className="card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(860px, 96vw)",
+              padding: 12,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ fontWeight: 800 }}>Image Preview</div>
+              <button className="btn" onClick={() => setImgOpen(null)}>
+                Close
+              </button>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <img
+                src={imgOpen}
+                alt="preview"
+                style={{
+                  width: "100%",
+                  maxHeight: "75vh",
+                  objectFit: "contain",
+                  borderRadius: 12,
+                  border: "1px solid #eee",
+                }}
+              />
             </div>
           </div>
         </div>
