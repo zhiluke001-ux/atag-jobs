@@ -52,6 +52,80 @@ const fmtDateTime = (value) => {
   }
 };
 
+// ✅ NEW: parking receipt resolver (robust across backend shapes)
+function getReceiptUrlForUser(job, uid, email, appRec, attendanceRec) {
+  const pick = (...vals) => {
+    for (const v of vals) {
+      if (!v) continue;
+      if (typeof v === "string" && v.trim() === "") continue;
+      return v;
+    }
+    return null;
+  };
+
+  // 1) from attendance record (some backends store it here)
+  const fromAtt = pick(
+    attendanceRec?.parkingReceiptUrl,
+    attendanceRec?.receiptUrl,
+    attendanceRec?.parkingReceipt,
+    attendanceRec?.receipt
+  );
+
+  // 2) from application record
+  const fromApp = pick(
+    appRec?.parkingReceiptUrl,
+    appRec?.receiptUrl,
+    appRec?.parkingReceipt,
+    appRec?.receipt,
+    appRec?.addOns?.parkingReceiptUrl
+  );
+
+  // 3) from job-level maps
+  const pr = job?.parkingReceipts || job?.parkingReceiptByUser || job?.parkingReceiptUrls || null;
+
+  const fromMap =
+    pr && typeof pr === "object" && !Array.isArray(pr)
+      ? pick(
+          pr?.[uid],
+          email ? pr?.[email] : null,
+          pr?.byUserId?.[uid],
+          email ? pr?.byEmail?.[email] : null
+        )
+      : null;
+
+  // 4) from job-level arrays (e.g. [{userId,url,...}])
+  const list =
+    (Array.isArray(job?.parkingReceipts) && job.parkingReceipts) ||
+    (Array.isArray(job?.parkingReceiptsList) && job.parkingReceiptsList) ||
+    (Array.isArray(job?.receipts) && job.receipts) ||
+    null;
+
+  let fromList = null;
+  if (Array.isArray(list)) {
+    const found =
+      list.find((x) => x?.userId === uid) ||
+      (email ? list.find((x) => x?.email === email) : null) ||
+      null;
+    fromList = pick(found?.url, found?.imageUrl, found?.parkingReceiptUrl, found?.receiptUrl);
+  }
+
+  // 5) legacy single fields (rare)
+  const fromLegacy = pick(
+    job?.parkingReceiptUrl,
+    job?.parkingReceiptImageUrl,
+    job?.parkingReceipt
+  );
+
+  return pick(fromAtt, fromApp, fromMap, fromList, fromLegacy);
+}
+
+function receiptCsvValue(url) {
+  if (!url) return "";
+  // Avoid exploding CSV if backend returned a data-url
+  if (String(url).startsWith("data:")) return "embedded-image-data";
+  return String(url);
+}
+
 /* ---------------- UI (cleaner + less boxy) ---------------- */
 const styles = {
   page: { paddingTop: 12, paddingBottom: 24 },
@@ -211,6 +285,10 @@ export default function Admin({ navigate, user }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
 
+  // ✅ NEW: image preview modal (receipts)
+  const [imgOpen, setImgOpen] = useState(null);
+  const [imgTitle, setImgTitle] = useState("");
+
   // Central user map (from /admin/users)
   const [userMap, setUserMap] = useState({});
 
@@ -233,26 +311,42 @@ export default function Admin({ navigate, user }) {
   const [gHalfJr, setGHalfJr] = useState(String(globalCfg.session.half_day.jr ?? DEFAULT_HALF.jr));
   const [gHalfSr, setGHalfSr] = useState(String(globalCfg.session.half_day.sr ?? DEFAULT_HALF.sr));
   const [gHalfLead, setGHalfLead] = useState(String(globalCfg.session.half_day.lead ?? DEFAULT_HALF.lead));
-  const [gHalfJrEmcee, setGHalfJrEmcee] = useState(String(globalCfg.session.half_day.jrEmcee ?? DEFAULT_HALF.jrEmcee));
-  const [gHalfSrEmcee, setGHalfSrEmcee] = useState(String(globalCfg.session.half_day.srEmcee ?? DEFAULT_HALF.srEmcee));
+  const [gHalfJrEmcee, setGHalfJrEmcee] = useState(
+    String(globalCfg.session.half_day.jrEmcee ?? DEFAULT_HALF.jrEmcee)
+  );
+  const [gHalfSrEmcee, setGHalfSrEmcee] = useState(
+    String(globalCfg.session.half_day.srEmcee ?? DEFAULT_HALF.srEmcee)
+  );
 
   const [gFullJr, setGFullJr] = useState(String(globalCfg.session.full_day.jr ?? DEFAULT_FULL.jr));
   const [gFullSr, setGFullSr] = useState(String(globalCfg.session.full_day.sr ?? DEFAULT_FULL.sr));
   const [gFullLead, setGFullLead] = useState(String(globalCfg.session.full_day.lead ?? DEFAULT_FULL.lead));
-  const [gFullJrEmcee, setGFullJrEmcee] = useState(String(globalCfg.session.full_day.jrEmcee ?? DEFAULT_FULL.jrEmcee));
-  const [gFullSrEmcee, setGFullSrEmcee] = useState(String(globalCfg.session.full_day.srEmcee ?? DEFAULT_FULL.srEmcee));
+  const [gFullJrEmcee, setGFullJrEmcee] = useState(
+    String(globalCfg.session.full_day.jrEmcee ?? DEFAULT_FULL.jrEmcee)
+  );
+  const [gFullSrEmcee, setGFullSrEmcee] = useState(
+    String(globalCfg.session.full_day.srEmcee ?? DEFAULT_FULL.srEmcee)
+  );
 
   const [g2d1nJr, setG2d1nJr] = useState(String(globalCfg.session.twoD1N.jr ?? DEFAULT_2D1N.jr));
   const [g2d1nSr, setG2d1nSr] = useState(String(globalCfg.session.twoD1N.sr ?? DEFAULT_2D1N.sr));
   const [g2d1nLead, setG2d1nLead] = useState(String(globalCfg.session.twoD1N.lead ?? DEFAULT_2D1N.lead));
-  const [g2d1nJrEmcee, setG2d1nJrEmcee] = useState(String(globalCfg.session.twoD1N.jrEmcee ?? DEFAULT_2D1N.jrEmcee));
-  const [g2d1nSrEmcee, setG2d1nSrEmcee] = useState(String(globalCfg.session.twoD1N.srEmcee ?? DEFAULT_2D1N.srEmcee));
+  const [g2d1nJrEmcee, setG2d1nJrEmcee] = useState(
+    String(globalCfg.session.twoD1N.jrEmcee ?? DEFAULT_2D1N.jrEmcee)
+  );
+  const [g2d1nSrEmcee, setG2d1nSrEmcee] = useState(
+    String(globalCfg.session.twoD1N.srEmcee ?? DEFAULT_2D1N.srEmcee)
+  );
 
   const [g3d2nJr, setG3d2nJr] = useState(String(globalCfg.session.threeD2N.jr ?? DEFAULT_3D2N.jr));
   const [g3d2nSr, setG3d2nSr] = useState(String(globalCfg.session.threeD2N.sr ?? DEFAULT_3D2N.sr));
   const [g3d2nLead, setG3d2nLead] = useState(String(globalCfg.session.threeD2N.lead ?? DEFAULT_3D2N.lead));
-  const [g3d2nJrEmcee, setG3d2nJrEmcee] = useState(String(globalCfg.session.threeD2N.jrEmcee ?? DEFAULT_3D2N.jrEmcee));
-  const [g3d2nSrEmcee, setG3d2nSrEmcee] = useState(String(globalCfg.session.threeD2N.srEmcee ?? DEFAULT_3D2N.srEmcee));
+  const [g3d2nJrEmcee, setG3d2nJrEmcee] = useState(
+    String(globalCfg.session.threeD2N.jrEmcee ?? DEFAULT_3D2N.jrEmcee)
+  );
+  const [g3d2nSrEmcee, setG3d2nSrEmcee] = useState(
+    String(globalCfg.session.threeD2N.srEmcee ?? DEFAULT_3D2N.srEmcee)
+  );
 
   function saveGlobal() {
     const ecPrev = globalCfg.earlyCall || {};
@@ -849,6 +943,9 @@ export default function Admin({ navigate, user }) {
 
       const email = pick(coreUser.email, appUser.email, appRec?.email, uid) || uid;
 
+      // ✅ NEW: receipt URL per user
+      const receiptUrl = getReceiptUrlForUser(job, uid, appRec?.email || email, appRec, rec);
+
       outRows.push({
         userId: uid,
         name: name || "-",
@@ -860,6 +957,8 @@ export default function Admin({ navigate, user }) {
 
         scanIn: scanInStr,
         scanOut: scanOutStr,
+
+        receiptUrl: receiptUrl || "", // ✅ NEW
 
         wageGross: gross,
         deduction,
@@ -1050,8 +1149,7 @@ export default function Admin({ navigate, user }) {
     });
     lines.push(""); // one blank line
 
-    // ✅ Removed: Job, Hours, Base, OT
-    // ✅ Added: Scan In, Scan Out
+    // ✅ Added: Parking Receipt URL
     const headers = [
       "No",
       "Name",
@@ -1060,6 +1158,7 @@ export default function Admin({ navigate, user }) {
       "Transport",
       "Scan In",
       "Scan Out",
+      "Parking Receipt",
       "Session Pay",
       "Allowances",
       "Gross",
@@ -1077,6 +1176,7 @@ export default function Admin({ navigate, user }) {
         q(r.transport || ""),
         q(r.scanIn || ""),
         q(r.scanOut || ""),
+        q(receiptCsvValue(r.receiptUrl)),
         Math.round(N(r._specific, 0)),
         Math.round(N(r._allowances, 0)),
         Math.round(N(r.wageGross, 0)),
@@ -1515,7 +1615,7 @@ export default function Admin({ navigate, user }) {
       {tab === "payroll" && (
         <Panel
           title="Payroll Summary"
-          subtitle="Job details shown at top. Then table includes Scan In/Out. Export CSV includes job details header block."
+          subtitle="Now includes Parking Receipt view + exported CSV includes receipt URL."
           right={
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>
@@ -1582,7 +1682,9 @@ export default function Admin({ navigate, user }) {
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan In</th>
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan Out</th>
 
-                  {/* ✅ Removed: Job, Hours, Base, OT */}
+                  {/* ✅ NEW */}
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Parking Receipt</th>
+
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Session Pay</th>
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Allowances</th>
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Gross</th>
@@ -1601,6 +1703,34 @@ export default function Admin({ navigate, user }) {
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.transport}</td>
                     <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanIn || "-"}</td>
                     <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanOut || "-"}</td>
+
+                    {/* ✅ NEW */}
+                    <td style={{ borderTop: "1px solid #eef2f7" }}>
+                      {r.receiptUrl ? (
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <span
+                            style={{
+                              ...styles.pill("#ecfdf5", "#065f46"),
+                              border: "1px solid #6ee7b7",
+                              fontWeight: 900,
+                            }}
+                          >
+                            Uploaded
+                          </span>
+                          <button
+                            className="btn"
+                            onClick={() => {
+                              setImgTitle(`Parking Receipt — ${r.name}`);
+                              setImgOpen(r.receiptUrl);
+                            }}
+                          >
+                            View
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{ color: "#6b7280" }}>-</span>
+                      )}
+                    </td>
 
                     <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._specific)}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._allowances)}</td>
@@ -1622,13 +1752,13 @@ export default function Admin({ navigate, user }) {
 
                 {!job ? (
                   <tr>
-                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={13} style={{ padding: 14, color: "#6b7280" }}>
                       Select a job to view payroll.
                     </td>
                   </tr>
                 ) : !rows.length ? (
                   <tr>
-                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={13} style={{ padding: 14, color: "#6b7280" }}>
                       No approved part-timers found (or filtered out by search).
                     </td>
                   </tr>
@@ -1644,6 +1774,70 @@ export default function Admin({ navigate, user }) {
             <span style={styles.pill("#f3f4f6", "#111827")}>Jobs: {summary.jobs}</span>
           </div>
         </Panel>
+      )}
+
+      {/* ✅ NEW: Receipt Image Preview Modal */}
+      {imgOpen && (
+        <div
+          onClick={() => setImgOpen(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 80,
+            background: "rgba(0,0,0,.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            className="card"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(900px, 96vw)",
+              padding: 12,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div style={{ fontWeight: 900 }}>{imgTitle || "Parking Receipt"}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    try {
+                      window.open(imgOpen, "_blank", "noopener,noreferrer");
+                    } catch {}
+                  }}
+                >
+                  Open
+                </button>
+                <button className="btn" onClick={() => setImgOpen(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 10 }}>
+              <img
+                src={imgOpen}
+                alt="receipt"
+                style={{
+                  width: "100%",
+                  maxHeight: "75vh",
+                  objectFit: "contain",
+                  borderRadius: 12,
+                  border: "1px solid #eee",
+                  background: "#fff",
+                }}
+              />
+            </div>
+
+            <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+              If you see a broken image, your backend might require an authenticated URL or a dedicated receipt endpoint.
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
