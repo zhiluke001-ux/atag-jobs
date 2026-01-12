@@ -823,16 +823,24 @@ if (ec.enabled && ecAmt > 0 && earlyChecked) {
       });
     };
 
-    // PART-TIMERS only: approved + optional attendance
-    const participants = new Set();
-    approved.forEach((uid) => participants.add(uid));
-    Object.keys(attendance).forEach((uid) => participants.add(uid));
+// ✅ PART-TIMERS only: show ONLY approved users who have attendance (scan IN/OUT or virtual marked)
+( job.approved || [] ).forEach((uid) => {
+  if (!approved.has(uid)) return;
 
-    participants.forEach((uid) => {
-      if (!approved.has(uid)) return;
-      const appRec = apps.find((a) => a.userId === uid) || {};
-      pushRowForPerson(uid, appRec);
-    });
+  const appRec = apps.find((a) => a.userId === uid) || {};
+
+  // attendance might be keyed by userId OR email (depending on backend version)
+  const rec =
+    attendance?.[uid] ||
+    (appRec?.email ? attendance?.[appRec.email] : null) ||
+    {};
+
+  // ✅ only include if there is at least an IN or OUT record
+  if (!rec?.in && !rec?.out) return;
+
+  pushRowForPerson(uid, appRec);
+});
+
 
     const filtered = outRows
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
