@@ -1,16 +1,46 @@
 // web/src/pages/Login.jsx
 import React, { useState, useEffect } from "react";
-import {
-  login,
-  getToken,
-  fetchCurrentUser,
-  logout,
-} from "../auth";
+import { login, getToken, fetchCurrentUser, logout } from "../auth";
+
+function parseLoginError(e) {
+  const code = e?.payload?.code || e?.code || null;
+  const err = e?.payload?.error || "";
+  const msg = e?.message || "";
+
+  const isPending =
+    code === "PENDING_VERIFICATION" ||
+    String(err).toLowerCase() === "pending_verification" ||
+    String(msg).toLowerCase().includes("pending_verification");
+
+  if (isPending) {
+    return {
+      type: "pending",
+      title: "⏳ Account pending verification",
+      body:
+        "Your registration is received, but your account is not verified yet.\n\n" +
+        "What to do:\n" +
+        "• Please wait for admin to approve your account\n" +
+        "• If it takes too long, contact the admin (WhatsApp) and tell them your email/username",
+    };
+  }
+
+  // fallback message (use server payload if available)
+  const fallback =
+    e?.payload?.error ||
+    e?.message ||
+    "Login failed. Check your email/username and password.";
+
+  return {
+    type: "error",
+    title: "⚠️ Login failed",
+    body: String(fallback),
+  };
+}
 
 export default function Login({ navigate, setUser }) {
   const [identifier, setIdentifier] = useState(""); // email or username
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null); // { type, title, body }
   const [busy, setBusy] = useState(false);
   const [checkingToken, setCheckingToken] = useState(true);
 
@@ -30,18 +60,15 @@ export default function Login({ navigate, setUser }) {
       if (cancelled) return;
 
       if (me) {
-        // token is good → set user and go home
         if (setUser) setUser(me);
         window.location.replace("#/");
       } else {
-        // token in localStorage was bad/stale → clear it so user can log in
         logout();
         setCheckingToken(false);
       }
     }
 
     checkExistingToken();
-
     return () => {
       cancelled = true;
     };
@@ -49,23 +76,17 @@ export default function Login({ navigate, setUser }) {
 
   async function onSubmit(e) {
     e.preventDefault();
-    setError(null);
+    setNotice(null);
     setBusy(true);
+
     try {
       const u = await login(identifier, password);
       if (setUser) setUser(u);
-
-      // go to home and REPLACE the current entry so Back won't return to /login
       window.location.replace("#/");
       // or: if (navigate) navigate("#/");
     } catch (e) {
       console.error("login failed:", e);
-      // show server message if available
-      const msg =
-        e?.payload?.error ||
-        e?.message ||
-        "Login failed. Check your email/username and password.";
-      setError(msg);
+      setNotice(parseLoginError(e));
     } finally {
       setBusy(false);
     }
@@ -79,6 +100,19 @@ export default function Login({ navigate, setUser }) {
       </div>
     );
   }
+
+  const noticeStyle =
+    notice?.type === "pending"
+      ? {
+          background: "#fff7ed",
+          border: "1px solid #fdba74",
+          color: "#9a3412",
+        }
+      : {
+          background: "#fef2f2",
+          border: "1px solid #fecaca",
+          color: "#991b1b",
+        };
 
   return (
     <div className="container">
@@ -106,8 +140,22 @@ export default function Login({ navigate, setUser }) {
           required
         />
 
-        {error && (
-          <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>
+        {notice && (
+          <div
+            style={{
+              ...noticeStyle,
+              marginTop: 10,
+              padding: 10,
+              borderRadius: 10,
+              whiteSpace: "pre-line",
+              lineHeight: 1.35,
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 6 }}>
+              {notice.title}
+            </div>
+            <div style={{ fontSize: 13 }}>{notice.body}</div>
+          </div>
         )}
 
         <div style={{ marginTop: 10 }}>
