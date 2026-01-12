@@ -191,7 +191,8 @@ const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000"
 const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 };
 
 /* ---- Parking receipt upload helpers ---- */
-const MAX_RECEIPT_BYTES = 3 * 1024 * 1024;
+// ✅ MATCH BACKEND LIMIT (server MAX = 2MB)
+const MAX_RECEIPT_BYTES = 2 * 1024 * 1024;
 
 // backend only supports png/jpeg/jpg/webp (your saveDataUrlImage regex)
 function isSupportedReceiptFile(file) {
@@ -223,6 +224,26 @@ function toNiceErr(e) {
     if (j?.message) return j.message;
   } catch {}
   return raw || "Upload failed. Please try again.";
+}
+
+/* ✅✅✅ IMPORTANT FIX: resolve backend asset URL (uploaded receipt preview) ✅✅✅
+   If backend returns "/uploads/...", and your frontend is on Vercel,
+   you MUST prefix backend origin (e.g. https://atag-jobs.onrender.com)
+*/
+const API_BASE =
+  String(
+    (import.meta?.env?.VITE_API_BASE ||
+      import.meta?.env?.VITE_API_URL ||
+      import.meta?.env?.VITE_API_ORIGIN ||
+      "") ?? ""
+  ).replace(/\/$/, "");
+
+function assetUrl(u) {
+  const s = String(u || "");
+  if (!s) return "";
+  if (/^(data:|blob:|https?:\/\/)/i.test(s)) return s;
+  if (!API_BASE) return s; // same-origin deployments still work
+  return `${API_BASE}${s.startsWith("/") ? "" : "/"}${s}`;
 }
 
 /* ========================== Page ========================== */
@@ -539,22 +560,27 @@ export default function MyJobs({ navigate, user }) {
       const photoUrl = receipt?.photoUrl || res?.photoUrl || null;
       if (!photoUrl) throw new Error("Upload succeeded but missing receipt URL.");
 
-      // ✅ persist in UI list (so it "stays there")
+      // persist in UI list (so it "stays there")
       setJobs((old) =>
         old.map((x) =>
           x.id === jobId
             ? {
                 ...x,
-                myParkingReceipts: [receipt, ...(Array.isArray(x.myParkingReceipts) ? x.myParkingReceipts : [])],
+                myParkingReceipts: [
+                  receipt,
+                  ...(Array.isArray(x.myParkingReceipts) ? x.myParkingReceipts : []),
+                ],
               }
             : x
         )
       );
 
-      // ✅ IMPORTANT: do NOT clear draft automatically (so your selected file “stays”)
-      setReceipt(jobId, { uploading: false, error: null, okMsg: "Uploaded ✅ (You can upload more or clear)" });
-      // If you WANT to auto-clear after upload, uncomment:
-      // clearReceipt(jobId);
+      // do NOT clear draft automatically (so your selected file “stays”)
+      setReceipt(jobId, {
+        uploading: false,
+        error: null,
+        okMsg: "Uploaded ✅ (You can upload more or clear)",
+      });
     } catch (e) {
       setReceipt(jobId, { uploading: false, error: toNiceErr(e), okMsg: null });
     }
@@ -707,6 +733,7 @@ export default function MyJobs({ navigate, user }) {
                                       {dayjs(r.createdAt).format("DD MMM HH:mm")}
                                     </span>
 
+                                    {/* ✅ FIX: open modal with backend asset URL */}
                                     <button className="btn" onClick={() => setImgOpen(r.photoUrl)}>
                                       View
                                     </button>
@@ -718,7 +745,6 @@ export default function MyJobs({ navigate, user }) {
                                 ))
                               )}
 
-                              {/* optional refresh */}
                               <div>
                                 <button className="btn" onClick={() => refreshMyReceipts(j.id)}>
                                   Refresh receipts
@@ -768,7 +794,9 @@ export default function MyJobs({ navigate, user }) {
                             </div>
 
                             {draft?.error && <div style={{ color: "crimson", fontSize: 13 }}>{draft.error}</div>}
-                            {draft?.okMsg && <div style={{ color: "#065f46", fontSize: 13, fontWeight: 700 }}>{draft.okMsg}</div>}
+                            {draft?.okMsg && (
+                              <div style={{ color: "#065f46", fontSize: 13, fontWeight: 700 }}>{draft.okMsg}</div>
+                            )}
                           </div>
                         </div>
                       )}
@@ -882,32 +910,29 @@ export default function MyJobs({ navigate, user }) {
               </div>
             ) : (
               <>
-              {/* ✅ User name above QR */}
-              <div style={{ textAlign: "center", marginTop: 6 }}>
-                <div style={{ fontWeight: 900, fontSize: 16 }}>
-                  {user?.name || "Unknown User"}
+                <div style={{ textAlign: "center", marginTop: 6 }}>
+                  <div style={{ fontWeight: 900, fontSize: 16 }}>{user?.name || "Unknown User"}</div>
+                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                    {qrDir === "in" ? "Check-in QR" : "Check-out QR"}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  {qrDir === "in" ? "Check-in QR" : "Check-out QR"}
+
+                <div style={{ display: "flex", justifyContent: "center", margin: "8px 0 10px" }}>
+                  {qrToken ? (
+                    <img
+                      src={qrImgSrc}
+                      alt="QR code"
+                      style={{
+                        width: 260,
+                        height: 260,
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                      }}
+                    />
+                  ) : (
+                    <div style={{ color: "#6b7280" }}>Generating QR…</div>
+                  )}
                 </div>
-              </div>
-              
-              <div style={{ display: "flex", justifyContent: "center", margin: "8px 0 10px" }}>
-                {qrToken ? (
-                  <img
-                    src={qrImgSrc}
-                    alt="QR code"
-                    style={{
-                      width: 260,
-                      height: 260,
-                      borderRadius: 8,
-                      border: "1px solid var(--border)",
-                    }}
-                  />
-                ) : (
-                  <div style={{ color: "#6b7280" }}>Generating QR…</div>
-                )}
-              </div>
 
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
                   Show this QR to the PM scanner. Token is valid for about 60 seconds.
@@ -955,10 +980,23 @@ export default function MyJobs({ navigate, user }) {
                 Close
               </button>
             </div>
+
             <div style={{ marginTop: 10 }}>
               <img
-                src={imgOpen}
+                // ✅ FIX: convert "/uploads/..." into "https://your-backend/uploads/..."
+                src={assetUrl(imgOpen)}
                 alt="preview"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                  // quick inline message (simple)
+                  const el = document.createElement("div");
+                  el.style.color = "crimson";
+                  el.style.fontSize = "13px";
+                  el.style.marginTop = "8px";
+                  el.innerText =
+                    "Image failed to load. Check VITE_API_BASE / VITE_API_URL env and make sure backend serves /uploads.";
+                  e.currentTarget.parentElement?.appendChild(el);
+                }}
                 style={{
                   width: "100%",
                   maxHeight: "75vh",
