@@ -161,11 +161,7 @@ function TransportBadges({ job }) {
     ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
   ];
   if (!items.length)
-    return (
-      <span style={{ fontSize: 12, color: "#6b7280" }}>
-        No transport option
-      </span>
-    );
+    return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {items.map((it, i) => (
@@ -195,7 +191,18 @@ const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000"
 const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 };
 
 /* ---- Parking receipt upload helpers ---- */
-const MAX_RECEIPT_BYTES = 3 * 1024 * 1024; // note: base64 expands ~33%, still ok under server json limit 5mb
+const MAX_RECEIPT_BYTES = 3 * 1024 * 1024;
+
+// backend only supports png/jpeg/jpg/webp (your saveDataUrlImage regex)
+function isSupportedReceiptFile(file) {
+  const mime = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  const okMime = ["image/png", "image/jpeg", "image/jpg", "image/webp"].includes(mime);
+  const okExt =
+    name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp");
+  return okMime || okExt;
+}
+
 async function fileToDataUrl(file) {
   return await new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -204,23 +211,12 @@ async function fileToDataUrl(file) {
     r.readAsDataURL(file);
   });
 }
-function getParkingReceiptUrl(job) {
-  return (
-    job?.parkingReceiptUrl ||
-    job?.parkingReceiptImageUrl ||
-    job?.parkingReceipt ||
-    job?.myParkingReceiptUrl ||
-    job?.myParkingReceipt ||
-    null
-  );
-}
+
 function toNiceErr(e) {
   const raw = String(e?.payload?.error || e?.message || e || "");
-  // Express 404 html: "Cannot POST /jobs/xxx/parking-receipt"
   if (raw.includes("Cannot POST") && raw.includes("/parking-receipt")) {
     return "Backend route missing: POST /jobs/:id/parking-receipt (server needs update).";
   }
-  // try JSON in string
   try {
     const j = JSON.parse(raw);
     if (j?.error) return j.error;
@@ -247,13 +243,13 @@ export default function MyJobs({ navigate, user }) {
   const [qrJob, setQrJob] = useState(null);
   const [qrError, setQrError] = useState("");
 
-  // Parking receipt (per job) state
+  // Parking receipt draft (per job)
   // draft[jobId] = { fileName, mime, dataUrl, uploading, error, okMsg }
   const [receiptDraft, setReceiptDraft] = useState({});
-  const [imgOpen, setImgOpen] = useState(null); // url/dataUrl for preview modal
+  const [imgOpen, setImgOpen] = useState(null);
 
-  // ✅ force-remount file input so "Clear" really clears
-  const [receiptInputKey, setReceiptInputKey] = useState({}); // { [jobId]: number }
+  // force-remount file input when user clicks Clear (so selecting the SAME file again works)
+  const [receiptInputKey, setReceiptInputKey] = useState({});
   function bumpInputKey(jobId) {
     setReceiptInputKey((prev) => ({ ...prev, [jobId]: (prev[jobId] || 0) + 1 }));
   }
@@ -264,32 +260,53 @@ export default function MyJobs({ navigate, user }) {
       [jobId]: { ...(prev[jobId] || {}), ...patch },
     }));
   }
+
   function clearReceipt(jobId) {
     setReceiptDraft((prev) => {
       const next = { ...prev };
       delete next[jobId];
       return next;
     });
-    bumpInputKey(jobId); // ✅ resets file input
+    bumpInputKey(jobId);
   }
 
-  // load "my jobs"
+  async function refreshMyReceipts(jobId) {
+    try {
+      const r = await apiGet(`/jobs/${jobId}/parking-receipt/me`);
+      const list = Array.isArray(r?.receipts) ? r.receipts : [];
+      setJobs((old) => old.map((x) => (x.id === jobId ? { ...x, myParkingReceipts: list } : x)));
+    } catch {
+      // ignore
+    }
+  }
+
+  // load "my jobs" + full job + my receipts
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const mine = await apiGet("/me/jobs");
         const onlyApproved = (mine || []).filter((j) => j.myStatus === "approved");
+
         const full = await Promise.all(
           onlyApproved.map(async (j) => {
+            let fj = j;
             try {
-              const fj = await apiGet(`/jobs/${j.id}`);
-              return { ...j, ...fj };
+              fj = { ...j, ...(await apiGet(`/jobs/${j.id}`)) };
+            } catch {}
+
+            try {
+              const meR = await apiGet(`/jobs/${j.id}/parking-receipt/me`);
+              const myList = Array.isArray(meR?.receipts) ? meR.receipts : [];
+              fj = { ...fj, myParkingReceipts: myList };
             } catch {
-              return j;
+              fj = { ...fj, myParkingReceipts: [] };
             }
+
+            return fj;
           })
         );
+
         if (mounted) setJobs(full || []);
       } catch {
         if (mounted) setJobs([]);
@@ -300,7 +317,7 @@ export default function MyJobs({ navigate, user }) {
     };
   }, []);
 
-  /* ---------- faster geo, like PMJobDetails ---------- */
+  /* ---------- geo ---------- */
   useEffect(() => {
     if (!("geolocation" in navigator)) {
       setLocMsg("Location not supported by browser.");
@@ -309,7 +326,6 @@ export default function MyJobs({ navigate, user }) {
 
     let active = true;
 
-    // 1) immediate fetch
     navigator.geolocation.getCurrentPosition(
       (p) => {
         if (!active) return;
@@ -328,7 +344,6 @@ export default function MyJobs({ navigate, user }) {
       GEO_OPTS
     );
 
-    // 2) continuous watch
     const id = navigator.geolocation.watchPosition(
       (p) => {
         if (!active) return;
@@ -368,29 +383,23 @@ export default function MyJobs({ navigate, user }) {
             ...s,
             dist: s && loc ? haversineMeters(loc, { lat: s.lat, lng: s.lng }) : null,
           };
-        } catch {
-          /* ignore */
-        }
+        } catch {}
       }
-      if (Object.keys(map).length)
-        setScannerInfo((prev) => ({ ...prev, ...map }));
+      if (Object.keys(map).length) setScannerInfo((prev) => ({ ...prev, ...map }));
     };
     fetchAll();
     timer = setInterval(fetchAll, 15000);
     return () => clearInterval(timer);
   }, [jobs, loc]);
 
-  /* ---------- when user location changes, recompute distances ---------- */
+  /* ---------- recompute distances ---------- */
   useEffect(() => {
     if (!loc) return;
     setScannerInfo((prev) => {
       const next = {};
       for (const [jobId, info] of Object.entries(prev)) {
         if (info && info.lat != null && info.lng != null) {
-          next[jobId] = {
-            ...info,
-            dist: haversineMeters(loc, { lat: info.lat, lng: info.lng }),
-          };
+          next[jobId] = { ...info, dist: haversineMeters(loc, { lat: info.lat, lng: info.lng }) };
         } else {
           next[jobId] = info;
         }
@@ -413,7 +422,6 @@ export default function MyJobs({ navigate, user }) {
       return;
     }
 
-    // ensure location
     let here = loc;
     if (!here && "geolocation" in navigator) {
       try {
@@ -451,12 +459,8 @@ export default function MyJobs({ navigate, user }) {
       let msg = "Failed to generate QR.";
       try {
         const j = JSON.parse(String(e));
-        if (j.error === "not_approved")
-          msg = "You are not approved for this job yet. Please contact the PM.";
-        else if (j.error === "not_ongoing")
-          msg = "Scanning only opens when the job is ongoing.";
-        else if (j.error === "too_far")
-          msg = "You are too far from the event scanner location.";
+        if (j.error === "not_approved") msg = "You are not approved for this job yet. Please contact the PM.";
+        else if (j.error === "too_far") msg = "You are too far from the event scanner location.";
         else msg = j.error || msg;
       } catch {}
       setQrError(msg);
@@ -473,30 +477,16 @@ export default function MyJobs({ navigate, user }) {
 
   const qrImgSrc = useMemo(() => {
     if (!qrToken) return "";
-    return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(
-      qrToken
-    )}`;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(qrToken)}`;
   }, [qrToken]);
 
-  /* ---------- Parking receipt upload ---------- */
+  /* ---------- Parking receipt ---------- */
   async function onPickReceipt(jobId, file) {
     if (!file) return;
 
-    // allow browsers that give empty mime sometimes; still block non-image filenames
-    const mime = String(file.type || "");
-    const lowerName = String(file.name || "").toLowerCase();
-    const looksLikeImage =
-      mime.startsWith("image/") ||
-      lowerName.endsWith(".jpg") ||
-      lowerName.endsWith(".jpeg") ||
-      lowerName.endsWith(".png") ||
-      lowerName.endsWith(".webp") ||
-      lowerName.endsWith(".heic") ||
-      lowerName.endsWith(".heif");
-
-    if (!looksLikeImage) {
+    if (!isSupportedReceiptFile(file)) {
       setReceipt(jobId, {
-        error: "Please select an image file (jpg/png/webp/heic).",
+        error: "Please select a PNG/JPG/WEBP image (HEIC is not supported by the backend).",
         okMsg: null,
       });
       return;
@@ -513,6 +503,7 @@ export default function MyJobs({ navigate, user }) {
     try {
       setReceipt(jobId, { uploading: true, error: null, okMsg: null });
       const dataUrl = await fileToDataUrl(file);
+
       setReceipt(jobId, {
         uploading: false,
         fileName: file.name || "receipt.jpg",
@@ -529,6 +520,7 @@ export default function MyJobs({ navigate, user }) {
   async function uploadReceipt(job) {
     const jobId = job.id;
     const d = receiptDraft[jobId];
+
     if (!d?.dataUrl) {
       setReceipt(jobId, { error: "Please choose a receipt image first." });
       return;
@@ -537,45 +529,56 @@ export default function MyJobs({ navigate, user }) {
     try {
       setReceipt(jobId, { uploading: true, error: null, okMsg: null });
 
-      // POST /jobs/:id/parking-receipt
       const res = await apiPost(`/jobs/${jobId}/parking-receipt`, {
         imageDataUrl: d.dataUrl,
         fileName: d.fileName,
         mime: d.mime,
       });
 
-      const url =
-        res?.parkingReceiptUrl ||
-        res?.receiptUrl ||
-        res?.imageUrl ||
-        res?.url ||
-        null;
+      const receipt = res?.receipt || null;
+      const photoUrl = receipt?.photoUrl || res?.photoUrl || null;
+      if (!photoUrl) throw new Error("Upload succeeded but missing receipt URL.");
 
-      if (url) {
-        setJobs((old) =>
-          old.map((x) =>
-            x.id === jobId
-              ? { ...x, parkingReceiptUrl: url }
-              : x
-          )
-        );
-      }
+      // ✅ persist in UI list (so it "stays there")
+      setJobs((old) =>
+        old.map((x) =>
+          x.id === jobId
+            ? {
+                ...x,
+                myParkingReceipts: [receipt, ...(Array.isArray(x.myParkingReceipts) ? x.myParkingReceipts : [])],
+              }
+            : x
+        )
+      );
 
-      setReceipt(jobId, { uploading: false, error: null, okMsg: "Uploaded ✅" });
-
-      // optional: clear local draft after upload (recommended)
-      clearReceipt(jobId);
+      // ✅ IMPORTANT: do NOT clear draft automatically (so your selected file “stays”)
+      setReceipt(jobId, { uploading: false, error: null, okMsg: "Uploaded ✅ (You can upload more or clear)" });
+      // If you WANT to auto-clear after upload, uncomment:
+      // clearReceipt(jobId);
     } catch (e) {
       setReceipt(jobId, { uploading: false, error: toNiceErr(e), okMsg: null });
+    }
+  }
+
+  async function deleteUploadedReceipt(jobId, receiptId) {
+    try {
+      await apiPost(`/jobs/${jobId}/parking-receipt/${receiptId}/delete`, {});
+      setJobs((old) =>
+        old.map((x) =>
+          x.id === jobId
+            ? { ...x, myParkingReceipts: (x.myParkingReceipts || []).filter((r) => r?.id !== receiptId) }
+            : x
+        )
+      );
+    } catch (e) {
+      setReceipt(jobId, { error: toNiceErr(e) });
     }
   }
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
       <div className="card">
-        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>
-          My Jobs
-        </div>
+        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>My Jobs</div>
 
         {jobs.length === 0 ? (
           <div style={{ color: "#6b7280" }}>No approved jobs yet.</div>
@@ -586,9 +589,9 @@ export default function MyJobs({ navigate, user }) {
             const { isVirtual, label } = deriveKind(j);
 
             const yourLocLine = loc
-              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${
-                  loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""
-                } · ${dayjs(loc.ts).format("HH:mm:ss")}`
+              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""} · ${dayjs(
+                  loc.ts
+                ).format("HH:mm:ss")}`
               : locMsg || "Getting your location…";
 
             const pa = parkingRM(j);
@@ -596,47 +599,31 @@ export default function MyJobs({ navigate, user }) {
             const ec = j.earlyCall || {};
             const payForViewer = buildPayForViewer(j, user);
 
-            const receiptUrl = getParkingReceiptUrl(j);
+            const myReceipts = Array.isArray(j.myParkingReceipts) ? j.myParkingReceipts : [];
             const draft = receiptDraft[j.id] || {};
-            const canShowReceiptUI =
-              !!j?.transportOptions?.own || pa != null; // show if own transport / allowance exists
+
+            const canShowReceiptUI = !!j?.transportOptions?.own || pa != null;
 
             return (
               <div key={j.id} className="card" style={{ marginBottom: 10 }}>
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 8,
-                  }}
-                >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>
-                      {j.title}
-                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>{j.title}</div>
                     <div className="status" style={{ marginTop: 6 }}>
                       {j.myStatus} · {j.status}
                     </div>
-                    <div style={{ color: "#374151", marginTop: 4 }}>
-                      {fmtRange(j.startTime, j.endTime)}
-                    </div>
+                    <div style={{ color: "#374151", marginTop: 4 }}>{fmtRange(j.startTime, j.endTime)}</div>
 
                     <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
                       <div>
-                        <strong>Session</strong>{" "}
-                        <span style={{ marginLeft: 8 }}>{label}</span>
+                        <strong>Session</strong> <span style={{ marginLeft: 8 }}>{label}</span>
                       </div>
                       <div>
-                        <strong>Venue</strong>{" "}
-                        <span style={{ marginLeft: 8 }}>
-                          {j.venue || "-"}
-                        </span>
+                        <strong>Venue</strong> <span style={{ marginLeft: 8 }}>{j.venue || "-"}</span>
                       </div>
                       <div>
                         <strong>Description</strong>
-                        <div style={{ marginTop: 4, color: "#374151" }}>
-                          {j.description || "-"}
-                        </div>
+                        <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
                       </div>
 
                       <div>
@@ -651,30 +638,22 @@ export default function MyJobs({ navigate, user }) {
                         )}
                       </div>
 
-                      {/* Allowances */}
                       <div style={{ display: "grid", gap: 4 }}>
                         <div>
                           <strong>Allowances</strong>
                         </div>
                         <div style={{ fontSize: 14, color: "#374151" }}>
                           Early Call:{" "}
-                          {ec?.enabled
-                            ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(
-                                ec.thresholdHours || 0
-                              )}h)`
-                            : "No"}
+                          {ec?.enabled ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
                         </div>
                         <div style={{ fontSize: 14, color: "#374151" }}>
                           Loading & Unloading:{" "}
                           {lu?.enabled
-                            ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(
-                                lu.quota || 0
-                              )})`
+                            ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})`
                             : "No"}
                         </div>
                       </div>
 
-                      {/* Pay — viewer specific */}
                       <div>
                         <strong>Pay</strong>
                         <div
@@ -690,54 +669,79 @@ export default function MyJobs({ navigate, user }) {
                         </div>
                       </div>
 
-                      {/* ✅ Parking receipt upload */}
+                      {/* ✅ Parking receipt upload + list */}
                       {canShowReceiptUI && (
                         <div style={{ marginTop: 4 }}>
                           <strong>Parking Receipt</strong>
 
-                          <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
-                            {/* existing uploaded */}
-                            {receiptUrl && (
-                              <div
-                                style={{
-                                  display: "flex",
-                                  gap: 10,
-                                  alignItems: "center",
-                                  flexWrap: "wrap",
-                                }}
-                              >
-                                <span
-                                  className="status"
-                                  style={{
-                                    background: "#ecfdf5",
-                                    color: "#065f46",
-                                    border: "1px solid #6ee7b7",
-                                  }}
-                                >
-                                  Uploaded ✅
-                                </span>
-                                <button className="btn" onClick={() => setImgOpen(receiptUrl)}>
-                                  View uploaded
+                          <div style={{ marginTop: 8, display: "grid", gap: 10 }}>
+                            {/* uploaded list (persists after upload) */}
+                            <div style={{ display: "grid", gap: 8 }}>
+                              {myReceipts.length === 0 ? (
+                                <div style={{ fontSize: 13, color: "#6b7280" }}>No receipt uploaded yet.</div>
+                              ) : (
+                                myReceipts.map((r) => (
+                                  <div
+                                    key={r.id}
+                                    style={{
+                                      display: "flex",
+                                      gap: 10,
+                                      alignItems: "center",
+                                      flexWrap: "wrap",
+                                      border: "1px solid #eee",
+                                      borderRadius: 10,
+                                      padding: 10,
+                                    }}
+                                  >
+                                    <span
+                                      className="status"
+                                      style={{
+                                        background: "#ecfdf5",
+                                        color: "#065f46",
+                                        border: "1px solid #6ee7b7",
+                                      }}
+                                    >
+                                      Uploaded ✅
+                                    </span>
+                                    <span style={{ fontSize: 13, color: "#374151" }}>
+                                      {dayjs(r.createdAt).format("DD MMM HH:mm")}
+                                    </span>
+
+                                    <button className="btn" onClick={() => setImgOpen(r.photoUrl)}>
+                                      View
+                                    </button>
+
+                                    <button className="btn" onClick={() => deleteUploadedReceipt(j.id, r.id)}>
+                                      Remove
+                                    </button>
+                                  </div>
+                                ))
+                              )}
+
+                              {/* optional refresh */}
+                              <div>
+                                <button className="btn" onClick={() => refreshMyReceipts(j.id)}>
+                                  Refresh receipts
                                 </button>
                               </div>
-                            )}
+                            </div>
 
-                            {/* pick + preview */}
-                            <div
-                              style={{
-                                display: "flex",
-                                gap: 10,
-                                alignItems: "center",
-                                flexWrap: "wrap",
-                              }}
-                            >
+                            {/* chooser + preview + upload */}
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                               <input
-                                key={`${j.id}-${receiptInputKey[j.id] || 0}`}  // ✅ remount on clear
+                                key={`${j.id}-${receiptInputKey[j.id] || 0}`}
                                 type="file"
-                                accept="image/*"
+                                accept="image/png,image/jpeg,image/webp"
                                 capture="environment"
                                 onChange={(e) => onPickReceipt(j.id, e.target.files?.[0])}
                               />
+
+                              {/* show chosen filename even if browser shows "No file chosen" */}
+                              {draft?.fileName && (
+                                <span style={{ fontSize: 13, color: "#374151" }}>
+                                  Selected: <strong>{draft.fileName}</strong>
+                                </span>
+                              )}
 
                               {draft?.dataUrl && (
                                 <>
@@ -763,16 +767,8 @@ export default function MyJobs({ navigate, user }) {
                               Tip: snap a clear photo of the receipt. Max {(MAX_RECEIPT_BYTES / 1024 / 1024).toFixed(0)}MB.
                             </div>
 
-                            {draft?.error && (
-                              <div style={{ color: "crimson", fontSize: 13 }}>
-                                {draft.error}
-                              </div>
-                            )}
-                            {draft?.okMsg && (
-                              <div style={{ color: "#065f46", fontSize: 13, fontWeight: 700 }}>
-                                {draft.okMsg}
-                              </div>
-                            )}
+                            {draft?.error && <div style={{ color: "crimson", fontSize: 13 }}>{draft.error}</div>}
+                            {draft?.okMsg && <div style={{ color: "#065f46", fontSize: 13, fontWeight: 700 }}>{draft.okMsg}</div>}
                           </div>
                         </div>
                       )}
@@ -780,9 +776,7 @@ export default function MyJobs({ navigate, user }) {
 
                     <div style={{ marginTop: 10, fontSize: 14 }}>
                       <strong>Your location:</strong>{" "}
-                      <span style={{ color: loc ? "#374151" : "#b91c1c" }}>
-                        {yourLocLine}
-                      </span>
+                      <span style={{ color: loc ? "#374151" : "#b91c1c" }}>{yourLocLine}</span>
                     </div>
 
                     <div
@@ -798,23 +792,13 @@ export default function MyJobs({ navigate, user }) {
                       {j.status === "ongoing" && !isVirtual && (
                         <span
                           className="status"
-                          title={
-                            s?.updatedAt
-                              ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}`
-                              : ""
-                          }
+                          title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}
                         >
                           Scanner distance: {dist == null ? "—" : `${dist} m`}
                         </span>
                       )}
                       {isVirtual && (
-                        <span
-                          className="status"
-                          style={{
-                            background: "#eef2ff",
-                            color: "#3730a3",
-                          }}
-                        >
+                        <span className="status" style={{ background: "#eef2ff", color: "#3730a3" }}>
                           Virtual · PM will mark
                         </span>
                       )}
@@ -893,14 +877,7 @@ export default function MyJobs({ navigate, user }) {
             </div>
 
             {qrError ? (
-              <div
-                style={{
-                  padding: 10,
-                  border: "1px solid var(--red)",
-                  borderRadius: 8,
-                  color: "var(--red)",
-                }}
-              >
+              <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
                 {qrError}
               </div>
             ) : (
@@ -910,12 +887,7 @@ export default function MyJobs({ navigate, user }) {
                     <img
                       src={qrImgSrc}
                       alt="QR code"
-                      style={{
-                        width: 260,
-                        height: 260,
-                        borderRadius: 8,
-                        border: "1px solid var(--border)",
-                      }}
+                      style={{ width: 260, height: 260, borderRadius: 8, border: "1px solid var(--border)" }}
                     />
                   ) : (
                     <div style={{ color: "#6b7280" }}>Generating QR…</div>
@@ -945,7 +917,7 @@ export default function MyJobs({ navigate, user }) {
         </div>
       )}
 
-      {/* ---------- Image preview MODAL (receipt) ---------- */}
+      {/* ---------- Image preview MODAL ---------- */}
       {imgOpen && (
         <div
           onClick={() => setImgOpen(null)}
@@ -960,14 +932,7 @@ export default function MyJobs({ navigate, user }) {
             padding: 16,
           }}
         >
-          <div
-            className="card"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(860px, 96vw)",
-              padding: 12,
-            }}
-          >
+          <div className="card" onClick={(e) => e.stopPropagation()} style={{ width: "min(860px, 96vw)", padding: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
               <div style={{ fontWeight: 800 }}>Image Preview</div>
               <button className="btn" onClick={() => setImgOpen(null)}>
