@@ -1,7 +1,8 @@
+// web/src/pages/Register.jsx
 import React, { useState } from "react";
 import { registerUser } from "../auth";
 
-export default function Register({ navigate }) {
+export default function Register({ navigate, setUser }) {
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [name, setName] = useState("");
@@ -10,20 +11,23 @@ export default function Register({ navigate }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
 
+  // ✅ NEW: verification photo (WhatsApp)
   const [verificationDataUrl, setVerificationDataUrl] = useState("");
+
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
 
-  function onPickFile(e) {
+  function onPickVerificationPhoto(e) {
     setError(null);
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      setError("Please upload an image file.");
+    const okTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+    if (!okTypes.includes(file.type)) {
+      setError("Only PNG/JPG/WEBP images are allowed.");
       return;
     }
+
     const MAX = 2 * 1024 * 1024; // 2MB
     if (file.size > MAX) {
       setError("Image too large (max 2MB).");
@@ -39,12 +43,9 @@ export default function Register({ navigate }) {
     e.preventDefault();
     setError(null);
 
+    // basic validations
     if (!email || !username || !name || !discord || !phone || !password || !confirm) {
       setError("All fields are required.");
-      return;
-    }
-    if (!verificationDataUrl) {
-      setError("Verification photo is required.");
       return;
     }
     if (password !== confirm) {
@@ -56,23 +57,31 @@ export default function Register({ navigate }) {
       return;
     }
 
+    // ✅ NEW: require verification photo
+    if (!verificationDataUrl) {
+      setError("Verification photo (from WhatsApp) is required.");
+      return;
+    }
+
     setBusy(true);
     try {
-      await registerUser({
+      // No role sent — backend should default to "junior".
+      const u = await registerUser({
         email,
         username,
         name,
         discord,
         phone,
         password,
-        verificationDataUrl,
+        verificationDataUrl, // ✅ NEW: send to backend
       });
 
-      setDone(true);
-      // go login page (show pending msg)
-      navigate("#/login?pending=1");
+      // If backend returns user, keep your old behavior:
+      if (setUser) setUser(u);
+      navigate("#/"); // landing route
     } catch (e) {
-      setError(e?.message || "Registration failed.");
+      const msg = e?.message || String(e) || "Registration failed.";
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -85,40 +94,124 @@ export default function Register({ navigate }) {
           Create account
         </div>
 
-        {/* ... your existing fields ... */}
+        <div>Email</div>
+        <input
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.com"
+          style={{ width: "100%", marginTop: 6 }}
+          type="email"
+          required
+        />
 
+        <div style={{ marginTop: 10 }}>Username</div>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="your handle"
+          style={{ width: "100%", marginTop: 6 }}
+          required
+        />
+
+        <div style={{ marginTop: 10 }}>Full Name</div>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Your name"
+          style={{ width: "100%", marginTop: 6 }}
+          required
+        />
+
+        <div style={{ marginTop: 10 }}>Discord</div>
+        <input
+          value={discord}
+          onChange={(e) => setDiscord(e.target.value)}
+          placeholder="e.g. yourhandle"
+          style={{ width: "100%", marginTop: 6 }}
+          required
+        />
+
+        <div style={{ marginTop: 10 }}>Phone number</div>
+        <input
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="e.g. +60 12-345 6789"
+          style={{ width: "100%", marginTop: 6 }}
+          inputMode="tel"
+          required
+        />
+
+        <div style={{ marginTop: 10 }}>Password</div>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="••••••••"
+          style={{ width: "100%", marginTop: 6 }}
+          required
+        />
+
+        <div style={{ marginTop: 10 }}>Confirm Password</div>
+        <input
+          type="password"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          placeholder="••••••••"
+          style={{ width: "100%", marginTop: 6 }}
+          required
+        />
+
+        {/* ✅ NEW: Upload verification photo */}
         <div style={{ marginTop: 10 }}>Verification Photo (from WhatsApp)</div>
         <input
           type="file"
-          accept="image/*"
-          onChange={onPickFile}
-          required
+          accept="image/png,image/jpeg,image/jpg,image/webp,image/*"
+          onChange={onPickVerificationPhoto}
           style={{ width: "100%", marginTop: 6 }}
+          required
         />
 
         {verificationDataUrl && (
-          <img
-            alt="verification preview"
-            src={verificationDataUrl}
-            style={{ marginTop: 8, width: 160, borderRadius: 8, border: "1px solid #eee" }}
-          />
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+              Preview
+            </div>
+            <img
+              src={verificationDataUrl}
+              alt="verification preview"
+              style={{
+                width: 180,
+                maxWidth: "100%",
+                borderRadius: 10,
+                border: "1px solid #eee",
+              }}
+            />
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setVerificationDataUrl("")}
+              >
+                Remove photo
+              </button>
+            </div>
+          </div>
         )}
 
-        {error && <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>}
+        {error && (
+          <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>
+        )}
 
         <div style={{ marginTop: 12 }}>
           <button className="btn primary" type="submit" disabled={busy}>
-            {busy ? "Submitting..." : "Submit for verification"}
+            {busy ? "Creating..." : "Create account"}
           </button>
         </div>
 
-        {done && (
-          <div style={{ marginTop: 10, color: "#1a7f37" }}>
-            Submitted! Pending admin verification.
-          </div>
-        )}
+        <div style={{ marginTop: 10, fontSize: 12 }}>
+          Already have an account? <a href="#/login">Log in</a>
+        </div>
       </form>
     </div>
   );
 }
-    
