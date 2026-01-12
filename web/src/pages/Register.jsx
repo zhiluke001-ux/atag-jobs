@@ -11,7 +11,7 @@ export default function Register({ navigate, setUser }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
 
-  // ✅ NEW: verification photo (WhatsApp)
+  // ✅ NEW: verification photo
   const [verificationDataUrl, setVerificationDataUrl] = useState("");
 
   const [error, setError] = useState(null);
@@ -59,7 +59,7 @@ export default function Register({ navigate, setUser }) {
 
     // ✅ NEW: require verification photo
     if (!verificationDataUrl) {
-      setError("Verification photo (from WhatsApp) is required.");
+      setError("Verification photo is required.");
       return;
     }
 
@@ -162,7 +162,7 @@ export default function Register({ navigate, setUser }) {
         />
 
         {/* ✅ NEW: Upload verification photo */}
-        <div style={{ marginTop: 10 }}>Verification Photo (from WhatsApp)</div>
+        <div style={{ marginTop: 10 }}>Verification Photo </div>
         <input
           type="file"
           accept="image/png,image/jpeg,image/jpg,image/webp,image/*"
