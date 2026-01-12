@@ -27,9 +27,12 @@ app.use(morgan("dev"));
 const uploadsRoot = path.join(__dirname, "data", "uploads");
 const avatarsDir = path.join(uploadsRoot, "avatars");
 const verificationsDir = path.join(uploadsRoot, "verifications");
+// ✅ NEW: parking receipts
+const parkingReceiptsDir = path.join(uploadsRoot, "parking-receipts");
 
 fs.ensureDirSync(avatarsDir);
 fs.ensureDirSync(verificationsDir);
+fs.ensureDirSync(parkingReceiptsDir);
 
 app.use("/uploads", express.static(uploadsRoot));
 
@@ -585,6 +588,12 @@ for (const j of db.jobs) {
     j.fullTimers = [];
     bootMutated = true;
   }
+
+  // ✅ NEW: ensure parkingReceipts container exists (optional)
+  if (j.parkingReceipts && !Array.isArray(j.parkingReceipts)) {
+    j.parkingReceipts = [];
+    bootMutated = true;
+  }
 }
 if (bootMutated) await saveDB(db);
 
@@ -716,7 +725,11 @@ async function sendResetEmail(to, link) {
   console.log("[sendResetEmail] no email provider configured, link:", link);
 }
 
-function saveDataUrlImage(dataUrl, absDir, fileBaseNoExt) {
+/**
+ * ✅ Generic image saver for DataURL -> file in absDir -> returns public url.
+ * - publicPrefix example: "/uploads/verifications" or "/uploads/parking-receipts"
+ */
+function saveDataUrlImage(dataUrl, absDir, publicPrefix, fileBaseNoExt) {
   const s = String(dataUrl || "");
   const m = s.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
   if (!m) throw new Error("invalid_image_data");
@@ -735,7 +748,8 @@ function saveDataUrlImage(dataUrl, absDir, fileBaseNoExt) {
   const abs = path.join(absDir, filename);
   fs.writeFileSync(abs, buf);
 
-  return `/uploads/verifications/${filename}?v=${Date.now()}`;
+  const pfx = String(publicPrefix || "").replace(/\/$/, "");
+  return `${pfx}/${filename}?v=${Date.now()}`;
 }
 
 /* -------------- auth --------------- */
@@ -808,7 +822,12 @@ app.post("/register", async (req, res) => {
 
   let verificationPhotoUrl = "";
   try {
-    verificationPhotoUrl = saveDataUrlImage(verificationDataUrl, verificationsDir, `${id}-${Date.now()}`);
+    verificationPhotoUrl = saveDataUrlImage(
+      verificationDataUrl,
+      verificationsDir,
+      "/uploads/verifications",
+      `${id}-${Date.now()}`
+    );
   } catch (e) {
     return res.status(400).json({ error: e?.message || "invalid_verification_photo" });
   }
@@ -1158,6 +1177,11 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
     if (Array.isArray(j.fullTimers)) {
       j.fullTimers = j.fullTimers.filter((ft) => ft && ft.userId !== uid);
     }
+
+    // ✅ remove any parking receipts by this user
+    if (Array.isArray(j.parkingReceipts)) {
+      j.parkingReceipts = j.parkingReceipts.filter((r) => r?.userId !== uid);
+    }
   }
 
   delete db.notifications?.[uid];
@@ -1283,6 +1307,8 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     events: { startedAt: null, endedAt: null, scanner: null },
     adjustments: {},
     fullTimers: [],
+    // ✅ NEW: parking receipts container
+    parkingReceipts: [],
   };
 
   ensureLoadingUnload(job);
@@ -1611,6 +1637,112 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
   res.json({ ok: true });
 });
 
+/* ✅✅✅ NEW: Parking receipt upload (fixes your 404) ✅✅✅
+   POST /jobs/:id/parking-receipt
+   Body: { dataUrl, amount?, note? }
+*/
+app.post(
+  "/jobs/:id/parking-receipt",
+  authMiddleware,
+  requireRole("part-timer", "pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+
+    // default: only allow approved users to submit (avoid random uploads)
+    const uid = req.user.id;
+    const isApproved = Array.isArray(job.approved) && job.approved.includes(uid);
+    const isPMorAdmin = req.user.role === "pm" || req.user.role === "admin";
+    if (!isPMorAdmin && !isApproved) {
+      return res.status(403).json({ error: "not_approved" });
+    }
+
+    const dataUrl =
+      req.body?.dataUrl ||
+      req.body?.receiptDataUrl ||
+      req.body?.imageDataUrl ||
+      req.body?.parkingReceiptDataUrl;
+
+    if (!dataUrl || typeof dataUrl !== "string") {
+      return res.status(400).json({ error: "dataUrl_required" });
+    }
+
+    const amount = req.body?.amount;
+    const note = req.body?.note ?? req.body?.remark ?? "";
+
+    let photoUrl = "";
+    try {
+      photoUrl = saveDataUrlImage(
+        dataUrl,
+        parkingReceiptsDir,
+        "/uploads/parking-receipts",
+        `${job.id}-${uid}-${Date.now()}`
+      );
+    } catch (e) {
+      return res.status(400).json({ error: e?.message || "invalid_receipt_image" });
+    }
+
+    job.parkingReceipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
+
+    const receipt = {
+      id: "pr" + Math.random().toString(36).slice(2, 10),
+      jobId: job.id,
+      userId: uid,
+      email: req.user.email,
+      amount: amount == null || amount === "" ? null : Number(amount),
+      note: String(note || ""),
+      photoUrl,
+      createdAt: dayjs().toISOString(),
+      status: "SUBMITTED",
+    };
+
+    job.parkingReceipts.unshift(receipt);
+    await saveDB(db);
+
+    addAudit("parking_receipt_submit", { jobId: job.id, userId: uid, receiptId: receipt.id }, req);
+
+    return res.json({ ok: true, receipt });
+  }
+);
+
+// (Optional) PM/Admin list receipts for a job
+app.get(
+  "/jobs/:id/parking-receipts",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+
+    const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
+    const enriched = receipts.map((r) => {
+      const u = (db.users || []).find((x) => x.id === r.userId);
+      return {
+        ...r,
+        name: u?.name || "",
+        phone: u?.phone || "",
+        discord: u?.discord || "",
+      };
+    });
+    res.json({ ok: true, receipts: enriched });
+  }
+);
+
+// (Optional) user fetch own receipts for a job
+app.get(
+  "/jobs/:id/parking-receipt/me",
+  authMiddleware,
+  requireRole("part-timer", "pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+
+    const uid = req.user.id;
+    const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
+    res.json({ ok: true, receipts: receipts.filter((r) => r.userId === uid) });
+  }
+);
+
 /* ---- part-timer "my jobs" ---- */
 app.get("/me/jobs", authMiddleware, requireRole("part-timer"), (req, res) => {
   const result = [];
@@ -1759,6 +1891,8 @@ function ensureEarlyCall(job) {
 
   return job.earlyCall;
 }
+
+
 
 app.get("/jobs/:id/earlycall", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const job = db.jobs.find((j) => j.id === req.params.id);
@@ -2221,7 +2355,7 @@ app.get("/jobs/:id/scanner", authMiddleware, (req, res) => {
   res.json({ lat: s.lat, lng: s.lng, updatedAt: s.updatedAt });
 });
 
-/* ---- routes listing ---- */
+
 function listRoutes(appInstance) {
   const out = [];
   appInstance._router?.stack?.forEach((m) => {
