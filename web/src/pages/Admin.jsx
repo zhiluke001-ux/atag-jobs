@@ -706,7 +706,12 @@ export default function Admin({ navigate, user }) {
     };
 
     const pushRowForPerson = (uid, appRec) => {
-      const rec = attendance[uid] || {};
+      // ✅ attendance might be keyed by userId OR email (safe across backend versions)
+      const rec =
+        attendance?.[uid] ||
+        (appRec?.email ? attendance?.[appRec.email] : null) ||
+        {};
+
       const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
 
@@ -752,37 +757,36 @@ export default function Admin({ navigate, user }) {
       const transport = byUserTransport.get(uid) || "Own Transport";
       if (transport === "ATAG Transport" || transport === "ATAG Bus") allowances += N(parkingAmt, 0);
 
-// Early Call: ONLY add when PM checked for this person (no auto "arrived early" rule)
-const ecAmt = N(ec.amount, 0);
+      // Early Call: ONLY add when PM checked for this person (no auto "arrived early" rule)
+      const ecAmt = N(ec.amount, 0);
 
-// try to detect "confirmed" from multiple possible places (safe across backend versions)
-const earlyFromJob =
-  (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
-const earlyListRaw =
-  (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
+      const earlyFromJob =
+        (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
+      const earlyListRaw =
+        (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
 
-const earlyLists = []
-  .concat(Array.isArray(earlyFromJob) ? earlyFromJob : [earlyFromJob])
-  .concat(Array.isArray(earlyListRaw) ? earlyListRaw : [earlyListRaw]);
+      const earlyLists = []
+        .concat(Array.isArray(earlyFromJob) ? earlyFromJob : [earlyFromJob])
+        .concat(Array.isArray(earlyListRaw) ? earlyListRaw : [earlyListRaw]);
 
-const earlyCheckedByList = earlyLists.some((p) => {
-  const key =
-    typeof p === "string" || typeof p === "number"
-      ? String(p)
-      : p?.userId || p?.id || p?.email || null;
-  if (!key) return false;
-  return key === uid || (appRec?.email && key === appRec.email);
-});
+      const earlyCheckedByList = earlyLists.some((p) => {
+        const key =
+          typeof p === "string" || typeof p === "number"
+            ? String(p)
+            : p?.userId || p?.id || p?.email || null;
+        if (!key) return false;
+        return key === uid || (appRec?.email && key === appRec.email);
+      });
 
-const earlyChecked =
-  !!rec?.earlyCall ||
-  !!appRec?.earlyCallConfirmed ||
-  !!appRec?.addOns?.earlyCall ||
-  earlyCheckedByList;
+      const earlyChecked =
+        !!rec?.earlyCall ||
+        !!appRec?.earlyCallConfirmed ||
+        !!appRec?.addOns?.earlyCall ||
+        earlyCheckedByList;
 
-if (ec.enabled && ecAmt > 0 && earlyChecked) {
-  allowances += ecAmt;
-}
+      if (ec.enabled && ecAmt > 0 && earlyChecked) {
+        allowances += ecAmt;
+      }
 
       if (lduOn && lduHelpers.has(uid)) allowances += lduPriceNum;
 
@@ -799,10 +803,31 @@ if (ec.enabled && ecAmt > 0 && earlyChecked) {
           : "";
 
       const name =
-        pick(coreUser.name, coreUser.fullName, coreUser.displayName, appUser.name, appUser.fullName, appUser.displayName, appRec?.name, appRec?.fullName, appRec?.displayName, combinedAppName) ||
-        uid;
+        pick(
+          coreUser.name,
+          coreUser.fullName,
+          coreUser.displayName,
+          appUser.name,
+          appUser.fullName,
+          appUser.displayName,
+          appRec?.name,
+          appRec?.fullName,
+          appRec?.displayName,
+          combinedAppName
+        ) || uid;
 
-      const phone = pick(coreUser.phone, coreUser.phoneNumber, appUser.phone, appUser.phoneNumber, appUser.contact, appRec?.phone, appRec?.phoneNumber, appRec?.contact) || "-";
+      const phone =
+        pick(
+          coreUser.phone,
+          coreUser.phoneNumber,
+          appUser.phone,
+          appUser.phoneNumber,
+          appUser.contact,
+          appRec?.phone,
+          appRec?.phoneNumber,
+          appRec?.contact
+        ) || "-";
+
       const email = pick(coreUser.email, appUser.email, appRec?.email, uid) || uid;
 
       outRows.push({
@@ -823,24 +848,22 @@ if (ec.enabled && ecAmt > 0 && earlyChecked) {
       });
     };
 
-// ✅ PART-TIMERS only: show ONLY approved users who have attendance (scan IN/OUT or virtual marked)
-( job.approved || [] ).forEach((uid) => {
-  if (!approved.has(uid)) return;
+    // ✅ PART-TIMERS only: show ONLY approved users who have attendance (scan IN/OUT or virtual marked)
+    (job.approved || []).forEach((uid) => {
+      if (!approved.has(uid)) return;
 
-  const appRec = apps.find((a) => a.userId === uid) || {};
+      const appRec = apps.find((a) => a.userId === uid) || {};
 
-  // attendance might be keyed by userId OR email (depending on backend version)
-  const rec =
-    attendance?.[uid] ||
-    (appRec?.email ? attendance?.[appRec.email] : null) ||
-    {};
+      const rec =
+        attendance?.[uid] ||
+        (appRec?.email ? attendance?.[appRec.email] : null) ||
+        {};
 
-  // ✅ only include if there is at least an IN or OUT record
-  if (!rec?.in && !rec?.out) return;
+      // ✅ include ONLY if there is an IN or OUT record
+      if (!rec?.in && !rec?.out) return;
 
-  pushRowForPerson(uid, appRec);
-});
-
+      pushRowForPerson(uid, appRec);
+    });
 
     const filtered = outRows
       .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
@@ -872,10 +895,11 @@ if (ec.enabled && ecAmt > 0 && earlyChecked) {
       alert("No rows to export.");
       return;
     }
-    const headers = ["Name", "Email", "Phone", "Job", "Hours", "Transport", "Gross", "Deduction", "Net"];
+    const headers = ["No", "Name", "Email", "Phone", "Job", "Hours", "Transport", "Gross", "Deduction", "Net"];
     const lines = [headers.join(",")];
-    rows.forEach((r) => {
+    rows.forEach((r, idx) => {
       const line = [
+        idx + 1,
         `"${String(r.name || "").replace(/"/g, '""')}"`,
         `"${String(r.email || "").replace(/"/g, '""')}"`,
         `"${String(r.phone || "").replace(/"/g, '""')}"`,
@@ -1364,6 +1388,7 @@ if (ec.enabled && ecAmt > 0 && earlyChecked) {
             <table width="100%" cellPadding="10" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
               <thead>
                 <tr style={{ background: "#f9fafb" }}>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb", width: 40 }}>#</th>
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Name</th>
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Email</th>
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Phone</th>
@@ -1379,8 +1404,9 @@ if (ec.enabled && ecAmt > 0 && earlyChecked) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {rows.map((r, idx) => (
                   <tr key={r.userId} style={{ borderTop: "1px solid #eef2f7" }}>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{idx + 1}.</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.name}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.email}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.phone}</td>
@@ -1406,13 +1432,13 @@ if (ec.enabled && ecAmt > 0 && earlyChecked) {
                 ))}
                 {!job ? (
                   <tr>
-                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={13} style={{ padding: 14, color: "#6b7280" }}>
                       Select a job to view payroll.
                     </td>
                   </tr>
                 ) : !rows.length ? (
                   <tr>
-                    <td colSpan={12} style={{ padding: 14, color: "#6b7280" }}>
+                    <td colSpan={13} style={{ padding: 14, color: "#6b7280" }}>
                       No approved part-timers found (or filtered out by search).
                     </td>
                   </tr>
