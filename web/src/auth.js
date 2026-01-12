@@ -4,12 +4,10 @@ const API_BASE =
   import.meta.env.VITE_SERVER_URL ||
   "https://atag-jobs.onrender.com"; // change if needed
 
-// ✅ EXPORT so Login.jsx can import it
 export function getToken() {
   return localStorage.getItem("token") || "";
 }
 
-// optional export (useful elsewhere)
 export function setToken(t) {
   if (!t) localStorage.removeItem("token");
   else localStorage.setItem("token", t);
@@ -28,7 +26,6 @@ async function apiFetch(path, { method = "GET", body, auth = true } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  // try parse json safely
   let data = null;
   const text = await resp.text();
   try {
@@ -41,10 +38,7 @@ async function apiFetch(path, { method = "GET", body, auth = true } = {}) {
     const msg = data?.error || data?.message || `Request failed (${resp.status})`;
     const err = new Error(msg);
     err.status = resp.status;
-
-    // ✅ Use err.data so UI can read it
-    err.data = data;
-
+    err.data = data; // ✅ keep consistent for UI
     throw err;
   }
 
@@ -61,7 +55,6 @@ export async function login(identifier, password) {
   });
 
   if (res?.token) setToken(res.token);
-
   return res?.user || null;
 }
 
@@ -72,6 +65,11 @@ export async function register(payload) {
     auth: false,
   });
   return res;
+}
+
+// ✅ ADD THIS: Register.jsx expects registerUser()
+export async function registerUser(payload) {
+  return register(payload);
 }
 
 export function logout() {
