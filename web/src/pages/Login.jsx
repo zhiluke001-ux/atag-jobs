@@ -3,14 +3,17 @@ import React, { useState, useEffect } from "react";
 import { login, getToken, fetchCurrentUser, logout } from "../auth";
 
 function parseLoginError(e) {
-  const code = e?.payload?.code || e?.code || null;
-  const err = e?.payload?.error || "";
+  // ✅ your auth.js throws Error with e.data
+  const data = e?.data || {};
+  const code = data?.code || e?.code || null;
+  const err = data?.error || data?.message || "";
   const msg = e?.message || "";
 
   const isPending =
     code === "PENDING_VERIFICATION" ||
     String(err).toLowerCase() === "pending_verification" ||
-    String(msg).toLowerCase().includes("pending_verification");
+    String(msg).toLowerCase().includes("pending_verification") ||
+    String(err).toLowerCase().includes("pending");
 
   if (isPending) {
     return {
@@ -24,9 +27,9 @@ function parseLoginError(e) {
     };
   }
 
-  // fallback message (use server payload if available)
   const fallback =
-    e?.payload?.error ||
+    data?.error ||
+    data?.message ||
     e?.message ||
     "Login failed. Check your email/username and password.";
 
@@ -55,7 +58,6 @@ export default function Login({ navigate, setUser }) {
         return;
       }
 
-      // try to verify token with backend
       const me = await fetchCurrentUser();
       if (cancelled) return;
 
@@ -92,7 +94,6 @@ export default function Login({ navigate, setUser }) {
     }
   }
 
-  // while we're checking the old token, don't flash the form
   if (checkingToken) {
     return (
       <div className="container">
@@ -103,16 +104,8 @@ export default function Login({ navigate, setUser }) {
 
   const noticeStyle =
     notice?.type === "pending"
-      ? {
-          background: "#fff7ed",
-          border: "1px solid #fdba74",
-          color: "#9a3412",
-        }
-      : {
-          background: "#fef2f2",
-          border: "1px solid #fecaca",
-          color: "#991b1b",
-        };
+      ? { background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412" }
+      : { background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b" };
 
   return (
     <div className="container">
