@@ -2072,6 +2072,28 @@ app.post(
   }
 );
 
+// ✅ aliases to match frontend calls: /early-call
+app.get(
+  "/jobs/:id/early-call",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    req.url = `/jobs/${req.params.id}/earlycall`;
+    app._router.handle(req, res);
+  }
+);
+
+app.post(
+  "/jobs/:id/early-call/mark",
+  authMiddleware,
+  requireRole("pm", "admin"),
+  async (req, res) => {
+    req.url = `/jobs/${req.params.id}/earlycall/mark`;
+    app._router.handle(req, res);
+  }
+);
+
+
 /* ---- Loading & Unloading (per-person toggles) ---- */
 
 app.get(
@@ -2108,6 +2130,7 @@ app.get(
     });
   }
 );
+
 app.post(
   "/jobs/:id/loading/mark",
   authMiddleware,
@@ -2115,9 +2138,12 @@ app.post(
   async (req, res) => {
     const job = db.jobs.find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
+
     const { userId, present } = req.body || {};
-    if (!userId || typeof present !== "boolean")
+    if (!userId || typeof present !== "boolean") {
       return res.status(400).json({ error: "bad_request" });
+    }
+
     job.loadingUnload = job.loadingUnload || {
       enabled: false,
       quota: 0,
@@ -2126,38 +2152,58 @@ app.post(
       participants: [],
       closed: false
     };
+
+    const quota = Number(job.loadingUnload.quota || 0); // ✅ 0/<=0 = unlimited
     const p = new Set(job.loadingUnload.participants || []);
+    const alreadyIn = p.has(userId);
+
     if (present) {
-      if (job.loadingUnload.closed && !p.has(userId)) {
+      // If closed, only block NEW adds
+      if (job.loadingUnload.closed && !alreadyIn) {
         return res.status(409).json({ error: "lu_closed" });
       }
-      if (!p.has(userId)) {
-        if ((p.size || 0) >= Number(job.loadingUnload.quota || 0)) {
-          return res.status(409).json({ error: "lu_quota_full" });
-        }
-        p.add(userId);
+
+      // ✅ enforce quota ONLY when quota > 0 AND adding a new user
+      if (!alreadyIn && quota > 0 && p.size >= quota) {
+        return res.status(409).json({
+          error: "lu_quota_full",
+          quota,
+          count: p.size
+        });
       }
+
+      p.add(userId);
     } else {
       p.delete(userId);
     }
+
     job.loadingUnload.participants = [...p];
-    if (job.loadingUnload.quota > 0 && p.size >= job.loadingUnload.quota) {
+
+    // ✅ only close when quota > 0
+    if (quota > 0 && p.size >= quota) {
       job.loadingUnload.closed = true;
       const keep = new Set(job.loadingUnload.participants);
-      job.loadingUnload.applicants = (
-        job.loadingUnload.applicants || []
-      ).filter((uid) => keep.has(uid));
+      job.loadingUnload.applicants = (job.loadingUnload.applicants || []).filter(
+        (uid) => keep.has(uid)
+      );
+    } else {
+      // optional: auto reopen if below quota
+      job.loadingUnload.closed = false;
     }
+
     await saveDB(db);
     exportJobCSV(job);
     addAudit("lu_mark", { jobId: job.id, userId, present }, req);
-    res.json({
+
+    return res.json({
       ok: true,
       participants: job.loadingUnload.participants,
-      closed: job.loadingUnload.closed
+      closed: job.loadingUnload.closed,
+      quota
     });
   }
 );
+
 
 /* ---- Full-timer assignments ---- */
 app.get(
