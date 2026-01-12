@@ -52,78 +52,134 @@ const fmtDateTime = (value) => {
   }
 };
 
-// ✅ NEW: parking receipt resolver (robust across backend shapes)
-function getReceiptUrlForUser(job, uid, email, appRec, attendanceRec) {
-  const pick = (...vals) => {
-    for (const v of vals) {
-      if (!v) continue;
-      if (typeof v === "string" && v.trim() === "") continue;
-      return v;
+/* =========================
+   ✅ NEW: parking receipt resolver (MULTIPLE)
+   ========================= */
+function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec) {
+  const urls = [];
+
+  const pushVal = (v) => {
+    if (!v) return;
+
+    // array => recurse
+    if (Array.isArray(v)) {
+      v.forEach(pushVal);
+      return;
     }
-    return null;
+
+    // string => add
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (s) urls.push(s);
+      return;
+    }
+
+    // object => try common fields
+    if (typeof v === "object") {
+      const candidates = [
+        v.url,
+        v.imageUrl,
+        v.parkingReceiptUrl,
+        v.receiptUrl,
+        v.parkingReceipt,
+        v.receipt,
+      ];
+      candidates.forEach(pushVal);
+    }
   };
 
   // 1) from attendance record (some backends store it here)
-  const fromAtt = pick(
-    attendanceRec?.parkingReceiptUrl,
-    attendanceRec?.receiptUrl,
-    attendanceRec?.parkingReceipt,
-    attendanceRec?.receipt
-  );
+  pushVal(attendanceRec?.parkingReceiptUrl);
+  pushVal(attendanceRec?.receiptUrl);
+  pushVal(attendanceRec?.parkingReceipt);
+  pushVal(attendanceRec?.receipt);
+  pushVal(attendanceRec?.parkingReceipts);
+  pushVal(attendanceRec?.receipts);
+  pushVal(attendanceRec?.parkingReceiptUrls);
+  pushVal(attendanceRec?.receiptUrls);
 
   // 2) from application record
-  const fromApp = pick(
-    appRec?.parkingReceiptUrl,
-    appRec?.receiptUrl,
-    appRec?.parkingReceipt,
-    appRec?.receipt,
-    appRec?.addOns?.parkingReceiptUrl
-  );
+  pushVal(appRec?.parkingReceiptUrl);
+  pushVal(appRec?.receiptUrl);
+  pushVal(appRec?.parkingReceipt);
+  pushVal(appRec?.receipt);
+  pushVal(appRec?.addOns?.parkingReceiptUrl);
+  pushVal(appRec?.addOns?.receiptUrl);
+  pushVal(appRec?.addOns?.parkingReceipts);
+  pushVal(appRec?.addOns?.receipts);
 
-  // 3) from job-level maps
-  const pr = job?.parkingReceipts || job?.parkingReceiptByUser || job?.parkingReceiptUrls || null;
-
-  const fromMap =
-    pr && typeof pr === "object" && !Array.isArray(pr)
-      ? pick(
-          pr?.[uid],
-          email ? pr?.[email] : null,
-          pr?.byUserId?.[uid],
-          email ? pr?.byEmail?.[email] : null
-        )
-      : null;
-
-  // 4) from job-level arrays (e.g. [{userId,url,...}])
-  const list =
-    (Array.isArray(job?.parkingReceipts) && job.parkingReceipts) ||
-    (Array.isArray(job?.parkingReceiptsList) && job.parkingReceiptsList) ||
-    (Array.isArray(job?.receipts) && job.receipts) ||
+  // 3) from job-level maps (by userId/email)
+  const pr =
+    job?.parkingReceipts ||
+    job?.parkingReceiptByUser ||
+    job?.parkingReceiptUrls ||
     null;
 
-  let fromList = null;
-  if (Array.isArray(list)) {
-    const found =
-      list.find((x) => x?.userId === uid) ||
-      (email ? list.find((x) => x?.email === email) : null) ||
-      null;
-    fromList = pick(found?.url, found?.imageUrl, found?.parkingReceiptUrl, found?.receiptUrl);
+  if (pr && typeof pr === "object" && !Array.isArray(pr)) {
+    pushVal(pr?.[uid]);
+    if (email) pushVal(pr?.[email]);
+    pushVal(pr?.byUserId?.[uid]);
+    if (email) pushVal(pr?.byEmail?.[email]);
   }
 
-  // 5) legacy single fields (rare)
-  const fromLegacy = pick(
-    job?.parkingReceiptUrl,
-    job?.parkingReceiptImageUrl,
-    job?.parkingReceipt
-  );
+  // 4) from job-level arrays/lists (e.g. [{userId,url,...}])
+  const listCandidates = [];
+  if (Array.isArray(job?.parkingReceiptsList)) listCandidates.push(...job.parkingReceiptsList);
+  if (Array.isArray(job?.parkingReceipts)) listCandidates.push(...job.parkingReceipts);
+  if (Array.isArray(job?.receipts)) listCandidates.push(...job.receipts);
 
-  return pick(fromAtt, fromApp, fromMap, fromList, fromLegacy);
+  if (listCandidates.length) {
+    const matches = listCandidates.filter((x) => {
+      if (!x) return false;
+      const byUid = x.userId === uid || x.uid === uid || x.id === uid;
+      const byEmail = email ? x.email === email : false;
+      return byUid || byEmail;
+    });
+
+    matches.forEach((m) => {
+      pushVal(m);
+      pushVal(m?.url);
+      pushVal(m?.imageUrl);
+      pushVal(m?.parkingReceiptUrl);
+      pushVal(m?.receiptUrl);
+      pushVal(m?.parkingReceipt);
+      pushVal(m?.receipt);
+    });
+  }
+
+  // 5) legacy single fields
+  pushVal(job?.parkingReceiptUrl);
+  pushVal(job?.parkingReceiptImageUrl);
+  pushVal(job?.parkingReceipt);
+
+  // cleanup unique
+  const seen = new Set();
+  const out = [];
+  urls.forEach((u) => {
+    const s = String(u || "").trim();
+    if (!s) return;
+    if (seen.has(s)) return;
+    seen.add(s);
+    out.push(s);
+  });
+
+  return out;
+}
+
+// keep old "single" helper for convenience
+function getReceiptUrlForUser(job, uid, email, appRec, attendanceRec) {
+  const list = getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec);
+  return list[0] || "";
 }
 
 function receiptCsvValue(url) {
   if (!url) return "";
-  // Avoid exploding CSV if backend returned a data-url
   if (String(url).startsWith("data:")) return "embedded-image-data";
   return String(url);
+}
+function receiptCsvValueList(urls) {
+  if (!urls || !Array.isArray(urls) || urls.length === 0) return "";
+  return urls.map(receiptCsvValue).join(" | ");
 }
 
 /* ---------------- UI (cleaner + less boxy) ---------------- */
@@ -285,9 +341,46 @@ export default function Admin({ navigate, user }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
 
-  // ✅ NEW: image preview modal (receipts)
-  const [imgOpen, setImgOpen] = useState(null);
-  const [imgTitle, setImgTitle] = useState("");
+  const isAdmin = user?.role === "admin";
+
+  // ✅ NEW: receipt modal supports MULTIPLE urls + arrows
+  const [receiptModal, setReceiptModal] = useState(null); // { title: string, urls: string[], idx: number }
+
+  const openReceiptModal = (title, urls, startIdx = 0) => {
+    const safe = Array.isArray(urls) ? urls.filter(Boolean) : [];
+    if (!safe.length) return;
+    const idx = Math.max(0, Math.min(startIdx, safe.length - 1));
+    setReceiptModal({ title: title || "Parking Receipt", urls: safe, idx });
+  };
+  const closeReceiptModal = () => setReceiptModal(null);
+
+  const goPrevReceipt = () => {
+    setReceiptModal((m) => {
+      if (!m || !m.urls?.length) return m;
+      const nextIdx = Math.max(0, (m.idx || 0) - 1);
+      return { ...m, idx: nextIdx };
+    });
+  };
+  const goNextReceipt = () => {
+    setReceiptModal((m) => {
+      if (!m || !m.urls?.length) return m;
+      const nextIdx = Math.min(m.urls.length - 1, (m.idx || 0) + 1);
+      return { ...m, idx: nextIdx };
+    });
+  };
+
+  // Keyboard support: Esc closes, arrows navigate
+  useEffect(() => {
+    if (!receiptModal) return;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") closeReceiptModal();
+      if (e.key === "ArrowLeft") goPrevReceipt();
+      if (e.key === "ArrowRight") goNextReceipt();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receiptModal]);
 
   // Central user map (from /admin/users)
   const [userMap, setUserMap] = useState({});
@@ -941,15 +1034,15 @@ export default function Admin({ navigate, user }) {
           appRec?.contact
         ) || "-";
 
-      const email = pick(coreUser.email, appUser.email, appRec?.email, uid) || uid;
+      const emailFinal = pick(coreUser.email, appUser.email, appRec?.email, uid) || uid;
 
-      // ✅ NEW: receipt URL per user
-      const receiptUrl = getReceiptUrlForUser(job, uid, appRec?.email || email, appRec, rec);
+      // ✅ NEW: receipt URLs per user (multiple)
+      const receiptUrls = getReceiptUrlsForUser(job, uid, appRec?.email || emailFinal, appRec, rec);
 
       outRows.push({
         userId: uid,
         name: name || "-",
-        email,
+        email: emailFinal,
         phone,
         jobTitle: job.title,
         hours: Number(workedHours.toFixed(2)), // still used in summary
@@ -958,7 +1051,8 @@ export default function Admin({ navigate, user }) {
         scanIn: scanInStr,
         scanOut: scanOutStr,
 
-        receiptUrl: receiptUrl || "", // ✅ NEW
+        receiptUrls, // ✅ NEW (array)
+        receiptUrl: receiptUrls[0] || "", // keep compatibility
 
         wageGross: gross,
         deduction,
@@ -1149,7 +1243,7 @@ export default function Admin({ navigate, user }) {
     });
     lines.push(""); // one blank line
 
-    // ✅ Added: Parking Receipt URL
+    // ✅ Added: Parking Receipt URL(s)
     const headers = [
       "No",
       "Name",
@@ -1158,7 +1252,7 @@ export default function Admin({ navigate, user }) {
       "Transport",
       "Scan In",
       "Scan Out",
-      "Parking Receipt",
+      "Parking Receipt(s)",
       "Session Pay",
       "Allowances",
       "Gross",
@@ -1176,7 +1270,7 @@ export default function Admin({ navigate, user }) {
         q(r.transport || ""),
         q(r.scanIn || ""),
         q(r.scanOut || ""),
-        q(receiptCsvValue(r.receiptUrl)),
+        q(receiptCsvValueList(r.receiptUrls)),
         Math.round(N(r._specific, 0)),
         Math.round(N(r._allowances, 0)),
         Math.round(N(r.wageGross, 0)),
@@ -1615,7 +1709,7 @@ export default function Admin({ navigate, user }) {
       {tab === "payroll" && (
         <Panel
           title="Payroll Summary"
-          subtitle="Now includes Parking Receipt view + exported CSV includes receipt URL."
+          subtitle="Admin can view Parking Receipt images (supports multiple images with arrows)."
           right={
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>
@@ -1681,10 +1775,7 @@ export default function Admin({ navigate, user }) {
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Transport</th>
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan In</th>
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan Out</th>
-
-                  {/* ✅ NEW */}
                   <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Parking Receipt</th>
-
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Session Pay</th>
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Allowances</th>
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Gross</th>
@@ -1694,61 +1785,66 @@ export default function Admin({ navigate, user }) {
               </thead>
 
               <tbody>
-                {rows.map((r, idx) => (
-                  <tr key={r.userId} style={{ borderTop: "1px solid #eef2f7" }}>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{idx + 1}.</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.name}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.email}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.phone}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }}>{r.transport}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanIn || "-"}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanOut || "-"}</td>
+                {rows.map((r, idx) => {
+                  const count = Array.isArray(r.receiptUrls) ? r.receiptUrls.length : 0;
+                  return (
+                    <tr key={r.userId} style={{ borderTop: "1px solid #eef2f7" }}>
+                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{idx + 1}.</td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }}>{r.name}</td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }}>{r.email}</td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }}>{r.phone}</td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }}>{r.transport}</td>
+                      <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanIn || "-"}</td>
+                      <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanOut || "-"}</td>
 
-                    {/* ✅ NEW */}
-                    <td style={{ borderTop: "1px solid #eef2f7" }}>
-                      {r.receiptUrl ? (
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                          <span
-                            style={{
-                              ...styles.pill("#ecfdf5", "#065f46"),
-                              border: "1px solid #6ee7b7",
-                              fontWeight: 900,
-                            }}
-                          >
-                            Uploaded
-                          </span>
-                          <button
-                            className="btn"
-                            onClick={() => {
-                              setImgTitle(`Parking Receipt — ${r.name}`);
-                              setImgOpen(r.receiptUrl);
-                            }}
-                          >
-                            View
-                          </button>
-                        </div>
-                      ) : (
-                        <span style={{ color: "#6b7280" }}>-</span>
-                      )}
-                    </td>
+                      {/* ✅ Admin can view; supports multiple images */}
+                      <td style={{ borderTop: "1px solid #eef2f7" }}>
+                        {count ? (
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <span
+                              style={{
+                                ...styles.pill("#ecfdf5", "#065f46"),
+                                border: "1px solid #6ee7b7",
+                                fontWeight: 900,
+                              }}
+                            >
+                              Uploaded ×{count}
+                            </span>
 
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._specific)}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._allowances)}</td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r.wageGross)}</td>
+                            {isAdmin ? (
+                              <button
+                                className="btn"
+                                onClick={() => openReceiptModal(`Parking Receipt — ${r.name}`, r.receiptUrls, 0)}
+                              >
+                                View
+                              </button>
+                            ) : (
+                              <span style={{ fontSize: 12, color: "#6b7280" }}>(admin view only)</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span style={{ color: "#6b7280" }}>-</span>
+                        )}
+                      </td>
 
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      <input
-                        style={{ ...styles.input, width: 90, textAlign: "right", padding: "8px 10px" }}
-                        inputMode="decimal"
-                        value={String(deductions[r.userId] ?? 0)}
-                        onChange={(e) => setDeduction(r.userId, e.target.value)}
-                      />
-                    </td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      <span style={{ fontWeight: 900 }}>{money(r.wageNet)}</span>
-                    </td>
-                  </tr>
-                ))}
+                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._specific)}</td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._allowances)}</td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r.wageGross)}</td>
+
+                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                        <input
+                          style={{ ...styles.input, width: 90, textAlign: "right", padding: "8px 10px" }}
+                          inputMode="decimal"
+                          value={String(deductions[r.userId] ?? 0)}
+                          onChange={(e) => setDeduction(r.userId, e.target.value)}
+                        />
+                      </td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                        <span style={{ fontWeight: 900 }}>{money(r.wageNet)}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
 
                 {!job ? (
                   <tr>
@@ -1776,10 +1872,10 @@ export default function Admin({ navigate, user }) {
         </Panel>
       )}
 
-      {/* ✅ NEW: Receipt Image Preview Modal */}
-      {imgOpen && (
+      {/* ✅ NEW: Receipt Image Preview Modal with left/right arrows */}
+      {receiptModal && receiptModal.urls?.length ? (
         <div
-          onClick={() => setImgOpen(null)}
+          onClick={closeReceiptModal}
           style={{
             position: "fixed",
             inset: 0,
@@ -1800,27 +1896,75 @@ export default function Admin({ navigate, user }) {
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-              <div style={{ fontWeight: 900 }}>{imgTitle || "Parking Receipt"}</div>
+              <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center" }}>
+                <span>{receiptModal.title || "Parking Receipt"}</span>
+                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  {receiptModal.idx + 1} / {receiptModal.urls.length}
+                </span>
+              </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   className="btn"
                   onClick={() => {
                     try {
-                      window.open(imgOpen, "_blank", "noopener,noreferrer");
+                      const url = receiptModal.urls[receiptModal.idx];
+                      window.open(url, "_blank", "noopener,noreferrer");
                     } catch {}
                   }}
                 >
                   Open
                 </button>
-                <button className="btn" onClick={() => setImgOpen(null)}>
+                <button className="btn" onClick={closeReceiptModal}>
                   Close
                 </button>
               </div>
             </div>
 
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: 10, position: "relative" }}>
+              {receiptModal.idx > 0 ? (
+                <button
+                  className="btn"
+                  onClick={goPrevReceipt}
+                  title="Previous"
+                  style={{
+                    position: "absolute",
+                    left: 8,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    zIndex: 2,
+                    borderRadius: 999,
+                    padding: "8px 10px",
+                    fontWeight: 900,
+                    background: "rgba(255,255,255,0.9)",
+                  }}
+                >
+                  ←
+                </button>
+              ) : null}
+
+              {receiptModal.idx < receiptModal.urls.length - 1 ? (
+                <button
+                  className="btn"
+                  onClick={goNextReceipt}
+                  title="Next"
+                  style={{
+                    position: "absolute",
+                    right: 8,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    zIndex: 2,
+                    borderRadius: 999,
+                    padding: "8px 10px",
+                    fontWeight: 900,
+                    background: "rgba(255,255,255,0.9)",
+                  }}
+                >
+                  →
+                </button>
+              ) : null}
+
               <img
-                src={imgOpen}
+                src={receiptModal.urls[receiptModal.idx]}
                 alt="receipt"
                 style={{
                   width: "100%",
@@ -1834,11 +1978,11 @@ export default function Admin({ navigate, user }) {
             </div>
 
             <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-              If you see a broken image, your backend might require an authenticated URL or a dedicated receipt endpoint.
+              Tip: Use keyboard ← → to switch images, Esc to close. If you see a broken image, your backend might require an authenticated URL or a dedicated receipt endpoint.
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
