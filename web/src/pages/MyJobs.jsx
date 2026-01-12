@@ -882,17 +882,33 @@ export default function MyJobs({ navigate, user }) {
               </div>
             ) : (
               <>
-                <div style={{ display: "flex", justifyContent: "center", margin: "6px 0 10px" }}>
-                  {qrToken ? (
-                    <img
-                      src={qrImgSrc}
-                      alt="QR code"
-                      style={{ width: 260, height: 260, borderRadius: 8, border: "1px solid var(--border)" }}
-                    />
-                  ) : (
-                    <div style={{ color: "#6b7280" }}>Generating QR…</div>
-                  )}
+              {/* ✅ User name above QR */}
+              <div style={{ textAlign: "center", marginTop: 6 }}>
+                <div style={{ fontWeight: 900, fontSize: 16 }}>
+                  {user?.name || "Unknown User"}
                 </div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                  {qrDir === "in" ? "Check-in QR" : "Check-out QR"}
+                </div>
+              </div>
+              
+              <div style={{ display: "flex", justifyContent: "center", margin: "8px 0 10px" }}>
+                {qrToken ? (
+                  <img
+                    src={qrImgSrc}
+                    alt="QR code"
+                    style={{
+                      width: 260,
+                      height: 260,
+                      borderRadius: 8,
+                      border: "1px solid var(--border)",
+                    }}
+                  />
+                ) : (
+                  <div style={{ color: "#6b7280" }}>Generating QR…</div>
+                )}
+              </div>
+
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
                   Show this QR to the PM scanner. Token is valid for about 60 seconds.
                 </div>
