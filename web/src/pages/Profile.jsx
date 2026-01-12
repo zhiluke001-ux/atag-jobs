@@ -182,3 +182,113 @@ export default function Profile() {
       <div className="card" style={{ display: "flex", gap: 16, alignItems: "center" }}>
         <div style={{ position: "relative", width: 96, height: 96 }}>
           <img
+            src={avatarSrc}
+            alt="avatar"
+            style={{
+              width: 96,
+              height: 96,
+              borderRadius: "9999px",
+              objectFit: "cover",
+              border: "2px solid #e5e7eb",
+            }}
+          />
+          <label
+            htmlFor="avatarPick"
+            className="btn"
+            style={{
+              position: "absolute",
+              bottom: -6,
+              right: -6,
+              fontSize: 12,
+              padding: "6px 10px",
+            }}
+          >
+            Change
+          </label>
+          <input
+            id="avatarPick"
+            type="file"
+            accept="image/*"
+            onChange={onPickAvatar}
+            style={{ display: "none" }}
+          />
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 18 }}>My Profile</div>
+          <div style={{ color: "#666", fontSize: 12 }}>
+            Role: {me.role} • Grade: {me.grade}
+          </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ fontWeight: 600, margin: "2px 0 8px 0" }}>Account</div>
+        <Row label="Email" value={me.email} onEdit={() => setEditing({ field: "email", title: "Email", value: me.email })} />
+        <Row label="Username" value={me.username} onEdit={() => setEditing({ field: "username", title: "Username", value: me.username })} />
+        <Row label="Full name" value={me.name} onEdit={() => setEditing({ field: "name", title: "Full name", value: me.name })} />
+        <Row label="Phone" value={me.phone} onEdit={() => setEditing({ field: "phone", title: "Phone", value: me.phone })} />
+        <Row label="Discord" value={me.discord} onEdit={() => setEditing({ field: "discord", title: "Discord", value: me.discord })} />
+      </div>
+
+      <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ fontWeight: 600 }}>Security</div>
+        <button className="btn" onClick={() => setPwdOpen(true)}>Change password</button>
+      </div>
+
+      {editing && (
+        <Modal title={editing.title} onClose={() => setEditing(null)} onSave={saveField} saving={busy}>
+          <input
+            autoFocus
+            type={editing.field === "email" ? "email" : "text"}
+            value={editing.value ?? ""}
+            onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+            style={{ width: "100%" }}
+          />
+          <div style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
+            This will update your account {editing.title.toLowerCase()}.
+          </div>
+        </Modal>
+      )}
+
+      {pwdOpen && (
+        <Modal title="Change password" onClose={() => setPwdOpen(false)} onSave={savePassword} saving={busy}>
+          <div className="grid grid-1" style={{ gap: 10 }}>
+            <div>
+              <div>Current password</div>
+              <input type="password" value={pwd.current} onChange={(e) => setPwd({ ...pwd, current: e.target.value })} />
+            </div>
+            <div>
+              <div>New password</div>
+              <input type="password" value={pwd.next} onChange={(e) => setPwd({ ...pwd, next: e.target.value })} />
+            </div>
+            <div>
+              <div>Confirm new password</div>
+              <input type="password" value={pwd.confirm} onChange={(e) => setPwd({ ...pwd, confirm: e.target.value })} />
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {toast && (
+        <div
+          style={{
+            position: "fixed",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            background: toast.type === "ok" ? "rgba(16,185,129,0.95)" : "rgba(239,68,68,0.95)",
+            color: "white",
+            padding: "12px 16px",
+            borderRadius: 12,
+            zIndex: 9999,
+            fontWeight: 600,
+            boxShadow: "0 8px 30px rgba(0,0,0,0.25)",
+          }}
+        >
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
