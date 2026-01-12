@@ -1220,7 +1220,7 @@ if (verificationStatus !== undefined) {
         grade: target.grade || "junior",
         phone: target.phone || "",
         discord: target.discord || "",
-        avatarUrl: target.avatarUrl || ""
+        avatarUrl: target.avatarUrl || "",
         verified: !!target.verified,
         verificationStatus: target.verificationStatus || (target.verified ? "APPROVED" : "PENDING"),
         verificationPhotoUrl: target.verificationPhotoUrl || "",
