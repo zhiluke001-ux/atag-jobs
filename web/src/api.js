@@ -49,7 +49,7 @@ function writeLocalBase(url) {
 function sanitizeBase(url) {
   if (!url) return "";
   const trimmed = String(url).trim().replace(/\/+$/, "");
-  // Only accept absolute http(s) URLs in production
+  // Only accept absolute http(s) URLs
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return "";
 }
@@ -88,9 +88,22 @@ export function setApiBase(url) {
 }
 
 export function debugApiBase() {
-  // Handy in the console to confirm where we're pointing
-  // e.g. window.debugApiBase && debugApiBase()
   console.log("API_BASE =", API_BASE || "(relative)");
+}
+
+/* ---------- URL helpers ---------- */
+export function fullUrl(path) {
+  let p = String(path || "");
+  if (!p.startsWith("/")) p = "/" + p;
+  return API_BASE ? API_BASE + p : p; // relative only in dev/proxy
+}
+
+// ✅ IMPORTANT: for backend-returned "/uploads/xxx.jpg"
+export function assetUrl(u) {
+  const s = String(u || "");
+  if (!s) return "";
+  if (/^(data:|blob:|https?:\/\/)/i.test(s)) return s;
+  return fullUrl(s); // uses same API_BASE logic
 }
 
 /* ---------- Auth token helpers ---------- */
@@ -117,13 +130,9 @@ function authHeaders() {
   return t ? { Authorization: "Bearer " + t } : {};
 }
 
-function fullUrl(path) {
-  if (!path.startsWith("/")) path = "/" + path;
-  return API_BASE ? API_BASE + path : path; // relative only in dev/proxy
-}
-
-async function doFetch(path, { method = "GET", body, headers } = {}) {
+async function doFetch(path, { method = "GET", body, headers, expectJson = true } = {}) {
   const url = fullUrl(path);
+
   const res = await fetch(url, {
     method,
     headers: {
@@ -136,12 +145,11 @@ async function doFetch(path, { method = "GET", body, headers } = {}) {
 
   const raw = await res.text().catch(() => "");
 
-  // Error path: try to parse JSON payload for message first
+  // Error path: try JSON payload first
   if (!res.ok) {
     try {
       const json = raw ? JSON.parse(raw) : {};
-      const msg =
-        json?.error || json?.message || `${res.status} ${res.statusText}`;
+      const msg = json?.error || json?.message || `${res.status} ${res.statusText}`;
       const err = new Error(msg);
       err.status = res.status;
       err.payload = json;
@@ -153,21 +161,29 @@ async function doFetch(path, { method = "GET", body, headers } = {}) {
     }
   }
 
-  // Expect JSON for all app APIs; fail fast if we got HTML/text by mistake
+  // Some endpoints may legitimately return 204 No Content
+  if (res.status === 204 || raw === "") return {};
+
+  if (!expectJson) return raw;
+
   const ct = res.headers.get("content-type") || "";
+  // Be a bit more tolerant (some servers forget to set content-type)
   if (!ct.includes("application/json")) {
-    throw new Error(
-      `Expected JSON from API but got "${ct}" at ${url}. ` +
-        `Your API base is likely misconfigured. ` +
-        `Set localStorage 'atag.apiBase' or 'apiBase' to your Render URL, ` +
-        `or set VITE_API_BASE during build.`
-    );
+    // Try parse anyway, else throw a helpful error
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `Expected JSON from API but got "${ct}" at ${url}. ` +
+          `Your API base may be misconfigured. ` +
+          `Set localStorage 'atag.apiBase' to your Render URL or set VITE_API_BASE during build.`
+      );
+    }
   }
 
   try {
-    return raw ? JSON.parse(raw) : {};
+    return JSON.parse(raw);
   } catch {
-    // Shouldn't happen with valid API; keep it defensive
     return {};
   }
 }
