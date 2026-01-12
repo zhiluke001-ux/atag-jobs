@@ -81,11 +81,7 @@ function getReceiptUrlForUser(job, uid, email, appRec, attendanceRec) {
   );
 
   // 3) from job-level maps
-  const pr =
-    job?.parkingReceipts ||
-    job?.parkingReceiptByUser ||
-    job?.parkingReceiptUrls ||
-    null;
+  const pr = job?.parkingReceipts || job?.parkingReceiptByUser || job?.parkingReceiptUrls || null;
 
   const fromMap =
     pr && typeof pr === "object" && !Array.isArray(pr)
@@ -110,12 +106,7 @@ function getReceiptUrlForUser(job, uid, email, appRec, attendanceRec) {
       list.find((x) => x?.userId === uid) ||
       (email ? list.find((x) => x?.email === email) : null) ||
       null;
-    fromList = pick(
-      found?.url,
-      found?.imageUrl,
-      found?.parkingReceiptUrl,
-      found?.receiptUrl
-    );
+    fromList = pick(found?.url, found?.imageUrl, found?.parkingReceiptUrl, found?.receiptUrl);
   }
 
   // 5) legacy single fields (rare)
@@ -130,6 +121,7 @@ function getReceiptUrlForUser(job, uid, email, appRec, attendanceRec) {
 
 function receiptCsvValue(url) {
   if (!url) return "";
+  // Avoid exploding CSV if backend returned a data-url
   if (String(url).startsWith("data:")) return "embedded-image-data";
   return String(url);
 }
@@ -210,20 +202,6 @@ const styles = {
     color: "#111827",
     listStyle: "none",
   },
-
-  // ✅ Gallery UI
-  navBtn: {
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
-    padding: "8px 10px",
-    background: "#fff",
-    cursor: "pointer",
-    fontWeight: 900,
-  },
-  navBtnDisabled: {
-    opacity: 0.45,
-    cursor: "not-allowed",
-  },
 };
 
 const Panel = ({ title, subtitle, right, children }) => (
@@ -290,8 +268,7 @@ const KIND_PROP = {
   "2d1n": "twoD1N",
   "3d2n": "threeD2N",
 };
-const isSessionKind = (k) =>
-  ["half_day", "full_day", "2d1n", "3d2n"].includes(k);
+const isSessionKind = (k) => ["half_day", "full_day", "2d1n", "3d2n"].includes(k);
 
 /* ---- defaults mirroring JobModal fallbacks ---- */
 const DEFAULT_HOURLY = { jr: "15", sr: "20", lead: "25" };
@@ -308,11 +285,9 @@ export default function Admin({ navigate, user }) {
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
 
-  // ✅ Receipt Gallery (admin)
-  const [galleryOpen, setGalleryOpen] = useState(false);
-  const [galleryIdx, setGalleryIdx] = useState(0);
-  const [galleryItems, setGalleryItems] = useState([]); // [{url,name,userId,email}]
-  const galleryHasItems = galleryItems.length > 0;
+  // ✅ NEW: image preview modal (receipts)
+  const [imgOpen, setImgOpen] = useState(null);
+  const [imgTitle, setImgTitle] = useState("");
 
   // Central user map (from /admin/users)
   const [userMap, setUserMap] = useState({});
@@ -511,12 +486,9 @@ export default function Admin({ navigate, user }) {
   }
   function inferPhysTypeFromJob(j) {
     const kind = j?.rate?.sessionKind;
-    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind))
-      return kind;
+    if (["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(kind)) return kind;
     const legacy = j?.session?.physicalType || j?.physicalType || j?.physicalSubtype;
-    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy)
-      ? legacy
-      : "half_day";
+    return ["half_day", "full_day", "2d1n", "3d2n", "hourly_by_role", "hourly_flat"].includes(legacy) ? legacy : "half_day";
   }
 
   /* ===== Load selected job details ===== */
@@ -546,9 +518,7 @@ export default function Admin({ navigate, user }) {
           (Number.isFinite(rate.transportBus) ? rate.transportBus : 0);
         setParkingAllowance(String(pa ?? 0));
 
-        const anyPlusHourly = ["junior", "senior", "lead"].some(
-          (rk) => tr[rk]?.payMode === "specific_plus_hourly"
-        );
+        const anyPlusHourly = ["junior", "senior", "lead"].some((rk) => tr[rk]?.payMode === "specific_plus_hourly");
         setHourlyAddon(!!anyPlusHourly);
 
         // Hourly by role / virtual
@@ -625,7 +595,7 @@ export default function Admin({ navigate, user }) {
       };
     }
 
-    const priceProp = KIND_PROP[kind];
+    // Session variants
     const price = (tier) => {
       if (kind === "half_day") {
         if (tier === "jr") return N(pHalfJr);
@@ -827,10 +797,8 @@ export default function Admin({ navigate, user }) {
       if (["junior", "jr"].includes(v)) return "junior";
       if (["senior", "sr"].includes(v)) return "senior";
       if (["lead", "lead host", "leader"].includes(v)) return "lead";
-      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc"))
-        return "junior_emcee";
-      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc"))
-        return "senior_emcee";
+      if (v === "junior_emcee" || v === "jr_emcee" || v.includes("junior emcee") || v.includes("junior mc")) return "junior_emcee";
+      if (v === "senior_emcee" || v === "sr_emcee" || v.includes("senior emcee") || v.includes("senior mc")) return "senior_emcee";
       if (v.includes("junior") && v.includes("marshal")) return "junior";
       if (v.includes("senior") && v.includes("marshal")) return "senior";
       return null;
@@ -838,14 +806,21 @@ export default function Admin({ navigate, user }) {
 
     const tierKeyForUser = (uid, appRec) => {
       const jobRoles = job.roleByUser || job.tierByUser || {};
-      const raw = (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) || jobRoles[uid];
+      const raw =
+        (appRec && (appRec.tier || appRec.role || appRec.level || appRec.position)) ||
+        jobRoles[uid];
+
       const mapped = mapRoleToTierKey(raw) || raw;
       if (["junior", "senior", "lead", "junior_emcee", "senior_emcee"].includes(mapped)) return mapped;
       return "junior";
     };
 
     const pushRowForPerson = (uid, appRec) => {
-      const rec = attendance?.[uid] || (appRec?.email ? attendance?.[appRec.email] : null) || {};
+      // ✅ attendance might be keyed by userId OR email (safe across backend versions)
+      const rec =
+        attendance?.[uid] ||
+        (appRec?.email ? attendance?.[appRec.email] : null) ||
+        {};
 
       const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
@@ -895,11 +870,13 @@ export default function Admin({ navigate, user }) {
       const transport = byUserTransport.get(uid) || "Own Transport";
       if (transport === "ATAG Transport" || transport === "ATAG Bus") allowances += N(parkingAmt, 0);
 
-      // Early Call: ONLY add when PM checked for this person
+      // Early Call: ONLY add when PM checked for this person (no auto "arrived early" rule)
       const ecAmt = N(ec.amount, 0);
 
-      const earlyFromJob = (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
-      const earlyListRaw = (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
+      const earlyFromJob =
+        (job && (job.earlyCallParticipants || job.earlyCallConfirmedUsers || job.earlyCallUsers)) || [];
+      const earlyListRaw =
+        (ec && (ec.participants || ec.users || ec.userIds || ec.confirmedUsers)) || [];
 
       const earlyLists = []
         .concat(Array.isArray(earlyFromJob) ? earlyFromJob : [earlyFromJob])
@@ -966,6 +943,7 @@ export default function Admin({ navigate, user }) {
 
       const email = pick(coreUser.email, appUser.email, appRec?.email, uid) || uid;
 
+      // ✅ NEW: receipt URL per user
       const receiptUrl = getReceiptUrlForUser(job, uid, appRec?.email || email, appRec, rec);
 
       outRows.push({
@@ -974,29 +952,40 @@ export default function Admin({ navigate, user }) {
         email,
         phone,
         jobTitle: job.title,
-        hours: Number(workedHours.toFixed(2)),
+        hours: Number(workedHours.toFixed(2)), // still used in summary
         transport,
+
         scanIn: scanInStr,
         scanOut: scanOutStr,
-        receiptUrl: receiptUrl || "",
+
+        receiptUrl: receiptUrl || "", // ✅ NEW
+
         wageGross: gross,
         deduction,
         wageNet: net,
+
         _basePay: basePay,
         _otPay: otPay,
         _specific: specificPay,
         _allowances: allowances,
+
         _gotEarlyCall: gotEarlyCall,
         _gotLDU: gotLDU,
       });
     };
 
-    // PART-TIMERS only: approved + has attendance
+    // ✅ PART-TIMERS only: show ONLY approved users who have attendance (scan IN/OUT or virtual marked)
     (job.approved || []).forEach((uid) => {
       if (!approved.has(uid)) return;
 
       const appRec = apps.find((a) => a.userId === uid) || {};
-      const rec = attendance?.[uid] || (appRec?.email ? attendance?.[appRec.email] : null) || {};
+
+      const rec =
+        attendance?.[uid] ||
+        (appRec?.email ? attendance?.[appRec.email] : null) ||
+        {};
+
+      // ✅ include ONLY if there is an IN or OUT record
       if (!rec?.in && !rec?.out) return;
 
       pushRowForPerson(uid, appRec);
@@ -1113,19 +1102,26 @@ export default function Admin({ navigate, user }) {
       ["Pay Setup", paySetup],
     ];
 
-    if (hasHourlyAddon && hourlyAddonLine) pairs.push(["Hourly Add-on", hourlyAddonLine]);
+    if (hasHourlyAddon && hourlyAddonLine) {
+      pairs.push(["Hourly Add-on", hourlyAddonLine]);
+    }
 
     if (N(parkingAmt, 0) > 0) {
       pairs.push(["Parking Allowance", `${money(parkingAmt)} (applies only when ATAG Transport selected)`]);
     }
 
-    if (ec?.enabled && N(ec?.amount, 0) > 0) pairs.push(["Early Call", `Enabled — ${money(ec.amount)} per person (PM marked only)`]);
-    else if (ec?.enabled) pairs.push(["Early Call", "Enabled"]);
+    if (ec?.enabled && N(ec?.amount, 0) > 0) {
+      pairs.push(["Early Call", `Enabled — ${money(ec.amount)} per person (PM marked only)`]);
+    } else if (ec?.enabled) {
+      pairs.push(["Early Call", "Enabled"]);
+    }
 
     if (ldu?.enabled && N(ldu?.price, 0) > 0) {
       const helperCount = Array.isArray(ldu.participants) ? ldu.participants.length : 0;
       pairs.push(["Loading & Unloading", `Enabled — ${money(ldu.price)} per helper (helpers: ${helperCount})`]);
-    } else if (ldu?.enabled) pairs.push(["Loading & Unloading", "Enabled"]);
+    } else if (ldu?.enabled) {
+      pairs.push(["Loading & Unloading", "Enabled"]);
+    }
 
     return pairs;
   };
@@ -1141,14 +1137,34 @@ export default function Admin({ navigate, user }) {
       alert("No rows to export.");
       return;
     }
+
     const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 
+    // ✅ Job details block at TOP, then 1 blank line, then list
     const metaPairs = buildPayrollMetaPairs(job);
-    const lines = [];
-    metaPairs.forEach(([k, v]) => lines.push(`${q(k)},${q(v)}`));
-    lines.push("");
 
-    const headers = ["No", "Name", "Email", "Phone", "Transport", "Scan In", "Scan Out", "Parking Receipt", "Session Pay", "Allowances", "Gross", "Deduction", "Net"];
+    const lines = [];
+    metaPairs.forEach(([k, v]) => {
+      lines.push(`${q(k)},${q(v)}`);
+    });
+    lines.push(""); // one blank line
+
+    // ✅ Added: Parking Receipt URL
+    const headers = [
+      "No",
+      "Name",
+      "Email",
+      "Phone",
+      "Transport",
+      "Scan In",
+      "Scan Out",
+      "Parking Receipt",
+      "Session Pay",
+      "Allowances",
+      "Gross",
+      "Deduction",
+      "Net",
+    ];
     lines.push(headers.join(","));
 
     rows.forEach((r, idx) => {
@@ -1170,7 +1186,7 @@ export default function Admin({ navigate, user }) {
       lines.push(line);
     });
 
-    lines.push("");
+    lines.push(""); // optional spacer before totals
     lines.push(`Total Employees,${summary.employees}`);
     lines.push(`Total Hours,${summary.hours.toFixed(2)}`);
     lines.push(`Total Net Wages,${Math.round(summary.wages)}`);
@@ -1186,68 +1202,6 @@ export default function Admin({ navigate, user }) {
     a.remove();
     URL.revokeObjectURL(url);
   }
-
-  /* ✅ Build gallery items whenever rows change */
-  useEffect(() => {
-    if (!rows?.length) {
-      setGalleryItems([]);
-      return;
-    }
-    const items = rows
-      .filter((r) => !!r.receiptUrl)
-      .map((r) => ({
-        url: r.receiptUrl,
-        name: r.name,
-        userId: r.userId,
-        email: r.email,
-      }));
-    setGalleryItems(items);
-  }, [rows]);
-
-  /* ✅ Gallery controls */
-  const openGalleryAtUser = (uid) => {
-    if (user?.role !== "admin") {
-      alert("Admin only.");
-      return;
-    }
-    const items = (rows || [])
-      .filter((r) => !!r.receiptUrl)
-      .map((r) => ({ url: r.receiptUrl, name: r.name, userId: r.userId, email: r.email }));
-
-    if (!items.length) {
-      alert("No parking receipts uploaded for this job.");
-      return;
-    }
-
-    const idx = Math.max(0, items.findIndex((x) => x.userId === uid));
-    setGalleryItems(items);
-    setGalleryIdx(idx >= 0 ? idx : 0);
-    setGalleryOpen(true);
-  };
-
-  const closeGallery = () => setGalleryOpen(false);
-
-  const goPrev = () => {
-    if (!galleryHasItems) return;
-    setGalleryIdx((i) => Math.max(0, i - 1));
-  };
-  const goNext = () => {
-    if (!galleryHasItems) return;
-    setGalleryIdx((i) => Math.min(galleryItems.length - 1, i + 1));
-  };
-
-  /* ✅ Keyboard support for gallery */
-  useEffect(() => {
-    if (!galleryOpen) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") closeGallery();
-      if (e.key === "ArrowLeft") goPrev();
-      if (e.key === "ArrowRight") goNext();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [galleryOpen, galleryItems.length]);
 
   /* ===== UI blocks (payment editors) ===== */
   const HourlySimpleGrid = ({ title }) => (
@@ -1338,20 +1292,73 @@ export default function Admin({ navigate, user }) {
     return (
       <div style={{ display: "grid", gap: 14 }}>
         {showHalf && (
-          <SessionGrid title="Half Day (per person)" v={pHalfJr} setV={setPHalfJr} w={pHalfSr} setW={setPHalfSr} x={pHalfLead} setX={setPHalfLead} y={pHalfJrEmcee} setY={setPHalfJrEmcee} z={pHalfSrEmcee} setZ={setPHalfSrEmcee} />
+          <SessionGrid
+            title="Half Day (per person)"
+            v={pHalfJr}
+            setV={setPHalfJr}
+            w={pHalfSr}
+            setW={setPHalfSr}
+            x={pHalfLead}
+            setX={setPHalfLead}
+            y={pHalfJrEmcee}
+            setY={setPHalfJrEmcee}
+            z={pHalfSrEmcee}
+            setZ={setPHalfSrEmcee}
+          />
         )}
         {showFull && (
-          <SessionGrid title="Full Day (per person)" v={pFullJr} setV={setPFullJr} w={pFullSr} setW={setPFullSr} x={pFullLead} setX={setPFullLead} y={pFullJrEmcee} setY={setPFullJrEmcee} z={pFullSrEmcee} setZ={setPFullSrEmcee} />
+          <SessionGrid
+            title="Full Day (per person)"
+            v={pFullJr}
+            setV={setPFullJr}
+            w={pFullSr}
+            setW={setPFullSr}
+            x={pFullLead}
+            setX={setPFullLead}
+            y={pFullJrEmcee}
+            setY={setPFullJrEmcee}
+            z={pFullSrEmcee}
+            setZ={setPFullSrEmcee}
+          />
         )}
         {show2d1n && (
-          <SessionGrid title="2D1N (per person)" v={p2d1nJr} setV={setP2d1nJr} w={p2d1nSr} setW={setP2d1nSr} x={p2d1nLead} setX={setP2d1nLead} y={p2d1nJrEmcee} setY={setP2d1nJrEmcee} z={p2d1nSrEmcee} setZ={setP2d1nSrEmcee} />
+          <SessionGrid
+            title="2D1N (per person)"
+            v={p2d1nJr}
+            setV={setP2d1nJr}
+            w={p2d1nSr}
+            setW={setP2d1nSr}
+            x={p2d1nLead}
+            setX={setP2d1nLead}
+            y={p2d1nJrEmcee}
+            setY={setP2d1nJrEmcee}
+            z={p2d1nSrEmcee}
+            setZ={setP2d1nSrEmcee}
+          />
         )}
         {show3d2n && (
-          <SessionGrid title="3D2N (per person)" v={p3d2nJr} setV={setP3d2nJr} w={p3d2nSr} setW={setP3d2nSr} x={p3d2nLead} setX={setP3d2nLead} y={p3d2nJrEmcee} setY={setP3d2nJrEmcee} z={p3d2nSrEmcee} setZ={setP3d2nSrEmcee} />
+          <SessionGrid
+            title="3D2N (per person)"
+            v={p3d2nJr}
+            setV={setP3d2nJr}
+            w={p3d2nSr}
+            setW={setP3d2nSr}
+            x={p3d2nLead}
+            setX={setP3d2nLead}
+            y={p3d2nJrEmcee}
+            setY={setP3d2nJrEmcee}
+            z={p3d2nSrEmcee}
+            setZ={setP3d2nSrEmcee}
+          />
         )}
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input id="hourlyToggle" type="checkbox" checked={hourlyAddon} onChange={(e) => setHourlyAddon(e.target.checked)} />
+          <input
+            id="hourlyToggle"
+            type="checkbox"
+            checked={hourlyAddon}
+            onChange={(e) => setHourlyAddon(e.target.checked)}
+          />
           <label htmlFor="hourlyToggle" style={{ userSelect: "none", fontWeight: 800 }}>
             Enable hourly add-on (in addition to session price)
           </label>
@@ -1365,12 +1372,6 @@ export default function Admin({ navigate, user }) {
       </div>
     );
   };
-
-  /* --------- header pills --------- */
-  const headerPills2 = useMemo(() => {
-    if (!job) return null;
-    return <span style={styles.pill("#f3f4f6", "#111827")}>{job.status || "upcoming"}</span>;
-  }, [job]);
 
   return (
     <div className="container" style={styles.page}>
@@ -1404,10 +1405,116 @@ export default function Admin({ navigate, user }) {
             </button>
           }
         >
-          {/* (unchanged defaults UI — keep yours if you want; omitted for brevity) */}
-          <div style={{ color: "#6b7280", fontSize: 12 }}>
-            (Your Global Defaults UI stays the same as before.)
+          <div style={styles.grid2}>
+            <Field label="Default Parking Allowance (RM)">
+              <input style={styles.input} inputMode="decimal" value={gParking} onChange={(e) => setGParking(e.target.value)} />
+            </Field>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <Field label="Early Call Amount (RM)">
+                <input style={styles.input} inputMode="decimal" value={gECAmount} onChange={(e) => setGECAmount(e.target.value)} />
+              </Field>
+              <Field label="Loading & Unloading (RM / helper)">
+                <input style={styles.input} inputMode="decimal" value={gLDUPrice} onChange={(e) => setGLDUPrice(e.target.value)} />
+              </Field>
+            </div>
           </div>
+
+          <div style={{ height: 12 }} />
+
+          <details style={styles.details} open>
+            <summary style={styles.summary}>Hourly (by role)</summary>
+            <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+              <div style={styles.grid3}>
+                <Field label="Junior Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrJr} onChange={(e) => setGHrJr(e.target.value)} />
+                </Field>
+                <Field label="Junior OT (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrJrOT} onChange={(e) => setGHrJrOT(e.target.value)} />
+                </Field>
+                <div />
+              </div>
+
+              <div style={styles.grid3}>
+                <Field label="Senior Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrSr} onChange={(e) => setGHrSr(e.target.value)} />
+                </Field>
+                <Field label="Senior OT (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrSrOT} onChange={(e) => setGHrSrOT(e.target.value)} />
+                </Field>
+                <div />
+              </div>
+
+              <div style={styles.grid3}>
+                <Field label="Lead Host Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrLead} onChange={(e) => setGHrLead(e.target.value)} />
+                </Field>
+                <Field label="Lead OT (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gHrLeadOT} onChange={(e) => setGHrLeadOT(e.target.value)} />
+                </Field>
+                <div />
+              </div>
+            </div>
+          </details>
+
+          <div style={{ height: 10 }} />
+
+          <details style={styles.details}>
+            <summary style={styles.summary}>Backend (flat hourly for all)</summary>
+            <div style={{ marginTop: 12 }}>
+              <div style={styles.grid2}>
+                <Field label="Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gFlat} onChange={(e) => setGFlat(e.target.value)} />
+                </Field>
+                <Field label="OT Rate (RM/hr)">
+                  <input style={styles.input} inputMode="decimal" value={gFlatOT} onChange={(e) => setGFlatOT(e.target.value)} />
+                </Field>
+              </div>
+            </div>
+          </details>
+
+          <div style={{ height: 10 }} />
+
+          <details style={styles.details}>
+            <summary style={styles.summary}>Session (specific payment per person)</summary>
+            <div style={{ marginTop: 12, display: "grid", gap: 14 }}>
+              <div style={{ fontWeight: 900 }}>Half Day</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJr} onChange={(e) => setGHalfJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSr} onChange={(e) => setGHalfSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gHalfLead} onChange={(e) => setGHalfLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfJrEmcee} onChange={(e) => setGHalfJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gHalfSrEmcee} onChange={(e) => setGHalfSrEmcee(e.target.value)} /></Field>
+              </div>
+
+              <div style={{ fontWeight: 900 }}>Full Day</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={gFullJr} onChange={(e) => setGFullJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={gFullSr} onChange={(e) => setGFullSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={gFullLead} onChange={(e) => setGFullLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullJrEmcee} onChange={(e) => setGFullJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={gFullSrEmcee} onChange={(e) => setGFullSrEmcee(e.target.value)} /></Field>
+              </div>
+
+              <div style={{ fontWeight: 900 }}>2D1N</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJr} onChange={(e) => setG2d1nJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSr} onChange={(e) => setG2d1nSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nLead} onChange={(e) => setG2d1nLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nJrEmcee} onChange={(e) => setG2d1nJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g2d1nSrEmcee} onChange={(e) => setG2d1nSrEmcee(e.target.value)} /></Field>
+              </div>
+
+              <div style={{ fontWeight: 900 }}>3D2N</div>
+              <div style={styles.grid5}>
+                <Field label="Junior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJr} onChange={(e) => setG3d2nJr(e.target.value)} /></Field>
+                <Field label="Senior (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSr} onChange={(e) => setG3d2nSr(e.target.value)} /></Field>
+                <Field label="Lead Host (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nLead} onChange={(e) => setG3d2nLead(e.target.value)} /></Field>
+                <Field label="Junior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nJrEmcee} onChange={(e) => setG3d2nJrEmcee(e.target.value)} /></Field>
+                <Field label="Senior Emcee (RM)"><input style={styles.input} inputMode="decimal" value={g3d2nSrEmcee} onChange={(e) => setG3d2nSrEmcee(e.target.value)} /></Field>
+              </div>
+            </div>
+          </details>
         </Panel>
       )}
 
@@ -1418,16 +1525,88 @@ export default function Admin({ navigate, user }) {
           subtitle="Per-job wage settings (same meaning as JobModal), but cleaner layout."
           right={
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              {headerPills2}
+              {headerPills}
               <button className="btn primary" onClick={saveConfig} disabled={!job}>
                 Save Configuration
               </button>
             </div>
           }
         >
-          {/* (Your Rate & Job Config UI stays the same as before — keep your original block) */}
-          <div style={{ color: "#6b7280", fontSize: 12 }}>
-            (Keep your existing Rate & Job Config UI block here.)
+          <div style={styles.grid2}>
+            <Field label="Select Job">
+              <select
+                style={styles.select}
+                value={selectedId}
+                onChange={(e) => setSelectedId(e.target.value)}
+              >
+                <option value="">Select a job…</option>
+                {jobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.title}
+                  </option>
+                ))}
+              </select>
+              {job ? (
+                <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                  <div><b>Venue:</b> {job.venue || "-"}</div>
+                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
+                </div>
+              ) : null}
+            </Field>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={styles.grid2}>
+                <Field label="Session Type">
+                  <select style={styles.select} value={sessionMode} onChange={(e) => setSessionMode(e.target.value)}>
+                    <option value="virtual">Virtual</option>
+                    <option value="physical">Physical</option>
+                  </select>
+                </Field>
+
+                <Field label="Physical Subtype">
+                  <select
+                    style={styles.select}
+                    value={physicalType}
+                    onChange={(e) => setPhysicalType(e.target.value)}
+                    disabled={sessionMode !== "physical"}
+                  >
+                    <option value="half_day">Half Day</option>
+                    <option value="full_day">Full Day</option>
+                    <option value="2d1n">2D1N</option>
+                    <option value="3d2n">3D2N</option>
+                    <option value="hourly_by_role">Hourly (by role)</option>
+                    <option value="hourly_flat">Backend (flat hourly for all)</option>
+                  </select>
+                </Field>
+              </div>
+
+              <Field
+                label="Parking Allowance (RM)"
+                hint={
+                  job?.transportOptions?.bus
+                    ? "Applied only when ATAG Transport is selected."
+                    : "ATAG Transport isn't enabled on this job — allowance won’t apply."
+                }
+              >
+                <input
+                  style={styles.input}
+                  inputMode="decimal"
+                  value={parkingAllowance}
+                  onChange={(e) => setParkingAllowance(e.target.value)}
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div style={{ height: 14 }} />
+
+          <div style={{ border: "1px solid #eef2f7", borderRadius: 16, padding: 14 }}>
+            <div style={{ fontWeight: 900, marginBottom: 10 }}>Wage Settings (matches JobModal)</div>
+            <PaymentBlock />
+          </div>
+
+          <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280" }}>
+            Note: Payroll tab shows <b>part-timers only</b> (full-timers removed as requested).
           </div>
         </Panel>
       )}
@@ -1436,7 +1615,7 @@ export default function Admin({ navigate, user }) {
       {tab === "payroll" && (
         <Panel
           title="Payroll Summary"
-          subtitle="Admin can view receipts + browse with left/right arrows."
+          subtitle="Now includes Parking Receipt view + exported CSV includes receipt URL."
           right={
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>
@@ -1447,7 +1626,11 @@ export default function Admin({ navigate, user }) {
         >
           <div style={styles.grid2}>
             <Field label="Selected Job">
-              <select style={styles.select} value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+              <select
+                style={styles.select}
+                value={selectedId}
+                onChange={(e) => setSelectedId(e.target.value)}
+              >
                 <option value="">Select a job…</option>
                 {jobs.map((j) => (
                   <option key={j.id} value={j.id}>
@@ -1457,30 +1640,29 @@ export default function Admin({ navigate, user }) {
               </select>
               {job ? (
                 <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
-                  <div>
-                    <b>When:</b> {fmtRange(job.startTime, job.endTime)}
-                  </div>
-                  <div>
-                    <b>Status:</b> {job.status || "-"}
-                  </div>
+                  <div><b>When:</b> {fmtRange(job.startTime, job.endTime)}</div>
+                  <div><b>Status:</b> {job.status || "-"}</div>
                 </div>
               ) : null}
             </Field>
 
             <Field label="Search">
-              <input style={styles.input} placeholder="Search name / email / phone…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input
+                style={styles.input}
+                placeholder="Search name / email / phone…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
             </Field>
           </div>
 
-          {/* Job details */}
+          {/* ✅ Job details at top (session type + pay + early call / loading) */}
           {job ? (
             <div style={{ ...styles.details, marginTop: 12 }}>
               <div style={{ fontWeight: 900, marginBottom: 8 }}>Job Details</div>
               <div style={{ display: "grid", gap: 6, fontSize: 12, color: "#111827", lineHeight: 1.6 }}>
                 {payrollMetaUI.map(([k, v]) => (
-                  <div key={k}>
-                    <b>{k}:</b> {v}
-                  </div>
+                  <div key={k}><b>{k}:</b> {v}</div>
                 ))}
               </div>
             </div>
@@ -1492,54 +1674,29 @@ export default function Admin({ navigate, user }) {
             <table width="100%" cellPadding="10" style={{ borderCollapse: "separate", borderSpacing: 0 }}>
               <thead>
                 <tr style={{ background: "#f9fafb" }}>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb", width: 40 }}>
-                    #
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Name
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Email
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Phone
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Transport
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Scan In
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Scan Out
-                  </th>
-                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Parking Receipt
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Session Pay
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Allowances
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Gross
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Deduct
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Net
-                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb", width: 40 }}>#</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Name</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Email</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Phone</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Transport</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan In</th>
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Scan Out</th>
+
+                  {/* ✅ NEW */}
+                  <th align="left" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Parking Receipt</th>
+
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Session Pay</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Allowances</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Gross</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Deduct</th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>Net</th>
                 </tr>
               </thead>
 
               <tbody>
                 {rows.map((r, idx) => (
                   <tr key={r.userId} style={{ borderTop: "1px solid #eef2f7" }}>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {idx + 1}.
-                    </td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{idx + 1}.</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.name}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.email}</td>
                     <td style={{ borderTop: "1px solid #eef2f7" }}>{r.phone}</td>
@@ -1547,36 +1704,37 @@ export default function Admin({ navigate, user }) {
                     <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanIn || "-"}</td>
                     <td style={{ borderTop: "1px solid #eef2f7", whiteSpace: "nowrap" }}>{r.scanOut || "-"}</td>
 
+                    {/* ✅ NEW */}
                     <td style={{ borderTop: "1px solid #eef2f7" }}>
                       {r.receiptUrl ? (
                         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ ...styles.pill("#ecfdf5", "#065f46"), border: "1px solid #6ee7b7", fontWeight: 900 }}>
+                          <span
+                            style={{
+                              ...styles.pill("#ecfdf5", "#065f46"),
+                              border: "1px solid #6ee7b7",
+                              fontWeight: 900,
+                            }}
+                          >
                             Uploaded
                           </span>
-
-                          {/* ✅ Admin only */}
-                          {user?.role === "admin" ? (
-                            <button className="btn" onClick={() => openGalleryAtUser(r.userId)}>
-                              View
-                            </button>
-                          ) : (
-                            <span style={{ color: "#6b7280", fontSize: 12 }}>Admin only</span>
-                          )}
+                          <button
+                            className="btn"
+                            onClick={() => {
+                              setImgTitle(`Parking Receipt — ${r.name}`);
+                              setImgOpen(r.receiptUrl);
+                            }}
+                          >
+                            View
+                          </button>
                         </div>
                       ) : (
                         <span style={{ color: "#6b7280" }}>-</span>
                       )}
                     </td>
 
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {money(r._specific)}
-                    </td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {money(r._allowances)}
-                    </td>
-                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                      {money(r.wageGross)}
-                    </td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._specific)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r._allowances)}</td>
+                    <td style={{ borderTop: "1px solid #eef2f7" }} align="right">{money(r.wageGross)}</td>
 
                     <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
                       <input
@@ -1618,10 +1776,10 @@ export default function Admin({ navigate, user }) {
         </Panel>
       )}
 
-      {/* ✅ Receipt Gallery Modal (Admin) */}
-      {galleryOpen && galleryHasItems && (
+      {/* ✅ NEW: Receipt Image Preview Modal */}
+      {imgOpen && (
         <div
-          onClick={closeGallery}
+          onClick={() => setImgOpen(null)}
           style={{
             position: "fixed",
             inset: 0,
@@ -1637,91 +1795,46 @@ export default function Admin({ navigate, user }) {
             className="card"
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: "min(980px, 96vw)",
+              width: "min(900px, 96vw)",
               padding: 12,
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-              <div style={{ display: "grid", gap: 2 }}>
-                <div style={{ fontWeight: 900 }}>
-                  Parking Receipt — {galleryItems[galleryIdx]?.name || "-"}
-                </div>
-                <div style={{ fontSize: 12, color: "#6b7280" }}>
-                  {galleryIdx + 1} / {galleryItems.length} • (← / → to navigate, Esc to close)
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div style={{ fontWeight: 900 }}>{imgTitle || "Parking Receipt"}</div>
+              <div style={{ display: "flex", gap: 8 }}>
                 <button
                   className="btn"
                   onClick={() => {
                     try {
-                      window.open(galleryItems[galleryIdx]?.url, "_blank", "noopener,noreferrer");
+                      window.open(imgOpen, "_blank", "noopener,noreferrer");
                     } catch {}
                   }}
                 >
                   Open
                 </button>
-                <button className="btn" onClick={closeGallery}>
+                <button className="btn" onClick={() => setImgOpen(null)}>
                   Close
                 </button>
               </div>
             </div>
 
-            <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "48px 1fr 48px", gap: 10, alignItems: "center" }}>
-              <button
-                className="btn"
+            <div style={{ marginTop: 10 }}>
+              <img
+                src={imgOpen}
+                alt="receipt"
                 style={{
-                  ...styles.navBtn,
-                  ...(galleryIdx === 0 ? styles.navBtnDisabled : {}),
+                  width: "100%",
+                  maxHeight: "75vh",
+                  objectFit: "contain",
+                  borderRadius: 12,
+                  border: "1px solid #eee",
+                  background: "#fff",
                 }}
-                onClick={goPrev}
-                disabled={galleryIdx === 0}
-                title="Previous"
-              >
-                ←
-              </button>
-
-              <div style={{ display: "grid", gap: 8 }}>
-                <img
-                  src={galleryItems[galleryIdx]?.url}
-                  alt="receipt"
-                  style={{
-                    width: "100%",
-                    maxHeight: "75vh",
-                    objectFit: "contain",
-                    borderRadius: 12,
-                    border: "1px solid #eee",
-                    background: "#fff",
-                  }}
-                />
-
-                <div style={{ fontSize: 12, color: "#6b7280", display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <span>
-                    <b>User:</b> {galleryItems[galleryIdx]?.name || "-"}
-                  </span>
-                  <span>
-                    <b>Email:</b> {galleryItems[galleryIdx]?.email || "-"}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                className="btn"
-                style={{
-                  ...styles.navBtn,
-                  ...(galleryIdx === galleryItems.length - 1 ? styles.navBtnDisabled : {}),
-                }}
-                onClick={goNext}
-                disabled={galleryIdx === galleryItems.length - 1}
-                title="Next"
-              >
-                →
-              </button>
+              />
             </div>
 
             <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-              If image is broken, your backend might require an authenticated URL or a dedicated receipt endpoint.
+              If you see a broken image, your backend might require an authenticated URL or a dedicated receipt endpoint.
             </div>
           </div>
         </div>
