@@ -248,6 +248,8 @@
   /* ========================== Page ========================== */
   export default function MyJobs({ navigate, user }) {
     const [jobs, setJobs] = useState([]);
+    const fileInputRefs = useRef({}); // { [jobId]: HTMLInputElement } 
+    const openPicker = (jobId) => fileInputRefs.current?.[jobId]?.click();
   
     // live user location
     const [loc, setLoc] = useState(null); // { lat, lng, acc, ts }
