@@ -195,7 +195,7 @@ const BTN_BLACK_STYLE = { background: "#000", color: "#fff", borderColor: "#000"
 const GEO_OPTS = { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 };
 
 /* ---- Parking receipt upload helpers ---- */
-const MAX_RECEIPT_BYTES = 3 * 1024 * 1024; // keep safe for JSON base64 uploads (server json limit ~5mb)
+const MAX_RECEIPT_BYTES = 3 * 1024 * 1024; // note: base64 expands ~33%, still ok under server json limit 5mb
 async function fileToDataUrl(file) {
   return await new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -213,6 +213,20 @@ function getParkingReceiptUrl(job) {
     job?.myParkingReceipt ||
     null
   );
+}
+function toNiceErr(e) {
+  const raw = String(e?.payload?.error || e?.message || e || "");
+  // Express 404 html: "Cannot POST /jobs/xxx/parking-receipt"
+  if (raw.includes("Cannot POST") && raw.includes("/parking-receipt")) {
+    return "Backend route missing: POST /jobs/:id/parking-receipt (server needs update).";
+  }
+  // try JSON in string
+  try {
+    const j = JSON.parse(raw);
+    if (j?.error) return j.error;
+    if (j?.message) return j.message;
+  } catch {}
+  return raw || "Upload failed. Please try again.";
 }
 
 /* ========================== Page ========================== */
@@ -238,6 +252,12 @@ export default function MyJobs({ navigate, user }) {
   const [receiptDraft, setReceiptDraft] = useState({});
   const [imgOpen, setImgOpen] = useState(null); // url/dataUrl for preview modal
 
+  // ✅ force-remount file input so "Clear" really clears
+  const [receiptInputKey, setReceiptInputKey] = useState({}); // { [jobId]: number }
+  function bumpInputKey(jobId) {
+    setReceiptInputKey((prev) => ({ ...prev, [jobId]: (prev[jobId] || 0) + 1 }));
+  }
+
   function setReceipt(jobId, patch) {
     setReceiptDraft((prev) => ({
       ...prev,
@@ -250,6 +270,7 @@ export default function MyJobs({ navigate, user }) {
       delete next[jobId];
       return next;
     });
+    bumpInputKey(jobId); // ✅ resets file input
   }
 
   // load "my jobs"
@@ -461,13 +482,26 @@ export default function MyJobs({ navigate, user }) {
   async function onPickReceipt(jobId, file) {
     if (!file) return;
 
-    if (!String(file.type || "").startsWith("image/")) {
+    // allow browsers that give empty mime sometimes; still block non-image filenames
+    const mime = String(file.type || "");
+    const lowerName = String(file.name || "").toLowerCase();
+    const looksLikeImage =
+      mime.startsWith("image/") ||
+      lowerName.endsWith(".jpg") ||
+      lowerName.endsWith(".jpeg") ||
+      lowerName.endsWith(".png") ||
+      lowerName.endsWith(".webp") ||
+      lowerName.endsWith(".heic") ||
+      lowerName.endsWith(".heif");
+
+    if (!looksLikeImage) {
       setReceipt(jobId, {
-        error: "Please select an image file (jpg/png/heic).",
+        error: "Please select an image file (jpg/png/webp/heic).",
         okMsg: null,
       });
       return;
     }
+
     if (file.size > MAX_RECEIPT_BYTES) {
       setReceipt(jobId, {
         error: `Image is too large. Max ${(MAX_RECEIPT_BYTES / 1024 / 1024).toFixed(0)}MB.`,
@@ -503,9 +537,7 @@ export default function MyJobs({ navigate, user }) {
     try {
       setReceipt(jobId, { uploading: true, error: null, okMsg: null });
 
-      // ✅ Backend endpoint suggestion:
       // POST /jobs/:id/parking-receipt
-      // body: { imageDataUrl, fileName, mime }
       const res = await apiPost(`/jobs/${jobId}/parking-receipt`, {
         imageDataUrl: d.dataUrl,
         fileName: d.fileName,
@@ -523,30 +555,18 @@ export default function MyJobs({ navigate, user }) {
         setJobs((old) =>
           old.map((x) =>
             x.id === jobId
-              ? {
-                  ...x,
-                  parkingReceiptUrl: url,
-                  parkingReceiptImageUrl: x.parkingReceiptImageUrl || undefined,
-                }
+              ? { ...x, parkingReceiptUrl: url }
               : x
           )
         );
       }
 
-      setReceipt(jobId, {
-        uploading: false,
-        error: null,
-        okMsg: "Uploaded ✅",
-      });
+      setReceipt(jobId, { uploading: false, error: null, okMsg: "Uploaded ✅" });
 
-      // keep preview, but you can clear it if you want:
-      // clearReceipt(jobId);
+      // optional: clear local draft after upload (recommended)
+      clearReceipt(jobId);
     } catch (e) {
-      const msg =
-        e?.payload?.error ||
-        e?.message ||
-        "Upload failed. Please try again.";
-      setReceipt(jobId, { uploading: false, error: msg, okMsg: null });
+      setReceipt(jobId, { uploading: false, error: toNiceErr(e), okMsg: null });
     }
   }
 
@@ -712,6 +732,7 @@ export default function MyJobs({ navigate, user }) {
                               }}
                             >
                               <input
+                                key={`${j.id}-${receiptInputKey[j.id] || 0}`}  // ✅ remount on clear
                                 type="file"
                                 accept="image/*"
                                 capture="environment"
