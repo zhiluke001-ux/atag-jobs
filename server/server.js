@@ -26,8 +26,13 @@ app.use(morgan("dev"));
 /* ---- uploads (images) ---- */
 const uploadsRoot = path.join(__dirname, "data", "uploads");
 const avatarsDir = path.join(uploadsRoot, "avatars");
+const verificationsDir = path.join(uploadsRoot, "verifications");
+
 fs.ensureDirSync(avatarsDir);
+fs.ensureDirSync(verificationsDir);
+
 app.use("/uploads", express.static(uploadsRoot));
+
 
 /* ---------------- DB + defaults ---------------- */
 let db = await loadDB();
@@ -532,6 +537,28 @@ for (const u of db.users) {
     u.avatarUrl = "";
     mutated = true;
   }
+    // ✅ verification defaults (existing users remain usable)
+  if (u.verified === undefined) {
+    u.verified = true; // IMPORTANT: keep old users verified
+    mutated = true;
+  }
+  if (u.verificationStatus === undefined) {
+    u.verificationStatus = u.verified ? "APPROVED" : "PENDING";
+    mutated = true;
+  }
+  if (u.verificationPhotoUrl === undefined) {
+    u.verificationPhotoUrl = "";
+    mutated = true;
+  }
+  if (u.verifiedAt === undefined) {
+    u.verifiedAt = null;
+    mutated = true;
+  }
+  if (u.verifiedBy === undefined) {
+    u.verifiedBy = null;
+    mutated = true;
+  }
+
 }
 if (mutated) await saveDB(db);
 
@@ -720,6 +747,32 @@ async function sendResetEmail(to, link) {
   console.log("[sendResetEmail] no email provider configured, link:", link);
 }
 
+function saveDataUrlImage(dataUrl, absDir, fileBaseNoExt) {
+  const s = String(dataUrl || "");
+  const m = s.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
+  if (!m) throw new Error("invalid_image_data");
+
+  const mime = m[1];
+  const extRaw = m[2].toLowerCase();
+  const ext = extRaw === "jpeg" ? "jpg" : extRaw;
+
+  const b64 = m[3];
+  const buf = Buffer.from(b64, "base64");
+
+  // keep it smaller so your JSON payload stays safe
+  const MAX = 2 * 1024 * 1024; // 2MB
+  if (buf.length > MAX) throw new Error("image_too_large");
+
+  fs.ensureDirSync(absDir);
+  const filename = `${fileBaseNoExt}.${ext}`;
+  const abs = path.join(absDir, filename);
+  fs.writeFileSync(abs, buf);
+
+  // served by /uploads static
+  return `/uploads/verifications/${filename}?v=${Date.now()}`;
+}
+
+
 /* -------------- auth --------------- */
 
 app.post("/login", async (req, res) => {
@@ -734,6 +787,15 @@ app.post("/login", async (req, res) => {
   if (!verifyPassword(password, user.passwordHash)) {
     return res.status(401).json({ error: "invalid_password" });
   }
+
+    if (!user.verified) {
+    return res.status(403).json({
+      error: "pending_verification",
+      code: "PENDING_VERIFICATION"
+    });
+  }
+
+  
 
   const token = signUserToken(user);
   addAudit("login", { identifier: id }, { user });
@@ -754,37 +816,54 @@ app.post("/login", async (req, res) => {
 });
 
 app.post("/register", async (req, res) => {
-  const { email, username, name, password, role, phone, discord } =
-    req.body || {};
-  if (!email || !password)
-    return res
-      .status(400)
-      .json({ error: "email_and_password_required" });
+  const {
+    email,
+    username,
+    name,
+    password,
+    role,
+    phone,
+    discord,
+    verificationDataUrl
+  } = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "email_and_password_required" });
+  }
+
+  // ✅ MUST upload verification photo
+  if (!verificationDataUrl || typeof verificationDataUrl !== "string") {
+    return res.status(400).json({ error: "verification_photo_required" });
+  }
 
   const pickedRole = clampRole(role || "part-timer");
 
   const emailLower = String(email).toLowerCase();
-  if (
-    db.users.find(
-      (u) => String(u.email || "").toLowerCase() === emailLower
-    )
-  ) {
+  if (db.users.find((u) => String(u.email || "").toLowerCase() === emailLower)) {
     return res.status(409).json({ error: "email_taken" });
   }
+
   if (username) {
     const userLower = String(username).toLowerCase();
-    if (
-      db.users.find(
-        (u) => String(u.username || "").toLowerCase() === userLower
-      )
-    ) {
+    if (db.users.find((u) => String(u.username || "").toLowerCase() === userLower)) {
       return res.status(409).json({ error: "username_taken" });
     }
   }
 
   const id = "u" + Math.random().toString(36).slice(2, 10);
-  const finalUsername = username || email.split("@")[0];
+  const finalUsername = username || String(email).split("@")[0];
   const passwordHash = hashPassword(password);
+
+  let verificationPhotoUrl = "";
+  try {
+    verificationPhotoUrl = saveDataUrlImage(
+      verificationDataUrl,
+      verificationsDir,
+      `${id}-${Date.now()}`
+    );
+  } catch (e) {
+    return res.status(400).json({ error: e?.message || "invalid_verification_photo" });
+  }
 
   const newUser = {
     id,
@@ -796,15 +875,25 @@ app.post("/register", async (req, res) => {
     passwordHash,
     phone: String(phone || ""),
     discord: String(discord || ""),
-    avatarUrl: ""
+    avatarUrl: "",
+
+    // ✅ verification gate
+    verified: false,
+    verificationStatus: "PENDING",
+    verificationPhotoUrl,
+    verifiedAt: null,
+    verifiedBy: null
   };
+
   db.users.push(newUser);
   await saveDB(db);
-  addAudit("register", { email, role: pickedRole }, { user: newUser });
+  addAudit("register_pending_verification", { email, role: pickedRole }, { user: newUser });
 
-  const token = signUserToken(newUser);
+  // ✅ IMPORTANT: DO NOT return token.
+  // User cannot log in until admin verifies.
   res.json({
-    token,
+    ok: true,
+    pending: true,
     user: {
       id,
       email,
@@ -814,10 +903,14 @@ app.post("/register", async (req, res) => {
       username: newUser.username,
       phone: newUser.phone,
       discord: newUser.discord,
-      avatarUrl: newUser.avatarUrl
+      avatarUrl: newUser.avatarUrl,
+      verified: newUser.verified,
+      verificationStatus: newUser.verificationStatus,
+      verificationPhotoUrl: newUser.verificationPhotoUrl
     }
   });
 });
+
 
 /* ---- forgot + reset password ---- */
 app.post("/forgot-password", async (req, res) => {
@@ -1024,17 +1117,25 @@ app.get(
   authMiddleware,
   requireRole("admin"),
   (_req, res) => {
-    const list = (db.users || []).map((u) => ({
-      id: u.id,
-      email: u.email,
-      username: u.username,
-      name: u.name,
-      role: u.role,
-      grade: u.grade || "junior",
-      phone: u.phone || "",
-      discord: u.discord || "",
-      avatarUrl: u.avatarUrl || ""
-    }));
+   const list = (db.users || []).map((u) => ({
+  id: u.id,
+  email: u.email,
+  username: u.username,
+  name: u.name,
+  role: u.role,
+  grade: u.grade || "junior",
+  phone: u.phone || "",
+  discord: u.discord || "",
+  avatarUrl: u.avatarUrl || "",
+
+  // ✅ verification info
+  verified: !!u.verified,
+  verificationStatus: u.verificationStatus || (u.verified ? "APPROVED" : "PENDING"),
+  verificationPhotoUrl: u.verificationPhotoUrl || "",
+  verifiedAt: u.verifiedAt || null,
+  verifiedBy: u.verifiedBy || null
+}));
+
     res.json(list);
   }
 );
@@ -1047,7 +1148,7 @@ app.patch(
     const target = db.users.find((u) => u.id === req.params.id);
     if (!target) return res.status(404).json({ error: "user_not_found" });
 
-    const { role, grade } = req.body || {};
+    const { role, grade, verified, verificationStatus } = req.body || {};
     const before = { role: target.role, grade: target.grade || "junior" };
 
     if (role && clampRole(role) !== "admin" && target.role === "admin") {
@@ -1061,6 +1162,33 @@ app.patch(
     if (role !== undefined) target.role = clampRole(role);
     if (grade !== undefined) target.grade = clampGrade(grade); // ✅ use clampGrade
 
+    // ✅ verification approve/reject
+if (verified !== undefined) {
+  target.verified = !!verified;
+  target.verificationStatus = target.verified ? "APPROVED" : (target.verificationStatus || "PENDING");
+  target.verifiedAt = target.verified ? dayjs().toISOString() : null;
+  target.verifiedBy = target.verified ? req.user.id : null;
+}
+
+if (verificationStatus !== undefined) {
+  const s = String(verificationStatus || "").toUpperCase();
+  if (!["PENDING", "APPROVED", "REJECTED"].includes(s)) {
+    return res.status(400).json({ error: "bad_verificationStatus" });
+  }
+  target.verificationStatus = s;
+  if (s === "APPROVED") {
+    target.verified = true;
+    target.verifiedAt = dayjs().toISOString();
+    target.verifiedBy = req.user.id;
+  }
+  if (s === "REJECTED" || s === "PENDING") {
+    target.verified = false;
+    target.verifiedAt = null;
+    target.verifiedBy = null;
+  }
+}
+
+    
     await saveDB(db);
     addAudit(
       "admin_update_user_role_grade",
@@ -1075,7 +1203,7 @@ app.patch(
     try {
       await notifyUsers([target.id], {
         title: "Your account was updated",
-        body: `Role: ${target.role} • Grade: ${target.grade || "junior"}`,
+        body: `Role: ${target.role} • Grade: ${target.grade || "junior"} • Verified: ${target.verified ? "YES" : "NO"}`,
         link: "/#/",
         type: "account_update"
       });
@@ -1093,6 +1221,12 @@ app.patch(
         phone: target.phone || "",
         discord: target.discord || "",
         avatarUrl: target.avatarUrl || ""
+        verified: !!target.verified,
+        verificationStatus: target.verificationStatus || (target.verified ? "APPROVED" : "PENDING"),
+        verificationPhotoUrl: target.verificationPhotoUrl || "",
+        verifiedAt: target.verifiedAt || null,
+        verifiedBy: target.verifiedBy || null
+
       }
     });
   }
