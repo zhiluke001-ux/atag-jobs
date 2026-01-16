@@ -211,99 +211,49 @@ function normalizeErr(e) {
   }
 }
 
-/* ---------- Receipt helpers (FIX) ---------- */
-const API_BASE = (() => {
+/* ---------- receipt URL helpers (FIX) ---------- */
+const API_BASE_CLEAN = (() => {
   try {
-    const v =
-      import.meta?.env?.VITE_API_BASE_URL ||
-      import.meta?.env?.VITE_API_URL ||
-      import.meta?.env?.VITE_API_BASE ||
-      "";
-    return String(v || "").trim();
+    const v = import.meta?.env?.VITE_API_BASE || import.meta?.env?.VITE_API_URL || "";
+    return String(v || "").replace(/\/$/, "");
   } catch {
     return "";
   }
 })();
 
-function absolutizeUrl(u) {
-  if (!u) return "";
-  const s = String(u).trim();
-  if (!s) return "";
-  if (/^https?:\/\//i.test(s) || s.startsWith("data:") || s.startsWith("blob:")) return s;
-  if (s.startsWith("//")) return `${window.location.protocol}${s}`;
-
-  // "/uploads/xx" or "uploads/xx"
-  if (API_BASE) {
-    const base = API_BASE.replace(/\/$/, "");
-    if (s.startsWith("/")) return `${base}${s}`;
-    return `${base}/${s.replace(/^\.\//, "")}`;
-  }
-
-  // if you are proxying API via same origin, this is ok
-  return s;
-}
-
-function normalizeReceiptResponse(resp) {
-  if (!resp) return null;
-
-  // common shapes
-  const cand =
-    resp?.receipt ??
-    resp?.parkingReceipt ??
-    resp?.data ??
-    resp;
-
-  if (!cand) return null;
-
-  // sometimes returns list
-  if (Array.isArray(cand)) return cand[0] || null;
-
-  // if string URL
-  if (typeof cand === "string") return { photoUrl: cand };
-
-  return cand;
-}
-
-function extractReceiptImageUrl(receipt) {
-  if (!receipt) return "";
-
-  // nested objects support
-  const nested =
-    receipt?.photo ||
-    receipt?.file ||
-    receipt?.image ||
-    receipt?.attachment ||
-    null;
-
+function pickReceiptUrl(r) {
+  if (!r) return "";
   const candidates = [
-    receipt?.photoUrlAbs,
-    receipt?.photoUrl,
-    receipt?.photoURL,
-    receipt?.imageUrl,
-    receipt?.imageURL,
-    receipt?.url,
-    receipt?.publicUrl,
-    receipt?.publicURL,
-    receipt?.downloadUrl,
-    receipt?.downloadURL,
-    receipt?.fileUrl,
-    receipt?.fileURL,
-    receipt?.photo_url,
-    receipt?.photo_path,
-    receipt?.photoPath,
-    receipt?.path,
-    receipt?.storagePath,
-    receipt?.key,
-    nested?.photoUrlAbs,
-    nested?.photoUrl,
-    nested?.url,
-    nested?.publicUrl,
-    nested?.downloadUrl,
-    nested?.path,
-    nested?.key,
+    r.photoUrlAbs,
+    r.photo_url_abs,
+    r.photoUrlSigned,
+    r.signedUrl,
+    r.signed_url,
+    r.publicUrl,
+    r.public_url,
+    r.url,
+    r.imageUrl,
+    r.image_url,
+    r.photoUrl,
+    r.photo_url,
+    r.photo?.url,
+    r.photo?.publicUrl,
+    r.photo?.signedUrl,
+    r.fileUrl,
+    r.file_url,
   ].filter(Boolean);
 
-  return absolutizeUrl(candidates[0] || "");
+  const u = candidates.find((x) => typeof x === "string" && x.trim());
+  return u ? u.trim() : "";
+}
+
+function toAbsUrl(u) {
+  if (!u) return "";
+  const s = String(u);
+  if (/^data:/i.test(s) || /^https?:\/\//i.test(s)) return s;
+  if (s.startsWith("//")) return window.location.protocol + s;
+  if (API_BASE_CLEAN) return API_BASE_CLEAN + (s.startsWith("/") ? s : `/${s}`);
+  return s; // fallback (might be broken if backend returns relative and API_BASE not set)
 }
 
 /* ========================== Page ========================== */
@@ -326,7 +276,7 @@ export default function MyJobs({ navigate, user }) {
 
   // Parking receipt states (per job)
   const [myReceipts, setMyReceipts] = useState({}); // { [jobId]: receiptObj }
-  const [receiptDrafts, setReceiptDrafts] = useState({}); // { [jobId]: {fileName,dataUrl,amount,note,uploading,error,okMsg,viewing} }
+  const [receiptDrafts, setReceiptDrafts] = useState({}); // { [jobId]: {fileName,dataUrl,amount,note,uploading,error,okMsg} }
   const receiptFileRef = useRef({}); // { [jobId]: HTMLInputElement }
 
   const isPT = isPartTimerUser(user);
@@ -390,37 +340,17 @@ export default function MyJobs({ navigate, user }) {
 
   async function refreshMyReceipt(jobId) {
     try {
-      // cache-bust to avoid stale 404 caching
-      const r = await apiGet(`/jobs/${jobId}/parking-receipt/me?_=${Date.now()}`);
-      const receipt = normalizeReceiptResponse(r);
+      const r = await apiGet(`/jobs/${jobId}/parking-receipt/me`);
+      const receipt =
+        r?.receipt ??
+        r?.data?.receipt ??
+        r?.data ??
+        r;
+
       if (receipt) setMyReceipts((prev) => ({ ...prev, [jobId]: receipt }));
       return receipt || null;
     } catch {
-      // no receipt yet (or endpoint returns 404) — ignore
       return null;
-    }
-  }
-
-  async function viewMyReceipt(jobId) {
-    setDraft(jobId, { error: "", okMsg: "", viewing: true });
-
-    try {
-      // ensure latest receipt
-      const latest = (await refreshMyReceipt(jobId)) || myReceipts[jobId];
-      const url = extractReceiptImageUrl(latest);
-
-      if (!url) {
-        setDraft(jobId, {
-          viewing: false,
-          error: "Receipt is uploaded, but image URL is missing in API response. Check backend response keys (photoUrl/photoUrlAbs/publicUrl).",
-        });
-        return;
-      }
-
-      window.open(url, "_blank", "noopener,noreferrer");
-      setDraft(jobId, { viewing: false });
-    } catch (e) {
-      setDraft(jobId, { viewing: false, error: normalizeErr(e) || "Failed to open receipt." });
     }
   }
 
@@ -445,9 +375,32 @@ export default function MyJobs({ navigate, user }) {
 
       const res = await apiPost(`/jobs/${jobId}/parking-receipt`, payload);
 
-      // server might return {ok:true, receipt:{...}} or just receipt
-      const receipt = normalizeReceiptResponse(res);
-      if (receipt) setMyReceipts((prev) => ({ ...prev, [jobId]: receipt }));
+      // If POST returns a usable URL, store it optimistically
+      const maybeReceipt =
+        res?.receipt ??
+        res?.data?.receipt ??
+        res?.data ??
+        res;
+
+      if (maybeReceipt && pickReceiptUrl(maybeReceipt)) {
+        setMyReceipts((prev) => ({ ...prev, [jobId]: maybeReceipt }));
+      }
+
+      // IMPORTANT FIX: await GET to fetch the real receipt w/ signed/absolute URL
+      const fresh = await refreshMyReceipt(jobId);
+
+      // fallback: if backend still doesn't return url, keep local preview so UI doesn't look empty
+      if (!fresh || !pickReceiptUrl(fresh)) {
+        setMyReceipts((prev) => ({
+          ...prev,
+          [jobId]: {
+            ...(fresh || maybeReceipt || {}),
+            _localPreview: true,
+            photoUrlAbs: d.dataUrl, // show what user uploaded, even if backend URL not ready
+            uploadedAt: Date.now(),
+          },
+        }));
+      }
 
       setDraft(jobId, {
         uploading: false,
@@ -458,9 +411,6 @@ export default function MyJobs({ navigate, user }) {
         // keep amount/note in case user wants to upload again
       });
       clearFileInput(jobId);
-
-      // re-fetch to guarantee latest server shape
-      await refreshMyReceipt(jobId);
     } catch (e) {
       const msg = normalizeErr(e);
 
@@ -511,15 +461,15 @@ export default function MyJobs({ navigate, user }) {
       await Promise.all(
         jobs.map(async (j) => {
           try {
-            const r = await apiGet(`/jobs/${j.id}/parking-receipt/me?_=${Date.now()}`);
-            const receipt = normalizeReceiptResponse(r);
+            const r = await apiGet(`/jobs/${j.id}/parking-receipt/me`);
+            const receipt = r?.receipt ?? r?.data?.receipt ?? r?.data ?? r;
             if (receipt) map[j.id] = receipt;
           } catch {
             // ignore: likely no receipt yet
           }
         })
       );
-      if (active) setMyReceipts((prev) => ({ ...prev, ...map }));
+      if (active && Object.keys(map).length) setMyReceipts((prev) => ({ ...prev, ...map }));
     })();
 
     return () => {
@@ -727,22 +677,12 @@ export default function MyJobs({ navigate, user }) {
             const ec = j.earlyCall || {};
             const payForViewer = buildPayForViewer(j, user);
 
-            const receiptRaw = myReceipts[j.id];
-            const receipt = normalizeReceiptResponse(receiptRaw);
+            const receipt = myReceipts[j.id];
             const draft = receiptDrafts[j.id] || {};
 
-            const receiptImg = extractReceiptImageUrl(receipt);
-
+            const receiptImg = toAbsUrl(pickReceiptUrl(receipt));
             const receiptUpdatedAt =
               receipt?.updatedAt || receipt?.createdAt || receipt?.uploadedAt || null;
-
-            const hasReceiptRecord =
-              !!receipt &&
-              (receiptImg ||
-                receipt?.id ||
-                receiptUpdatedAt ||
-                receipt?.amount != null ||
-                receipt?.note);
 
             return (
               <div key={j.id} className="card" style={{ marginBottom: 10 }}>
@@ -899,7 +839,7 @@ export default function MyJobs({ navigate, user }) {
                     <div style={{ fontWeight: 800 }}>Parking Receipt</div>
 
                     {/* Existing receipt */}
-                    {hasReceiptRecord ? (
+                    {receipt ? (
                       <div
                         style={{
                           border: "1px solid var(--border)",
@@ -912,8 +852,7 @@ export default function MyJobs({ navigate, user }) {
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ fontSize: 13, color: "#374151" }}>
-                            <strong>Status:</strong>{" "}
-                            {receiptImg ? "Uploaded" : "Uploaded (missing image URL)"}
+                            <strong>Status:</strong> Uploaded
                             {receiptUpdatedAt ? (
                               <span style={{ color: "#6b7280" }}>
                                 {" "}
@@ -921,19 +860,20 @@ export default function MyJobs({ navigate, user }) {
                               </span>
                             ) : null}
                           </div>
-
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                             <button className="btn" onClick={() => refreshMyReceipt(j.id)}>
                               Refresh
                             </button>
-                            <button
+                            <a
                               className="btn"
-                              onClick={() => viewMyReceipt(j.id)}
-                              disabled={!!draft.viewing}
-                              title={!receiptImg ? "Trying to refresh and open…" : "Open receipt"}
+                              href={receiptImg || "#"}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={receiptImg ? "View receipt" : "Receipt URL not ready yet"}
+                              style={!receiptImg ? { opacity: 0.5, pointerEvents: "none" } : undefined}
                             >
-                              {draft.viewing ? "Opening…" : "View"}
-                            </button>
+                              View
+                            </a>
                           </div>
                         </div>
 
@@ -967,8 +907,7 @@ export default function MyJobs({ navigate, user }) {
                           />
                         ) : (
                           <div style={{ fontSize: 12, color: "#6b7280" }}>
-                            Backend returned a receipt record but no usable URL field. Update backend response to include
-                            one of: <code>photoUrlAbs</code>, <code>photoUrl</code>, <code>publicUrl</code>, or <code>url</code>.
+                            Receipt uploaded, but image URL not available yet. Tap <strong>Refresh</strong>.
                           </div>
                         )}
 
@@ -999,6 +938,11 @@ export default function MyJobs({ navigate, user }) {
                         </div>
 
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {draft.dataUrl ? (
+                            <a className="btn" href={draft.dataUrl} target="_blank" rel="noreferrer">
+                              View Selected
+                            </a>
+                          ) : null}
                           <button
                             className="btn"
                             onClick={() => {
