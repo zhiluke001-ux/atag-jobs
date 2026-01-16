@@ -211,6 +211,72 @@ function normalizeErr(e) {
   }
 }
 
+/* ---------- Receipt URL helpers (FIX) ---------- */
+const API_BASE_RAW =
+  // vite
+  (typeof import.meta !== "undefined" && import.meta.env && (
+    import.meta.env.VITE_API_BASE_URL ||
+    import.meta.env.VITE_API_BASE ||
+    import.meta.env.VITE_API_URL ||
+    import.meta.env.VITE_BACKEND_URL
+  )) ||
+  // CRA fallback
+  (typeof process !== "undefined" && process.env && (
+    process.env.REACT_APP_API_BASE_URL ||
+    process.env.REACT_APP_API_BASE ||
+    process.env.REACT_APP_API_URL
+  )) ||
+  "";
+
+const API_BASE = String(API_BASE_RAW || "").replace(/\/$/, "");
+
+function absifyUrl(u) {
+  const s = String(u || "").trim();
+  if (!s) return "";
+  if (s.startsWith("data:image/")) return s;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith("//")) return `${window.location.protocol}${s}`;
+  const base = API_BASE || window.location.origin;
+  if (s.startsWith("/")) return `${base}${s}`;
+  return `${base}/${s}`;
+}
+
+function unwrapReceiptResponse(r) {
+  // supports: {receipt:{...}}, {data:{receipt:{...}}}, receiptObj directly
+  return r?.receipt ?? r?.data?.receipt ?? r?.data ?? r ?? null;
+}
+
+function resolveReceiptImageUrl(receipt) {
+  if (!receipt) return "";
+
+  // include camelCase + snake_case + nested shapes
+  const candidates = [
+    receipt.photoUrlAbs,
+    receipt.photo_url_abs,
+    receipt.photoUrl,
+    receipt.photo_url,
+    receipt.url,
+    receipt.imageUrl,
+    receipt.image_url,
+    receipt.publicUrl,
+    receipt.public_url,
+    receipt.fileUrl,
+    receipt.file_url,
+    receipt.blobUrl,
+    receipt.blob_url,
+    receipt.downloadUrl,
+    receipt.download_url,
+    receipt.photo?.url,
+    receipt.photo?.publicUrl,
+    receipt.photo?.public_url,
+    receipt.dataUrl, // if backend returns base64
+    receipt.data_url,
+  ].filter(Boolean);
+
+  const picked = candidates.length ? String(candidates[0]) : "";
+  return absifyUrl(picked);
+}
+
 /* ========================== Page ========================== */
 export default function MyJobs({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
@@ -230,7 +296,7 @@ export default function MyJobs({ navigate, user }) {
   const [qrError, setQrError] = useState("");
 
   // Parking receipt states (per job)
-  const [myReceipts, setMyReceipts] = useState({}); // { [jobId]: receiptObj }
+  const [myReceipts, setMyReceipts] = useState({}); // { [jobId]: receiptObj | null }
   const [receiptDrafts, setReceiptDrafts] = useState({}); // { [jobId]: {fileName,dataUrl,amount,note,uploading,error,okMsg} }
   const receiptFileRef = useRef({}); // { [jobId]: HTMLInputElement }
 
@@ -296,10 +362,14 @@ export default function MyJobs({ navigate, user }) {
   async function refreshMyReceipt(jobId) {
     try {
       const r = await apiGet(`/jobs/${jobId}/parking-receipt/me`);
-      const receipt = r?.receipt || r;
-      if (receipt) setMyReceipts((prev) => ({ ...prev, [jobId]: receipt }));
+      const receipt = unwrapReceiptResponse(r);
+      // store null explicitly so UI knows we checked
+      setMyReceipts((prev) => ({ ...prev, [jobId]: receipt || null }));
+      return receipt || null;
     } catch {
-      // no receipt yet (or endpoint returns 404) — ignore
+      // if 404/no receipt, keep null (so it's "checked")
+      setMyReceipts((prev) => ({ ...prev, [jobId]: prev[jobId] ?? null }));
+      return null;
     }
   }
 
@@ -324,29 +394,31 @@ export default function MyJobs({ navigate, user }) {
 
       const res = await apiPost(`/jobs/${jobId}/parking-receipt`, payload);
 
-      // server might return {ok:true, receipt:{...}} or just receipt
-      const receipt = res?.receipt || res;
-      if (receipt) setMyReceipts((prev) => ({ ...prev, [jobId]: receipt }));
+      // try to store immediately if server returns receipt
+      const receiptFromPost = unwrapReceiptResponse(res);
+      if (receiptFromPost) setMyReceipts((prev) => ({ ...prev, [jobId]: receiptFromPost }));
+
+      // IMPORTANT: await refresh so UI has the latest (and correct url fields)
+      await refreshMyReceipt(jobId);
 
       setDraft(jobId, {
         uploading: false,
         okMsg: "Uploaded ✅",
         error: "",
-        dataUrl: "",
-        fileName: "",
-        // keep amount/note in case user wants to upload again
+        // Keep the preview until we actually have a server image URL.
+        // This avoids showing "No receipt uploaded yet" right after upload.
+        // User can still press Clear if they want.
       });
-      clearFileInput(jobId);
 
-      // also re-fetch to guarantee latest server shape
-      refreshMyReceipt(jobId);
+      // you can clear file input to allow selecting same file again
+      clearFileInput(jobId);
     } catch (e) {
       const msg = normalizeErr(e);
 
       let nice = "Failed to upload receipt.";
-      if (msg.includes("not_approved")) nice = "You are not approved for this job yet. Please contact PM.";
-      else if (msg.includes("image_too_large")) nice = "Image too large. Please upload < 2MB.";
-      else if (msg.includes("bad_data_url")) nice = "Invalid image format. Please re-select the image.";
+      if (String(msg).includes("not_approved")) nice = "You are not approved for this job yet. Please contact PM.";
+      else if (String(msg).includes("image_too_large")) nice = "Image too large. Please upload < 2MB.";
+      else if (String(msg).includes("bad_data_url")) nice = "Invalid image format. Please re-select the image.";
       else if (msg) nice = msg;
 
       setDraft(jobId, { uploading: false, error: nice });
@@ -391,14 +463,14 @@ export default function MyJobs({ navigate, user }) {
         jobs.map(async (j) => {
           try {
             const r = await apiGet(`/jobs/${j.id}/parking-receipt/me`);
-            const receipt = r?.receipt || r;
-            if (receipt) map[j.id] = receipt;
+            const receipt = unwrapReceiptResponse(r);
+            map[j.id] = receipt || null; // <-- store null so UI knows it was checked
           } catch {
-            // ignore: likely no receipt yet
+            map[j.id] = null;
           }
         })
       );
-      if (active && Object.keys(map).length) setMyReceipts((prev) => ({ ...prev, ...map }));
+      if (active) setMyReceipts((prev) => ({ ...prev, ...map }));
     })();
 
     return () => {
@@ -609,15 +681,17 @@ export default function MyJobs({ navigate, user }) {
             const receipt = myReceipts[j.id];
             const draft = receiptDrafts[j.id] || {};
 
+            // FIX: resolve server url robustly + absify
+            const receiptImgServer = resolveReceiptImageUrl(receipt);
+
+            // show draft preview if server url not ready
             const receiptImg =
-              receipt?.photoUrlAbs ||
-              receipt?.photoUrl ||
-              receipt?.url ||
-              receipt?.imageUrl ||
-              "";
+              receiptImgServer || (draft?.dataUrl?.startsWith("data:image/") ? draft.dataUrl : "");
 
             const receiptUpdatedAt =
               receipt?.updatedAt || receipt?.createdAt || receipt?.uploadedAt || null;
+
+            const hasServerReceipt = !!receiptImgServer;
 
             return (
               <div key={j.id} className="card" style={{ marginBottom: 10 }}>
@@ -773,7 +847,7 @@ export default function MyJobs({ navigate, user }) {
                   >
                     <div style={{ fontWeight: 800 }}>Parking Receipt</div>
 
-                    {/* Existing receipt */}
+                    {/* Existing receipt (server OR draft preview) */}
                     {receiptImg ? (
                       <div
                         style={{
@@ -787,7 +861,8 @@ export default function MyJobs({ navigate, user }) {
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ fontSize: 13, color: "#374151" }}>
-                            <strong>Status:</strong> Uploaded
+                            <strong>Status:</strong>{" "}
+                            {hasServerReceipt ? "Uploaded" : "Preview (not yet fetched)"}
                             {receiptUpdatedAt ? (
                               <span style={{ color: "#6b7280" }}>
                                 {" "}
@@ -973,7 +1048,6 @@ export default function MyJobs({ navigate, user }) {
                     </div>
                   </div>
                 )}
-
               </div>
             );
           })
