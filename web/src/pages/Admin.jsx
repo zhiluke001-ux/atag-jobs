@@ -52,6 +52,43 @@ const fmtDateTime = (value) => {
   }
 };
 
+// ✅ Canonicalize receipt URL so absolute + relative become the same string
+const isHttpLike = (u) => /^https?:\/\//i.test(String(u || ""));
+const isDataLike = (u) => /^data:/i.test(String(u || ""));
+
+function normalizeReceiptUrl(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (isDataLike(s)) return s;
+
+  // absolute url -> keep only pathname
+  if (isHttpLike(s)) {
+    try {
+      const u = new URL(s);
+      return (u.pathname || "").split("?")[0].split("#")[0] || "";
+    } catch {
+      // fallthrough
+    }
+  }
+
+  let p = s;
+
+  // handle weird cases where origin is embedded without protocol
+  const idx = p.indexOf("/uploads/");
+  if (idx > 0) p = p.slice(idx);
+
+  if (!p.startsWith("/")) p = "/" + p;
+
+  // strip query/hash
+  p = p.split("?")[0].split("#")[0];
+
+  // collapse double slashes
+  p = p.replace(/\/{2,}/g, "/");
+
+  return p;
+}
+
+
 /* =========================
    ✅ parking receipt resolver (MULTIPLE) + supports receiptIndex (ParkingReceipt table)
    ========================= */
@@ -90,7 +127,7 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
     }
   };
 
-  // 1) from attendance record (some backends store it here)
+  // 1) from attendance record
   pushVal(attendanceRec?.parkingReceiptUrl);
   pushVal(attendanceRec?.receiptUrl);
   pushVal(attendanceRec?.parkingReceipt);
@@ -110,7 +147,7 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
   pushVal(appRec?.addOns?.parkingReceipts);
   pushVal(appRec?.addOns?.receipts);
 
-  // 3) from job-level maps (by userId/email)
+  // 3) from job-level maps
   const pr = job?.parkingReceipts || job?.parkingReceiptByUser || job?.parkingReceiptUrls || null;
   if (pr && typeof pr === "object" && !Array.isArray(pr)) {
     pushVal(pr?.[uid]);
@@ -119,7 +156,7 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
     if (email) pushVal(pr?.byEmail?.[email]);
   }
 
-  // 4) from job-level arrays/lists (e.g. [{userId,url,...}])
+  // 4) from job-level arrays/lists
   const listCandidates = [];
   if (Array.isArray(job?.parkingReceiptsList)) listCandidates.push(...job.parkingReceiptsList);
   if (Array.isArray(job?.parkingReceipts)) listCandidates.push(...job.parkingReceipts);
@@ -129,7 +166,9 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
     const matches = listCandidates.filter((x) => {
       if (!x) return false;
       const byUid = x.userId === uid || x.uid === uid || x.id === uid;
-      const byEmail = email ? String(x.email || "").toLowerCase() === String(email || "").toLowerCase() : false;
+      const byEmail = email
+        ? String(x.email || "").toLowerCase() === String(email || "").toLowerCase()
+        : false;
       return byUid || byEmail;
     });
 
@@ -151,45 +190,34 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
   pushVal(job?.parkingReceiptImageUrl);
   pushVal(job?.parkingReceipt);
 
-  // 6) ✅ NEW: from ParkingReceipt table index (separate endpoint)
+  // 6) from receiptIndex (ParkingReceipt table)
   const idx = receiptIndex || {};
   const ekey = email ? String(email).toLowerCase() : "";
   pushVal(idx?.byUserId?.[uid]);
   if (ekey) pushVal(idx?.byEmail?.[ekey]);
 
-const idx = receiptIndex || {};
-const ekey = email ? String(email).toLowerCase() : "";
-const idxUrls = [];
-const pushToIdx = (v) => {
-  if (!v) return;
-  if (Array.isArray(v)) v.forEach(pushToIdx);
-  else idxUrls.push(v);
-};
-pushToIdx(idx?.byUserId?.[uid]);
-if (ekey) pushToIdx(idx?.byEmail?.[ekey]);
-
-if (idxUrls.length) {
-  // return only index-based receipts (then run the normalized dedupe)
-  urls.length = 0;
-  idxUrls.forEach((x) => urls.push(x));
-}
-
-
-  
-  // cleanup unique
+  // ✅ cleanup unique using normalized key (absolute vs relative become the same)
   const seen = new Set();
   const out = [];
+
   urls.forEach((u) => {
-    const s = String(u || "").trim();
-    if (!s) return;
-    if (seen.has(s)) return;
-    seen.add(s);
-    out.push(s);
+    const raw = String(u || "").trim();
+    if (!raw) return;
+
+    const norm = normalizeReceiptUrl(raw);
+    if (!norm) return;
+
+    // key used for dedupe
+    const key = isDataLike(norm) ? norm : norm.toLowerCase();
+
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(norm);
   });
 
-  
   return out;
 }
+
 
 
 
@@ -387,12 +415,25 @@ export default function Admin({ navigate, user }) {
 
   // ✅ Receipt modal supports MULTIPLE urls + arrows
   const [receiptModal, setReceiptModal] = useState(null); // { title: string, urls: string[], idx: number }
-  const openReceiptModal = (title, urls, startIdx = 0) => {
-    const safe = Array.isArray(urls) ? urls.filter(Boolean) : [];
-    if (!safe.length) return;
-    const idx = Math.max(0, Math.min(startIdx, safe.length - 1));
-    setReceiptModal({ title: title || "Parking Receipt", urls: safe, idx });
-  };
+const openReceiptModal = (title, urls, startIdx = 0) => {
+  const safe = Array.isArray(urls) ? urls.map(normalizeReceiptUrl).filter(Boolean) : [];
+  if (!safe.length) return;
+
+  const seen = new Set();
+  const uniq = [];
+  for (const u of safe) {
+    const key = isDataLike(u) ? u : u.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(u);
+  }
+
+  if (!uniq.length) return;
+
+  const idx = Math.max(0, Math.min(startIdx, uniq.length - 1));
+  setReceiptModal({ title: title || "Parking Receipt", urls: uniq, idx });
+};
+
   const closeReceiptModal = () => setReceiptModal(null);
 
   const goPrevReceipt = () => {
