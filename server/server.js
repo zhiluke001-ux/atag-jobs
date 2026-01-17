@@ -24,7 +24,12 @@ app.use(express.json({ limit: "5mb" }));
 app.use(morgan("dev"));
 
 /* ---- uploads (images) ---- */
-const uploadsRoot = path.join(__dirname, "data", "uploads");
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(__dirname, "data");
+
+const uploadsRoot = path.join(DATA_DIR, "uploads");
+
 const avatarsDir = path.join(uploadsRoot, "avatars");
 const verificationsDir = path.join(uploadsRoot, "verifications");
 // ✅ NEW: parking receipts
@@ -1806,6 +1811,63 @@ app.get("/jobs/:id/parking-receipt/me", authMiddleware, requireRole("part-timer"
     receipts: mine
   });
 });
+
+/** ✅ Remove my latest receipt record (even if file missing) */
+app.post(
+  "/jobs/:id/parking-receipt/me/remove",
+  authMiddleware,
+  requireRole("part-timer", "pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
+
+    const uid = req.user.id;
+    job.parkingReceipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
+
+    // remove only my receipts (or just latest — but your UI seems "single receipt" style)
+    const mineIdxs = [];
+    for (let i = 0; i < job.parkingReceipts.length; i++) {
+      if (job.parkingReceipts[i]?.userId === uid) mineIdxs.push(i);
+    }
+    if (!mineIdxs.length) return res.json({ ok: true, removed: 0 });
+
+    // delete files best-effort, then remove records
+    let removed = 0;
+    const toDelete = mineIdxs.map((i) => job.parkingReceipts[i]).filter(Boolean);
+
+    // remove from array (from back to front)
+    for (const i of mineIdxs.slice().reverse()) {
+      job.parkingReceipts.splice(i, 1);
+      removed++;
+    }
+
+    for (const r of toDelete) {
+      const abs = absPathFromReceiptUrl(r.photoUrl);
+      try {
+        // works for missing files too (ignore errors)
+        if (abs && fs.existsSync(abs)) fs.unlinkSync(abs);
+      } catch {}
+    }
+
+    await saveDB(db);
+    addAudit("parking_receipt_me_remove", { jobId: job.id, userId: uid, removed }, req);
+
+    return res.json({ ok: true, removed });
+  }
+);
+
+
+app.get("/__debug/receipt-file", (req, res) => {
+  const p = String(req.query.p || "");
+  const abs = absPathFromReceiptUrl(p);
+  return res.json({
+    ok: true,
+    input: p,
+    abs,
+    exists: abs ? fs.existsSync(abs) : false,
+  });
+});
+
 
 /** Delete receipt (owner or PM/Admin) */
 app.post(
