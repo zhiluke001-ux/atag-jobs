@@ -21,12 +21,28 @@ function pillStyle(bg, border, color) {
   };
 }
 
+function fmtWhen(v) {
+  if (!v) return "—";
+  try {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleString();
+  } catch {
+    return "—";
+  }
+}
+
 export default function AdminUsers({ user }) {
+  const [tab, setTab] = useState("users"); // "users" | "verification"
+
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
+
   const [q, setQ] = useState("");
+
   const [savingId, setSavingId] = useState(null);
   const [edits, setEdits] = useState({}); // { [userId]: { role?, grade? } }
+
   const [busyVerifyId, setBusyVerifyId] = useState(null);
   const [imgOpen, setImgOpen] = useState(null); // url string
 
@@ -48,27 +64,7 @@ export default function AdminUsers({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
-  const filtered = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    if (!t) return list;
-    return list.filter((u) => {
-      const email = (u.email || "").toLowerCase();
-      const uname = (u.username || "").toLowerCase();
-      const name = (u.name || "").toLowerCase();
-      const phone = (u.phone || "").toLowerCase();
-      const discord = (u.discord || "").toLowerCase();
-      const verified = String(u.verified ? "verified" : "pending");
-      return (
-        email.includes(t) ||
-        uname.includes(t) ||
-        name.includes(t) ||
-        phone.includes(t) ||
-        discord.includes(t) ||
-        verified.includes(t)
-      );
-    });
-  }, [q, list]);
-
+  // ---------------- Draft helpers (User Management tab) ----------------
   function getDraft(u) {
     const d = edits[u.id] || {};
     return {
@@ -113,11 +109,8 @@ export default function AdminUsers({ user }) {
       alert("Saved.");
     } catch (err) {
       const msg = err?.message || "Save failed";
-      if (String(msg).includes("last_admin")) {
-        alert("Cannot remove the last admin.");
-      } else {
-        alert(msg);
-      }
+      if (String(msg).includes("last_admin")) alert("Cannot remove the last admin.");
+      else alert(msg);
     } finally {
       setSavingId(null);
     }
@@ -131,15 +124,14 @@ export default function AdminUsers({ user }) {
     });
   }
 
-  // ✅ Verification actions
-  async function setVerified(u, verified) {
+  // ---------------- Verification actions (Verification tab) ----------------
+  async function verifyUser(u) {
     try {
       setBusyVerifyId(u.id);
-      // backend should support PATCH /admin/users/:id { verified: true/false }
-      const res = await apiPatch(`/admin/users/${u.id}`, { verified: !!verified });
-      const updated = res?.user || { ...u, verified: !!verified };
+      const res = await apiPatch(`/admin/users/${u.id}`, { verified: true });
+      const updated = res?.user || { ...u, verified: true, verificationStatus: "verified" };
       setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
-      alert(verified ? "User verified ✅" : "User unverified.");
+      alert("User verified ✅");
     } catch (err) {
       alert(err?.message || "Verify failed");
     } finally {
@@ -147,9 +139,88 @@ export default function AdminUsers({ user }) {
     }
   }
 
-  if (!isAdmin) {
-    return <div className="container">Not authorized.</div>;
+  // "Reject" tries to persist a rejected state if backend supports it,
+  // and falls back safely to verified:false (so user still can't login).
+  async function rejectUser(u) {
+    if (!window.confirm(`Reject verification for ${u.email || u.username || "this user"}?`)) return;
+
+    try {
+      setBusyVerifyId(u.id);
+
+      let res = null;
+
+      // Try richer payloads first (if your backend supports them)
+      try {
+        res = await apiPatch(`/admin/users/${u.id}`, {
+          verified: false,
+          verificationStatus: "rejected",
+        });
+      } catch {
+        // fallback to simplest supported contract
+        res = await apiPatch(`/admin/users/${u.id}`, { verified: false });
+      }
+
+      const updated =
+        res?.user ||
+        ({
+          ...u,
+          verified: false,
+          verificationStatus: "rejected",
+        });
+
+      setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
+      alert("Rejected ❌");
+    } catch (err) {
+      alert(err?.message || "Reject failed");
+    } finally {
+      setBusyVerifyId(null);
+    }
   }
+
+  if (!isAdmin) return <div className="container">Not authorized.</div>;
+
+  // ---------------- Tab-specific dataset + search ----------------
+  const pendingList = useMemo(() => {
+    const arr = (list || []).filter((u) => !u.verified); // anything not verified goes to verification tab
+    // try newest first if timestamps exist
+    return arr.sort((a, b) => {
+      const ta = new Date(a.verifySubmittedAt || a.updatedAt || a.createdAt || 0).getTime() || 0;
+      const tb = new Date(b.verifySubmittedAt || b.updatedAt || b.createdAt || 0).getTime() || 0;
+      return tb - ta;
+    });
+  }, [list]);
+
+  const baseList = tab === "verification" ? pendingList : list;
+
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return baseList;
+
+    return (baseList || []).filter((u) => {
+      const email = (u.email || "").toLowerCase();
+      const uname = (u.username || "").toLowerCase();
+      const name = (u.name || "").toLowerCase();
+      const phone = (u.phone || "").toLowerCase();
+      const discord = (u.discord || "").toLowerCase();
+
+      const statusWord = u.verified
+        ? "verified"
+        : (u.verificationStatus || "").toLowerCase().includes("reject")
+        ? "rejected"
+        : "pending";
+
+      return (
+        email.includes(t) ||
+        uname.includes(t) ||
+        name.includes(t) ||
+        phone.includes(t) ||
+        discord.includes(t) ||
+        statusWord.includes(t)
+      );
+    });
+  }, [q, baseList]);
+
+  const pendingCount = pendingList.length;
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
@@ -162,18 +233,40 @@ export default function AdminUsers({ user }) {
           alignItems: "center",
           justifyContent: "space-between",
           marginBottom: 12,
+          flexWrap: "wrap",
         }}
       >
         <div>
           <div style={{ fontSize: 22, fontWeight: 800 }}>Users</div>
           <div style={{ color: "#666", fontSize: 12, marginTop: 4 }}>
-            Pending users can’t log in until verified. Search “pending” / “verified”.
+            Use <strong>Verification</strong> to approve/reject new registrations.
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <button
+              className={tab === "users" ? "btn primary" : "btn"}
+              onClick={() => setTab("users")}
+            >
+              User Management
+            </button>
+            <button
+              className={tab === "verification" ? "btn primary" : "btn"}
+              onClick={() => setTab("verification")}
+              title="Review uploaded pics and verify users"
+            >
+              Verification {pendingCount ? `(${pendingCount})` : ""}
+            </button>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <input
-            placeholder="Search email / username / name / phone / discord / pending"
+            placeholder={
+              tab === "verification"
+                ? 'Search name/email/phone/discord ("pending", "rejected")'
+                : "Search email / username / name / phone / discord"
+            }
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="card"
@@ -187,7 +280,8 @@ export default function AdminUsers({ user }) {
 
       {loading ? (
         <div className="card">Loading...</div>
-      ) : (
+      ) : tab === "users" ? (
+        // ===================== User Management =====================
         <div className="card table-shell" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -197,9 +291,6 @@ export default function AdminUsers({ user }) {
                 <th style={{ padding: "8px" }}>Username</th>
                 <th style={{ padding: "8px" }}>Phone</th>
                 <th style={{ padding: "8px" }}>Discord</th>
-
-                <th style={{ padding: "8px" }}>Status</th>
-                <th style={{ padding: "8px" }}>Verification Pic</th>
 
                 <th style={{ padding: "8px" }}>Account Role</th>
                 <th style={{ padding: "8px" }}>Staff Grade</th>
@@ -212,10 +303,6 @@ export default function AdminUsers({ user }) {
                 const draft = getDraft(u);
                 const dirty = isDirty(u);
 
-                const verified = !!u.verified;
-                const hasPic = !!u.verifyImageUrl; // ✅ expects backend to return this field
-                const picUrl = u.verifyImageUrl || "";
-
                 return (
                   <tr key={u.id} style={{ borderTop: "1px solid #eee" }}>
                     <td style={{ padding: 8 }}>{u.name || "—"}</td>
@@ -225,16 +312,95 @@ export default function AdminUsers({ user }) {
                     <td style={{ padding: 8 }}>{u.discord || "—"}</td>
 
                     <td style={{ padding: 8 }}>
-                      {verified ? (
-                        <span style={pillStyle("#ecfdf5", "#6ee7b7", "#065f46")}>
-                          ✅ Verified
-                        </span>
-                      ) : (
-                        <span style={pillStyle("#fff7ed", "#fdba74", "#9a3412")}>
-                          ⏳ Pending
-                        </span>
-                      )}
+                      <select value={draft.role} onChange={(e) => setDraft(u, { role: e.target.value })}>
+                        {ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
+                        ))}
+                      </select>
                     </td>
+
+                    <td style={{ padding: 8 }}>
+                      <select value={draft.grade} onChange={(e) => setDraft(u, { grade: e.target.value })}>
+                        {GRADES.map((g) => (
+                          <option key={g} value={g}>
+                            {g}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+
+                    <td style={{ padding: 8 }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          className="btn primary"
+                          disabled={savingId === u.id || !dirty}
+                          onClick={() => save(u)}
+                        >
+                          {savingId === u.id ? "Saving..." : "Save"}
+                        </button>
+
+                        {dirty && (
+                          <button className="btn" onClick={() => resetRow(u)}>
+                            Reset
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+
+              {!filtered.length && (
+                <tr>
+                  <td colSpan={8} style={{ padding: 12, color: "#666" }}>
+                    No users.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        // ===================== Verification =====================
+        <div className="card table-shell" style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                <th style={{ padding: "8px" }}>Name</th>
+                <th style={{ padding: "8px" }}>Email</th>
+                <th style={{ padding: "8px" }}>Phone</th>
+                <th style={{ padding: "8px" }}>Discord</th>
+                <th style={{ padding: "8px" }}>Submitted</th>
+                <th style={{ padding: "8px" }}>Verification Pic</th>
+                <th style={{ padding: "8px" }}>Status</th>
+                <th style={{ padding: "8px" }} />
+              </tr>
+            </thead>
+
+            <tbody>
+              {filtered.map((u) => {
+                const hasPic = !!u.verifyImageUrl; // backend should provide this
+                const picUrl = u.verifyImageUrl || "";
+                const submittedAt =
+                  u.verifySubmittedAt || u.verifyUploadedAt || u.verifyUpdatedAt || u.updatedAt || u.createdAt || null;
+
+                const statusWord = u.verified
+                  ? "verified"
+                  : (u.verificationStatus || "").toLowerCase().includes("reject")
+                  ? "rejected"
+                  : "pending";
+
+                const busy = busyVerifyId === u.id;
+
+                return (
+                  <tr key={u.id} style={{ borderTop: "1px solid #eee" }}>
+                    <td style={{ padding: 8 }}>{u.name || "—"}</td>
+                    <td style={{ padding: 8 }}>{u.email || "—"}</td>
+                    <td style={{ padding: 8 }}>{u.phone || "—"}</td>
+                    <td style={{ padding: 8 }}>{u.discord || "—"}</td>
+                    <td style={{ padding: 8, fontSize: 12, color: "#444" }}>{fmtWhen(submittedAt)}</td>
 
                     <td style={{ padding: 8 }}>
                       {hasPic ? (
@@ -262,67 +428,32 @@ export default function AdminUsers({ user }) {
                     </td>
 
                     <td style={{ padding: 8 }}>
-                      <select
-                        value={draft.role}
-                        onChange={(e) => setDraft(u, { role: e.target.value })}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-
-                    <td style={{ padding: 8 }}>
-                      <select
-                        value={draft.grade}
-                        onChange={(e) => setDraft(u, { grade: e.target.value })}
-                      >
-                        {GRADES.map((g) => (
-                          <option key={g} value={g}>
-                            {g}
-                          </option>
-                        ))}
-                      </select>
+                      {statusWord === "rejected" ? (
+                        <span style={pillStyle("#fef2f2", "#fca5a5", "#991b1b")}>❌ Rejected</span>
+                      ) : (
+                        <span style={pillStyle("#fff7ed", "#fdba74", "#9a3412")}>⏳ Pending</span>
+                      )}
                     </td>
 
                     <td style={{ padding: 8 }}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        {/* verify / unverify */}
-                        {!verified ? (
-                          <button
-                            className="btn primary"
-                            disabled={busyVerifyId === u.id || !hasPic}
-                            title={!hasPic ? "User must upload verification picture first" : ""}
-                            onClick={() => setVerified(u, true)}
-                          >
-                            {busyVerifyId === u.id ? "Verifying..." : "Verify"}
-                          </button>
-                        ) : (
-                          <button
-                            className="btn"
-                            disabled={busyVerifyId === u.id}
-                            onClick={() => setVerified(u, false)}
-                          >
-                            {busyVerifyId === u.id ? "Working..." : "Unverify"}
-                          </button>
-                        )}
-
-                        {/* save role/grade */}
                         <button
                           className="btn primary"
-                          disabled={savingId === u.id || !dirty}
-                          onClick={() => save(u)}
+                          disabled={busy || !hasPic}
+                          title={!hasPic ? "User must upload verification picture first" : ""}
+                          onClick={() => verifyUser(u)}
                         >
-                          {savingId === u.id ? "Saving..." : "Save"}
+                          {busy ? "Working..." : "Verify"}
                         </button>
 
-                        {dirty && (
-                          <button className="btn" onClick={() => resetRow(u)}>
-                            Reset
-                          </button>
-                        )}
+                        <button
+                          className="btn"
+                          disabled={busy || !hasPic}
+                          title={!hasPic ? "No verification picture" : ""}
+                          onClick={() => rejectUser(u)}
+                        >
+                          {busy ? "Working..." : "Reject"}
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -331,23 +462,22 @@ export default function AdminUsers({ user }) {
 
               {!filtered.length && (
                 <tr>
-                  <td colSpan={10} style={{ padding: 12, color: "#666" }}>
-                    No users.
+                  <td colSpan={8} style={{ padding: 12, color: "#666" }}>
+                    No pending verifications.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+
+          <div style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
+            Tip: Reject will keep the account <code>unverified</code>. If you want rejected users to be hidden permanently,
+            your backend should store something like <code>verificationStatus: "rejected"</code>.
+          </div>
         </div>
       )}
 
-      <div style={{ marginTop: 10, color: "#666" }}>
-        Tip: all new registrations start as <code>part-timer</code> with grade{" "}
-        <code>junior</code> and status <code>pending</code>. Verify them after checking
-        the uploaded pic.
-      </div>
-
-      {/* Simple image modal */}
+      {/* Image modal */}
       {imgOpen && (
         <div
           onClick={() => setImgOpen(null)}
@@ -365,18 +495,27 @@ export default function AdminUsers({ user }) {
           <div
             className="card"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: 760,
-              width: "100%",
-              padding: 12,
-            }}
+            style={{ maxWidth: 760, width: "100%", padding: 12 }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
               <div style={{ fontWeight: 800 }}>Verification Picture</div>
-              <button className="btn" onClick={() => setImgOpen(null)}>
-                Close
-              </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    try {
+                      window.open(imgOpen, "_blank");
+                    } catch {}
+                  }}
+                >
+                  Open
+                </button>
+                <button className="btn" onClick={() => setImgOpen(null)}>
+                  Close
+                </button>
+              </div>
             </div>
+
             <div style={{ marginTop: 10 }}>
               <img
                 src={imgOpen}
