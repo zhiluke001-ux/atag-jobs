@@ -1971,20 +1971,6 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
                 </span>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  className="btn"
-                  onClick={() => {
-                    try {
-                      const raw = receiptModal.urls[receiptModal.idx];
-                      const path = toApiPathFromMaybeUrl(raw);
-                      // open absolute if it's already http; otherwise open path (same origin)
-                      if (isHttpUrl(raw)) window.open(raw, "_blank", "noopener,noreferrer");
-                      else window.open(path || raw, "_blank", "noopener,noreferrer");
-                    } catch {}
-                  }}
-                >
-                  Open
-                </button>
                 <button className="btn" onClick={closeReceiptModal}>
                   Close
                 </button>
