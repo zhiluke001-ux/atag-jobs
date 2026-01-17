@@ -157,6 +157,25 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
   pushVal(idx?.byUserId?.[uid]);
   if (ekey) pushVal(idx?.byEmail?.[ekey]);
 
+const idx = receiptIndex || {};
+const ekey = email ? String(email).toLowerCase() : "";
+const idxUrls = [];
+const pushToIdx = (v) => {
+  if (!v) return;
+  if (Array.isArray(v)) v.forEach(pushToIdx);
+  else idxUrls.push(v);
+};
+pushToIdx(idx?.byUserId?.[uid]);
+if (ekey) pushToIdx(idx?.byEmail?.[ekey]);
+
+if (idxUrls.length) {
+  // return only index-based receipts (then run the normalized dedupe)
+  urls.length = 0;
+  idxUrls.forEach((x) => urls.push(x));
+}
+
+
+  
   // cleanup unique
   const seen = new Set();
   const out = [];
@@ -168,8 +187,13 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
     out.push(s);
   });
 
+  
   return out;
 }
+
+
+
+
 function receiptCsvValue(url) {
   if (!url) return "";
   if (String(url).startsWith("data:")) return "embedded-image-data";
