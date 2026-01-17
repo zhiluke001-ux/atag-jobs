@@ -1085,26 +1085,6 @@ export default function MyJobs({ navigate, user }) {
                           </div>
                         ) : null}
 
-                        <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 10 }}>
-                          <div>
-                            <label style={{ fontWeight: 700, fontSize: 12 }}>Amount (RM)</label>
-                            <input
-                              type="number"
-                              step="0.01"
-                              placeholder="e.g. 6.50"
-                              value={draft.amount ?? ""}
-                              onChange={(e) => setDraft(j.id, { amount: e.target.value, okMsg: "", error: "" })}
-                            />
-                          </div>
-                          <div>
-                            <label style={{ fontWeight: 700, fontSize: 12 }}>Note (optional)</label>
-                            <input
-                              placeholder="e.g. Parking at venue"
-                              value={draft.note ?? ""}
-                              onChange={(e) => setDraft(j.id, { note: e.target.value, okMsg: "", error: "" })}
-                            />
-                          </div>
-                        </div>
 
                         {draft.dataUrl ? (
                           <img
