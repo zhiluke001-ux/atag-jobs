@@ -1,7 +1,7 @@
 // web/src/pages/MyJobs.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
-import { apiGet, apiPost } from "../api";
+import { apiGet, apiPost, apiGetBlob } from "../api";
 
 /* ---------- geo helpers ---------- */
 const toRad = (d) => (d * Math.PI) / 180;
@@ -287,7 +287,6 @@ function normalizeReceiptResponse(resp) {
   return receipt;
 }
 
-
 /* ========================== Page ========================== */
 export default function MyJobs({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
@@ -311,6 +310,20 @@ export default function MyJobs({ navigate, user }) {
   const [receiptDrafts, setReceiptDrafts] = useState({}); // { [jobId]: {fileName,dataUrl,amount,note,uploading,error,okMsg} }
   const [receiptImgBroken, setReceiptImgBroken] = useState({}); // { [jobId]: true }
   const receiptFileRef = useRef({}); // { [jobId]: HTMLInputElement }
+
+  // ✅ Receipt Viewer Modal (like Payroll view)
+  const [receiptViewOpen, setReceiptViewOpen] = useState(false);
+  const [receiptViewLoading, setReceiptViewLoading] = useState(false);
+  const [receiptViewErr, setReceiptViewErr] = useState("");
+  const [receiptViewSrc, setReceiptViewSrc] = useState(""); // can be blob: or https/data
+  const [receiptViewRawUrl, setReceiptViewRawUrl] = useState(""); // original url
+  const [receiptViewMeta, setReceiptViewMeta] = useState({
+    jobTitle: "",
+    updatedAt: null,
+    amount: null,
+    note: "",
+  });
+  const receiptViewObjUrlRef = useRef(""); // for cleanup
 
   const isPT = isPartTimerUser(user);
 
@@ -463,6 +476,114 @@ export default function MyJobs({ navigate, user }) {
       clearFileInput(jobId);
     } catch (e) {
       setDraft(jobId, { uploading: false, error: normalizeErr(e) });
+    }
+  }
+
+  /* ---------- Receipt Viewer (modal) helpers ---------- */
+  const cleanupReceiptViewerBlob = () => {
+    const u = receiptViewObjUrlRef.current;
+    if (u) {
+      try {
+        URL.revokeObjectURL(u);
+      } catch {}
+      receiptViewObjUrlRef.current = "";
+    }
+  };
+
+  const closeReceiptViewer = () => {
+    setReceiptViewOpen(false);
+    setReceiptViewLoading(false);
+    setReceiptViewErr("");
+    setReceiptViewSrc("");
+    setReceiptViewRawUrl("");
+    setReceiptViewMeta({ jobTitle: "", updatedAt: null, amount: null, note: "" });
+    cleanupReceiptViewerBlob();
+  };
+
+  async function resolveReceiptViewSrc(absUrl) {
+    if (!absUrl) return "";
+
+    // data urls can be shown directly
+    if (/^data:/i.test(absUrl)) return absUrl;
+
+    // Try to fetch as blob for protected / cookie-auth endpoints (best UX like payroll preview)
+    try {
+      const u = new URL(absUrl, window.location.origin);
+
+      // If it's same-origin, we can blob it
+      const sameOrigin = u.origin === window.location.origin;
+
+      // If it's API base origin, we can blob it (apiGetBlob will include auth headers/cookies)
+      let apiOrigin = null;
+      try {
+        if (API_BASE_CLEAN) apiOrigin = new URL(API_BASE_CLEAN, window.location.origin).origin;
+      } catch {}
+      const isApiOrigin = apiOrigin && u.origin === apiOrigin;
+
+      if (sameOrigin || isApiOrigin) {
+        // derive path for apiGetBlob
+        let path = u.pathname + u.search;
+        if (API_BASE_CLEAN && absUrl.startsWith(API_BASE_CLEAN)) {
+          path = absUrl.slice(API_BASE_CLEAN.length) || "/";
+        }
+
+        const maybeBlob = await apiGetBlob(path);
+        const blob =
+          maybeBlob instanceof Blob
+            ? maybeBlob
+            : maybeBlob?.data instanceof Blob
+            ? maybeBlob.data
+            : null;
+
+        if (blob) {
+          const objUrl = URL.createObjectURL(blob);
+          receiptViewObjUrlRef.current = objUrl;
+          return objUrl;
+        }
+      }
+    } catch {
+      // ignore and fall back to direct URL
+    }
+
+    // fallback: show direct URL (signed/public)
+    return absUrl;
+  }
+
+  async function openReceiptViewer(job, receipt) {
+    cleanupReceiptViewerBlob();
+
+    const raw = pickReceiptUrl(receipt) || "";
+    const abs = toAbsUrl(raw);
+
+    setReceiptViewOpen(true);
+    setReceiptViewLoading(true);
+    setReceiptViewErr("");
+    setReceiptViewSrc("");
+    setReceiptViewRawUrl(abs);
+
+    const updatedAt =
+      receipt?.updatedAt || receipt?.createdAt || receipt?.uploadedAt || receipt?.uploadAt || null;
+
+    setReceiptViewMeta({
+      jobTitle: job?.title || "Job",
+      updatedAt,
+      amount: receipt?.amount ?? receipt?.parkingAmount ?? null,
+      note: receipt?.note ?? receipt?.remarks ?? "",
+    });
+
+    if (!abs) {
+      setReceiptViewLoading(false);
+      setReceiptViewErr("Receipt image URL not available yet. Tap Refresh on the card.");
+      return;
+    }
+
+    try {
+      const src = await resolveReceiptViewSrc(abs);
+      setReceiptViewSrc(src || abs);
+      setReceiptViewLoading(false);
+    } catch {
+      setReceiptViewSrc(abs);
+      setReceiptViewLoading(false);
     }
   }
 
@@ -679,7 +800,9 @@ export default function MyJobs({ navigate, user }) {
             const { isVirtual, label } = deriveKind(j);
 
             const yourLocLine = loc
-              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""} · ${dayjs(loc.ts).format("HH:mm:ss")}`
+              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${
+                  loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""
+                } · ${dayjs(loc.ts).format("HH:mm:ss")}`
               : locMsg || "Getting your location…";
 
             const pa = parkingRM(j);
@@ -727,18 +850,34 @@ export default function MyJobs({ navigate, user }) {
                       </div>
 
                       <div style={{ display: "grid", gap: 4 }}>
-                        <div><strong>Allowances</strong></div>
-                        <div style={{ fontSize: 14, color: "#374151" }}>
-                          Early Call: {ec?.enabled ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
+                        <div>
+                          <strong>Allowances</strong>
                         </div>
                         <div style={{ fontSize: 14, color: "#374151" }}>
-                          Loading & Unloading: {lu?.enabled ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})` : "No"}
+                          Early Call:{" "}
+                          {ec?.enabled
+                            ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)`
+                            : "No"}
+                        </div>
+                        <div style={{ fontSize: 14, color: "#374151" }}>
+                          Loading & Unloading:{" "}
+                          {lu?.enabled
+                            ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})`
+                            : "No"}
                         </div>
                       </div>
 
                       <div>
                         <strong>Pay</strong>
-                        <div style={{ marginTop: 6, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace", fontSize: 13, lineHeight: 1.5 }}>
+                        <div
+                          style={{
+                            marginTop: 6,
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            fontSize: 13,
+                            lineHeight: 1.5,
+                          }}
+                        >
                           {payForViewer}
                         </div>
                       </div>
@@ -749,9 +888,21 @@ export default function MyJobs({ navigate, user }) {
                       <span style={{ color: loc ? "#374151" : "#b91c1c" }}>{yourLocLine}</span>
                     </div>
 
-                    <div style={{ marginTop: 6, display: "flex", gap: 10, alignItems: "center", color: "#374151", flexWrap: "wrap" }}>
+                    <div
+                      style={{
+                        marginTop: 6,
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "center",
+                        color: "#374151",
+                        flexWrap: "wrap",
+                      }}
+                    >
                       {j.status === "ongoing" && !isVirtual && (
-                        <span className="status" title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}>
+                        <span
+                          className="status"
+                          title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}
+                        >
                           Scanner distance: {dist == null ? "—" : `${dist} m`}
                         </span>
                       )}
@@ -788,30 +939,54 @@ export default function MyJobs({ navigate, user }) {
 
                 {/* ================= Parking Receipt Uploader (Part-timer) ================= */}
                 {isPT && (
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)", display: "grid", gap: 10 }}>
+                  <div
+                    style={{
+                      marginTop: 12,
+                      paddingTop: 12,
+                      borderTop: "1px solid var(--border)",
+                      display: "grid",
+                      gap: 10,
+                    }}
+                  >
                     <div style={{ fontWeight: 800 }}>Parking Receipt</div>
 
                     {receipt ? (
-                      <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10, display: "grid", gap: 8, background: "#fafafa" }}>
+                      <div
+                        style={{
+                          border: "1px solid var(--border)",
+                          borderRadius: 10,
+                          padding: 10,
+                          display: "grid",
+                          gap: 8,
+                          background: "#fafafa",
+                        }}
+                      >
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                           <div style={{ fontSize: 13, color: "#374151" }}>
                             <strong>Status:</strong> Uploaded
-                            {receiptUpdatedAt ? <span style={{ color: "#6b7280" }}> · {dayjs(receiptUpdatedAt).format("YYYY/MM/DD HH:mm")}</span> : null}
+                            {receiptUpdatedAt ? (
+                              <span style={{ color: "#6b7280" }}>
+                                {" "}
+                                · {dayjs(receiptUpdatedAt).format("YYYY/MM/DD HH:mm")}
+                              </span>
+                            ) : null}
                           </div>
+
                           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                             <button className="btn" onClick={() => refreshMyReceipt(j.id)} disabled={!!draft.uploading}>
                               Refresh
                             </button>
-                            <a
+
+                            {/* ✅ CHANGED: View opens a modal (like Payroll) */}
+                            <button
                               className="btn"
-                              href={receiptImg || "#"}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={receiptImg ? "View receipt" : "Receipt URL not available"}
-                              style={!receiptImg ? { opacity: 0.5, pointerEvents: "none" } : undefined}
+                              onClick={() => openReceiptViewer(j, receipt)}
+                              disabled={!!draft.uploading}
+                              title="View receipt in modal"
                             >
                               View
-                            </a>
+                            </button>
+
                             <button className="btn" onClick={() => removeMyReceipt(j.id)} disabled={!!draft.uploading}>
                               Remove
                             </button>
@@ -819,8 +994,16 @@ export default function MyJobs({ navigate, user }) {
                         </div>
 
                         {broken ? (
-                          <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
-                            Receipt record exists, but the image file cannot be loaded (missing on server). You can click <strong>Remove</strong> to clean it up.
+                          <div
+                            style={{
+                              padding: 10,
+                              border: "1px solid var(--red)",
+                              borderRadius: 8,
+                              color: "var(--red)",
+                            }}
+                          >
+                            Receipt record exists, but the image file cannot be loaded (missing on server). You can click{" "}
+                            <strong>Remove</strong> to clean it up.
                           </div>
                         ) : null}
 
@@ -850,10 +1033,19 @@ export default function MyJobs({ navigate, user }) {
                       <div style={{ fontSize: 13, color: "#6b7280" }}>No receipt uploaded yet.</div>
                     )}
 
-                    <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 10, display: "grid", gap: 10 }}>
+                    <div
+                      style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: 10,
+                        padding: 10,
+                        display: "grid",
+                        gap: 10,
+                      }}
+                    >
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                         <div style={{ fontSize: 13, color: "#374151" }}>
-                          <strong>Upload / Replace</strong> <span style={{ color: "#6b7280" }}>(max 2MB)</span>
+                          <strong>Upload / Replace</strong>{" "}
+                          <span style={{ color: "#6b7280" }}>(max 2MB)</span>
                         </div>
 
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -932,13 +1124,28 @@ export default function MyJobs({ navigate, user }) {
                         ) : null}
 
                         {draft.error ? (
-                          <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
+                          <div
+                            style={{
+                              padding: 10,
+                              border: "1px solid var(--red)",
+                              borderRadius: 8,
+                              color: "var(--red)",
+                            }}
+                          >
                             {draft.error}
                           </div>
                         ) : null}
 
                         {draft.okMsg ? (
-                          <div style={{ padding: 10, border: "1px solid #22c55e", borderRadius: 8, color: "#166534", background: "#f0fdf4" }}>
+                          <div
+                            style={{
+                              padding: 10,
+                              border: "1px solid #22c55e",
+                              borderRadius: 8,
+                              color: "#166534",
+                              background: "#f0fdf4",
+                            }}
+                          >
                             {draft.okMsg}
                           </div>
                         ) : null}
@@ -955,6 +1162,93 @@ export default function MyJobs({ navigate, user }) {
           })
         )}
       </div>
+
+      {/* ---------- RECEIPT VIEWER MODAL (NEW) ---------- */}
+      {receiptViewOpen && (
+        <div
+          className="modal-overlay"
+          onClick={closeReceiptViewer}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 70,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            background: "rgba(0,0,0,.55)",
+          }}
+        >
+          <div
+            className="modal-card modal-sm"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(860px, 96vw)",
+              background: "#fff",
+              borderRadius: 12,
+              padding: 16,
+              boxShadow: "0 10px 30px rgba(0,0,0,.25)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 16 }}>Parking Receipt — {receiptViewMeta.jobTitle}</div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                  {receiptViewMeta.updatedAt
+                    ? `Uploaded: ${dayjs(receiptViewMeta.updatedAt).format("YYYY/MM/DD HH:mm")}`
+                    : "Uploaded: —"}
+                  {receiptViewMeta.amount != null ? ` · Amount: RM${Number(receiptViewMeta.amount)}` : ""}
+                  {receiptViewMeta.note ? ` · Note: ${receiptViewMeta.note}` : ""}
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, alignItems: "start", flexWrap: "wrap" }}>
+                <button className="btn" onClick={closeReceiptViewer}>
+                  Close
+                </button>
+
+                {/* Optional: keep “Open in new tab” inside modal */}
+                <button
+                  className="btn"
+                  onClick={() => {
+                    if (receiptViewRawUrl) window.open(receiptViewRawUrl, "_blank");
+                  }}
+                  disabled={!receiptViewRawUrl}
+                  title={!receiptViewRawUrl ? "URL not available" : "Open in new tab"}
+                >
+                  Open
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              {receiptViewErr ? (
+                <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
+                  {receiptViewErr}
+                </div>
+              ) : receiptViewLoading ? (
+                <div style={{ color: "#6b7280" }}>Loading receipt…</div>
+              ) : receiptViewSrc ? (
+                <img
+                  src={receiptViewSrc}
+                  alt="Parking receipt"
+                  onError={() => setReceiptViewErr("Failed to load image. Try Refresh on the card, or Open in new tab.")}
+                  style={{
+                    width: "100%",
+                    maxHeight: "72vh",
+                    objectFit: "contain",
+                    borderRadius: 10,
+                    border: "1px solid var(--border)",
+                    background: "#fff",
+                  }}
+                />
+              ) : (
+                <div style={{ color: "#6b7280" }}>No image.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ---------- QR MODAL ---------- */}
       {qrOpen && (
