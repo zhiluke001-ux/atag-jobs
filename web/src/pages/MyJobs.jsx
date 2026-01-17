@@ -252,12 +252,27 @@ function toAbsUrl(u) {
 /** Normalize API response -> receipt object with a usable url if response provides it outside receipt */
 function normalizeReceiptResponse(resp) {
   if (!resp) return null;
-  const receipt =
-    resp?.receipt ??
-    resp?.data?.receipt ??
-    resp?.data ??
-    resp;
 
+  // ✅ Handle list shape: { ok:true, receipts:[...] }
+  const receipts = resp?.receipts ?? resp?.data?.receipts;
+  if (Array.isArray(receipts)) {
+    const r0 = receipts[0] || null; // pick latest (you unshift on submit)
+    if (!r0) return null;
+
+    // if url missing in receipt, allow outer fallback
+    const outer =
+      resp?.photoUrlAbs ||
+      resp?.photoUrl ||
+      resp?.data?.photoUrlAbs ||
+      resp?.data?.photoUrl ||
+      "";
+
+    if (!pickReceiptUrl(r0) && outer) r0.photoUrlAbs = outer;
+    return r0;
+  }
+
+  // existing single shape: { receipt:{...} } or direct receipt
+  const receipt = resp?.receipt ?? resp?.data?.receipt ?? resp?.data ?? resp;
   if (!receipt || typeof receipt !== "object") return null;
 
   const inner = pickReceiptUrl(receipt);
@@ -268,12 +283,10 @@ function normalizeReceiptResponse(resp) {
     resp?.data?.photoUrl ||
     "";
 
-  // inject outer url if receipt missing url
-  if (!inner && outer) {
-    receipt.photoUrlAbs = outer;
-  }
+  if (!inner && outer) receipt.photoUrlAbs = outer;
   return receipt;
 }
+
 
 /* ========================== Page ========================== */
 export default function MyJobs({ navigate, user }) {
