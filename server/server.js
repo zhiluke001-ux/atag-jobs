@@ -1792,21 +1792,20 @@ app.get(
 );
 
 /** User fetch own receipts for a job */
-app.get(
-  "/jobs/:id/parking-receipt/me",
-  authMiddleware,
-  requireRole("part-timer", "pm", "admin"),
-  async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
+app.get("/jobs/:id/parking-receipt/me", authMiddleware, requireRole("part-timer", "pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
 
-    const uid = req.user.id;
-    const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-    const mine = receipts.filter((r) => r.userId === uid).map((r) => enrichReceipt(req, r));
+  const uid = req.user.id;
+  const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
+  const mine = receipts.filter((r) => r.userId === uid).map((r) => enrichReceipt(req, r));
 
-    return res.json({ ok: true, receipts: mine });
-  }
-);
+  return res.json({
+    ok: true,
+    receipt: mine[0] || null,   // ✅ latest
+    receipts: mine
+  });
+});
 
 /** Delete receipt (owner or PM/Admin) */
 app.post(
