@@ -780,20 +780,28 @@ app.post("/login", async (req, res) => {
 
   const token = signUserToken(user);
   addAudit("login", { identifier: id }, { user });
-  res.json({
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      name: user.name,
-      grade: user.grade || "junior",
-      username: user.username || "",
-      phone: user.phone || "",
-      discord: user.discord || "",
-      avatarUrl: user.avatarUrl || "",
-    },
-  });
+res.json({
+  token,
+  user: {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    name: user.name,
+    grade: user.grade || "junior",
+    username: user.username || "",
+    phone: user.phone || "",
+    discord: user.discord || "",
+    avatarUrl: user.avatarUrl || "",
+
+    // ✅ add these
+    verified: !!user.verified,
+    verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
+    verificationPhotoUrl: user.verificationPhotoUrl || "",
+    verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
+    verifiedAt: user.verifiedAt || null,
+    verifiedBy: user.verifiedBy || null,
+  },
+});
 });
 
 app.post("/register", async (req, res) => {
@@ -947,6 +955,8 @@ app.post("/auth/reset", (req, res, next) => {
 /* ---- ME ---- */
 app.get("/me", authMiddleware, (req, res) => {
   const user = db.users.find((u) => u.id === req.user.id);
+  if (!user) return res.status(404).json({ error: "user_not_found" });
+
   res.json({
     user: {
       id: user.id,
@@ -958,9 +968,18 @@ app.get("/me", authMiddleware, (req, res) => {
       phone: user.phone || "",
       discord: user.discord || "",
       avatarUrl: user.avatarUrl || "",
+
+      // ✅ add these
+      verified: !!user.verified,
+      verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
+      verificationPhotoUrl: user.verificationPhotoUrl || "",
+      verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
+      verifiedAt: user.verifiedAt || null,
+      verifiedBy: user.verifiedBy || null,
     },
   });
 });
+
 
 async function handleUpdateMe(req, res) {
   const user = (db.users || []).find((u) => u.id === req.user.id);
@@ -1004,6 +1023,14 @@ async function handleUpdateMe(req, res) {
       phone: user.phone || "",
       discord: user.discord || "",
       avatarUrl: user.avatarUrl || "",
+    
+      // ✅ add these
+      verified: !!user.verified,
+      verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
+      verificationPhotoUrl: user.verificationPhotoUrl || "",
+      verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
+      verifiedAt: user.verifiedAt || null,
+      verifiedBy: user.verifiedBy || null,
     },
   });
 }
@@ -1054,7 +1081,7 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
 });
 
 /* -------- Admin: users -------- */
-app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
+app.get("/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
   const list = (db.users || []).map((u) => ({
     id: u.id,
     email: u.email,
@@ -1064,16 +1091,23 @@ app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
     grade: u.grade || "junior",
     phone: u.phone || "",
     discord: u.discord || "",
+
     avatarUrl: u.avatarUrl || "",
+    avatarUrlAbs: toPublicUrl(req, u.avatarUrl || ""),
+
     verified: !!u.verified,
     verificationStatus: u.verificationStatus || (u.verified ? "APPROVED" : "PENDING"),
+
     verificationPhotoUrl: u.verificationPhotoUrl || "",
+    verificationPhotoUrlAbs: toPublicUrl(req, u.verificationPhotoUrl || ""),
+
     verifiedAt: u.verifiedAt || null,
     verifiedBy: u.verifiedBy || null,
   }));
 
   res.json(list);
 });
+  
 
 app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const target = db.users.find((u) => u.id === req.params.id);
