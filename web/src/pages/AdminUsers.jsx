@@ -4,8 +4,10 @@ import dayjs from "dayjs";
 import { apiGet, apiPatch } from "../api";
 
 const ROLES = ["part-timer", "pm", "admin"];
-const GRADES = ["junior", "senior", "lead"];
+// ✅ keep in sync with backend STAFF_ROLES
+const GRADES = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"];
 
+/* ---------- UI helpers ---------- */
 function pillStyle(bg, border, color) {
   return {
     display: "inline-flex",
@@ -20,6 +22,13 @@ function pillStyle(bg, border, color) {
     fontWeight: 700,
     whiteSpace: "nowrap",
   };
+}
+
+function gradeLabel(g) {
+  const x = String(g || "");
+  if (x === "junior_emcee") return "junior (emcee)";
+  if (x === "senior_emcee") return "senior (emcee)";
+  return x || "junior";
 }
 
 /* ---------- URL helper (supports relative urls + data urls) ---------- */
@@ -38,7 +47,7 @@ function toAbsUrl(u) {
   if (/^data:/i.test(s) || /^https?:\/\//i.test(s)) return s;
   if (s.startsWith("//")) return window.location.protocol + s;
   if (API_BASE_CLEAN) return API_BASE_CLEAN + (s.startsWith("/") ? s : `/${s}`);
-  return s;
+  return s; // last resort: relative to current origin
 }
 
 /* ---------- flexible getters for backend field name differences ---------- */
@@ -51,46 +60,61 @@ function pickFirstString(obj, keys) {
 }
 
 function getVerifyPicUrl(u) {
-  // supports: url OR dataUrl saved in DB
+  // Prefer absolute if backend provides it
+  const rawAbs = pickFirstString(u, ["verificationPhotoUrlAbs", "verifyPhotoUrlAbs"]);
+  if (rawAbs) return toAbsUrl(rawAbs);
+
+  // Fallback to relative
   const raw = pickFirstString(u, [
-    "verifyImageUrl",
-    "verify_image_url",
-    "verificationImageUrl",
-    "verification_image_url",
-    "verifyPhotoUrl",
-    "verify_photo_url",
     "verificationPhotoUrl",
     "verification_photo_url",
-    "verifyImageDataUrl",
-    "verify_image_data_url",
+    "verifyPhotoUrl",
+    "verify_photo_url",
+    "verificationImageUrl",
+    "verification_image_url",
+    "verifyImageUrl",
+    "verify_image_url",
+    // sometimes people store the original dataUrl (not recommended, but tolerate)
     "verificationDataUrl",
     "verification_data_url",
+    "verifyImageDataUrl",
+    "verify_image_data_url",
   ]);
   return toAbsUrl(raw);
 }
 
+/**
+ * ✅ Normalize to backend values:
+ * "PENDING" | "APPROVED" | "REJECTED"
+ */
 function getVerifyStatus(u) {
   const raw = pickFirstString(u, ["verificationStatus", "verifyStatus", "verification_status", "verify_status"]);
-  const s = (raw || "").toLowerCase();
+  const s = String(raw || "").trim().toUpperCase();
 
-  // normalize common values
-  if (["verified", "approve", "approved"].includes(s)) return "verified";
-  if (["rejected", "reject", "declined"].includes(s)) return "rejected";
-  if (["pending", "awaiting", "new"].includes(s)) return "pending";
+  if (["PENDING", "APPROVED", "REJECTED"].includes(s)) return s;
+
+  // tolerate old values / synonyms
+  const low = String(raw || "").trim().toLowerCase();
+  if (["verified", "verify", "approved", "approve"].includes(low)) return "APPROVED";
+  if (["rejected", "reject", "declined"].includes(low)) return "REJECTED";
+  if (["pending", "awaiting", "new"].includes(low)) return "PENDING";
 
   // fallback to boolean
-  if (u?.verified === true) return "verified";
-  if (u?.verified === false) return "pending";
-  return "pending";
+  if (u?.verified === true) return "APPROVED";
+  if (u?.verified === false) return "PENDING";
+  return "PENDING";
 }
 
 function fmtSubmitted(u) {
+  // Your backend does not store "submittedAt" explicitly.
+  // Show best available:
   const t =
     u?.verificationSubmittedAt ||
     u?.verifySubmittedAt ||
     u?.submittedAt ||
     u?.createdAt ||
     u?.created_at ||
+    u?.verifiedAt ||
     null;
 
   if (!t) return "—";
@@ -168,7 +192,7 @@ export default function AdminUsers({ user }) {
   }, [isAdmin]);
 
   const pendingCount = useMemo(() => {
-    return (list || []).filter((u) => getVerifyStatus(u) === "pending").length;
+    return (list || []).filter((u) => getVerifyStatus(u) === "PENDING").length;
   }, [list]);
 
   // ----- search filter depends on tab -----
@@ -183,8 +207,7 @@ export default function AdminUsers({ user }) {
       const phone = (u.phone || "").toLowerCase();
       const discord = (u.discord || "").toLowerCase();
 
-      const status = getVerifyStatus(u);
-      const statusText = String(status);
+      const status = getVerifyStatus(u).toLowerCase();
 
       return (
         email.includes(t) ||
@@ -192,7 +215,7 @@ export default function AdminUsers({ user }) {
         name.includes(t) ||
         phone.includes(t) ||
         discord.includes(t) ||
-        statusText.includes(t)
+        status.includes(t)
       );
     });
   }, [q, list]);
@@ -263,29 +286,26 @@ export default function AdminUsers({ user }) {
   // Verification actions
   // =========================
   async function setVerification(u, nextStatus) {
-    // nextStatus: "verified" | "rejected" | "pending"
+    // nextStatus: "APPROVED" | "REJECTED" | "PENDING"
     try {
       setBusyActionId(u.id);
 
-      // Send multiple keys so backend with different schema still works
+      // ✅ match backend expected values
       const body = {
         verificationStatus: nextStatus,
-        verified: nextStatus === "verified",
+        verified: nextStatus === "APPROVED",
+        // optional extras for older variants (won't hurt)
+        verifyStatus: nextStatus,
       };
 
       const res = await apiPatch(`/admin/users/${u.id}`, body);
-      const updated =
-        res?.user ||
-        res ||
-        {
-          ...u,
-          ...body,
-        };
+      const updated = res?.user || res || { ...u, ...body };
 
       setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
 
-      if (nextStatus === "verified") alert("User verified ✅");
-      if (nextStatus === "rejected") alert("User rejected.");
+      if (nextStatus === "APPROVED") alert("User verified ✅");
+      if (nextStatus === "REJECTED") alert("User rejected.");
+      if (nextStatus === "PENDING") alert("Set back to pending.");
     } catch (err) {
       alert(err?.message || "Action failed");
     } finally {
@@ -302,8 +322,8 @@ export default function AdminUsers({ user }) {
 
   const verificationRows = (filtered || []).filter((u) => {
     const st = getVerifyStatus(u);
-    // show pending + rejected (you can search "verified" if you want, but default hide)
-    return st !== "verified";
+    // show pending + rejected (hide approved by default)
+    return st !== "APPROVED";
   });
 
   return (
@@ -400,7 +420,7 @@ export default function AdminUsers({ user }) {
                       <select value={draft.grade} onChange={(e) => setDraft(u, { grade: e.target.value })}>
                         {GRADES.map((g) => (
                           <option key={g} value={g}>
-                            {g}
+                            {gradeLabel(g)}
                           </option>
                         ))}
                       </select>
@@ -452,7 +472,7 @@ export default function AdminUsers({ user }) {
 
             <tbody>
               {verificationRows.map((u) => {
-                const status = getVerifyStatus(u);
+                const status = getVerifyStatus(u); // "PENDING" | "APPROVED" | "REJECTED"
                 const picUrl = getVerifyPicUrl(u);
                 const hasPic = !!picUrl;
 
@@ -480,6 +500,10 @@ export default function AdminUsers({ user }) {
                               cursor: "pointer",
                             }}
                             onClick={() => setImgOpen(picUrl)}
+                            onError={(e) => {
+                              // avoid broken-image icon spam
+                              e.currentTarget.style.display = "none";
+                            }}
                           />
                           <button className="btn" onClick={() => setImgOpen(picUrl)}>
                             View
@@ -491,9 +515,9 @@ export default function AdminUsers({ user }) {
                     </td>
 
                     <td style={{ padding: 8 }}>
-                      {status === "verified" ? (
+                      {status === "APPROVED" ? (
                         <span style={pillStyle("#ecfdf5", "#6ee7b7", "#065f46")}>✅ Verified</span>
-                      ) : status === "rejected" ? (
+                      ) : status === "REJECTED" ? (
                         <span style={pillStyle("#fee2e2", "#fca5a5", "#991b1b")}>⛔ Rejected</span>
                       ) : (
                         <span style={pillStyle("#fff7ed", "#fdba74", "#9a3412")}>⏳ Pending</span>
@@ -506,7 +530,7 @@ export default function AdminUsers({ user }) {
                           className="btn primary"
                           disabled={busyActionId === u.id || !hasPic}
                           title={!hasPic ? "User must upload verification picture first" : ""}
-                          onClick={() => setVerification(u, "verified")}
+                          onClick={() => setVerification(u, "APPROVED")}
                         >
                           {busyActionId === u.id ? "Working..." : "Verify"}
                         </button>
@@ -514,7 +538,7 @@ export default function AdminUsers({ user }) {
                         <button
                           className="btn"
                           disabled={busyActionId === u.id}
-                          onClick={() => setVerification(u, "rejected")}
+                          onClick={() => setVerification(u, "REJECTED")}
                         >
                           {busyActionId === u.id ? "Working..." : "Reject"}
                         </button>
@@ -581,7 +605,13 @@ export default function AdminUsers({ user }) {
                   borderRadius: 12,
                   border: "1px solid #eee",
                 }}
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
               />
+              <div style={{ marginTop: 8, fontSize: 12, color: "#666", wordBreak: "break-all" }}>
+                {imgOpen}
+              </div>
             </div>
           </div>
         </div>
