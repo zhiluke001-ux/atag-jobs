@@ -17,8 +17,12 @@ export default function Register({ navigate, setUser }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  // ✅ new: success message (so user knows what happened)
+  const [success, setSuccess] = useState(null);
+
   function onPickVerificationPhoto(e) {
     setError(null);
+    setSuccess(null);
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -42,6 +46,7 @@ export default function Register({ navigate, setUser }) {
   async function onSubmit(e) {
     e.preventDefault();
     setError(null);
+    setSuccess(null);
 
     if (!email || !username || !name || !discord || !phone || !password || !confirm) {
       setError("All fields are required.");
@@ -77,13 +82,40 @@ export default function Register({ navigate, setUser }) {
         verifyImageUrl: verificationDataUrl,
       });
 
-      const u = res?.user || res; // support {user:...} or direct user
-      if (setUser) setUser(u);
+      // ✅ IMPORTANT CHANGE:
+      // Do NOT set user / do NOT log them in if they are unverified.
+      // Your backend register always creates verified=false, so treat as pending.
 
-      // go to Status page
-      navigate("#/profile");
+      // If you want to be extra safe:
+      const createdUser = res?.user || res || {};
+      const isVerified =
+        createdUser?.verified === true ||
+        String(createdUser?.verificationStatus || "").toUpperCase() === "APPROVED";
+
+      if (isVerified) {
+        // rare case: if you later change backend to auto-approve
+        if (setUser) setUser(createdUser);
+        navigate("#/");
+        return;
+      }
+
+      // ✅ show message then redirect back to homepage (or login)
+      setSuccess(
+        "Account created! Your registration is pending admin approval. Please log in again after you are approved."
+      );
+
+      // clear local form states (optional)
+      setPassword("");
+      setConfirm("");
+      setVerificationDataUrl("");
+
+      // redirect after a short moment (no async/background promise; just immediate is fine)
+      // choose ONE:
+      // navigate("#/");      // go homepage
+      // navigate("#/login"); // go login page (recommended)
+      navigate("#/"); // per your request: go back to homepage
     } catch (e2) {
-      const msg = e2?.message || String(e2) || "Registration failed.";
+      const msg = e2?.data?.error || e2?.message || String(e2) || "Registration failed.";
       setError(msg);
     } finally {
       setBusy(false);
@@ -93,7 +125,9 @@ export default function Register({ navigate, setUser }) {
   return (
     <div className="container">
       <form className="card" onSubmit={onSubmit}>
-        <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>Create account</div>
+        <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>
+          Create account
+        </div>
 
         <div>Email</div>
         <input
@@ -173,7 +207,9 @@ export default function Register({ navigate, setUser }) {
 
         {verificationDataUrl && (
           <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Preview</div>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+              Preview
+            </div>
             <img
               src={verificationDataUrl}
               alt="verification preview"
@@ -185,7 +221,11 @@ export default function Register({ navigate, setUser }) {
               }}
             />
             <div style={{ marginTop: 8 }}>
-              <button type="button" className="btn" onClick={() => setVerificationDataUrl("")}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setVerificationDataUrl("")}
+              >
                 Remove photo
               </button>
             </div>
@@ -193,6 +233,24 @@ export default function Register({ navigate, setUser }) {
         )}
 
         {error && <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>}
+
+        {success && (
+          <div
+            style={{
+              marginTop: 10,
+              background: "#ecfdf5",
+              border: "1px solid #a7f3d0",
+              color: "#065f46",
+              padding: 10,
+              borderRadius: 10,
+              fontSize: 13,
+              lineHeight: 1.35,
+              whiteSpace: "pre-line",
+            }}
+          >
+            {success}
+          </div>
+        )}
 
         <div style={{ marginTop: 12 }}>
           <button className="btn primary" type="submit" disabled={busy}>
