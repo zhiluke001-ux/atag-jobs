@@ -11,7 +11,7 @@ export default function Register({ navigate, setUser }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
 
-  // ✅ NEW: verification photo
+  // verification photo (data url)
   const [verificationDataUrl, setVerificationDataUrl] = useState("");
 
   const [error, setError] = useState(null);
@@ -43,7 +43,6 @@ export default function Register({ navigate, setUser }) {
     e.preventDefault();
     setError(null);
 
-    // basic validations
     if (!email || !username || !name || !discord || !phone || !password || !confirm) {
       setError("All fields are required.");
       return;
@@ -56,8 +55,6 @@ export default function Register({ navigate, setUser }) {
       setError("Password must be at least 6 characters.");
       return;
     }
-
-    // ✅ NEW: require verification photo
     if (!verificationDataUrl) {
       setError("Verification photo is required.");
       return;
@@ -65,22 +62,28 @@ export default function Register({ navigate, setUser }) {
 
     setBusy(true);
     try {
-      // No role sent — backend should default to "junior".
-      const u = await registerUser({
+      // ✅ send multiple keys so backend schema mismatch still works
+      const res = await registerUser({
         email,
         username,
         name,
         discord,
         phone,
         password,
-        verificationDataUrl, // ✅ NEW: send to backend
+
+        // common variants (backend can pick any)
+        verificationDataUrl,
+        verifyImageDataUrl: verificationDataUrl,
+        verifyImageUrl: verificationDataUrl,
       });
 
-      // If backend returns user, keep your old behavior:
+      const u = res?.user || res; // support {user:...} or direct user
       if (setUser) setUser(u);
-      navigate("#/"); // landing route
-    } catch (e) {
-      const msg = e?.message || String(e) || "Registration failed.";
+
+      // go to Status page
+      navigate("#/profile");
+    } catch (e2) {
+      const msg = e2?.message || String(e2) || "Registration failed.";
       setError(msg);
     } finally {
       setBusy(false);
@@ -90,9 +93,7 @@ export default function Register({ navigate, setUser }) {
   return (
     <div className="container">
       <form className="card" onSubmit={onSubmit}>
-        <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>
-          Create account
-        </div>
+        <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>Create account</div>
 
         <div>Email</div>
         <input
@@ -161,8 +162,7 @@ export default function Register({ navigate, setUser }) {
           required
         />
 
-        {/* ✅ NEW: Upload verification photo */}
-        <div style={{ marginTop: 10 }}>Verification Photo </div>
+        <div style={{ marginTop: 10 }}>Verification Photo</div>
         <input
           type="file"
           accept="image/png,image/jpeg,image/jpg,image/webp,image/*"
@@ -173,9 +173,7 @@ export default function Register({ navigate, setUser }) {
 
         {verificationDataUrl && (
           <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-              Preview
-            </div>
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>Preview</div>
             <img
               src={verificationDataUrl}
               alt="verification preview"
@@ -187,20 +185,14 @@ export default function Register({ navigate, setUser }) {
               }}
             />
             <div style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setVerificationDataUrl("")}
-              >
+              <button type="button" className="btn" onClick={() => setVerificationDataUrl("")}>
                 Remove photo
               </button>
             </div>
           </div>
         )}
 
-        {error && (
-          <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>
-        )}
+        {error && <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>}
 
         <div style={{ marginTop: 12 }}>
           <button className="btn primary" type="submit" disabled={busy}>
