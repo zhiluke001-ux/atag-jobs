@@ -1081,7 +1081,7 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
 });
 
 /* -------- Admin: users -------- */
-app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
+app.get("/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
   const list = (db.users || []).map((u) => ({
     id: u.id,
     email: u.email,
@@ -1091,16 +1091,23 @@ app.get("/admin/users", authMiddleware, requireRole("admin"), (_req, res) => {
     grade: u.grade || "junior",
     phone: u.phone || "",
     discord: u.discord || "",
+
     avatarUrl: u.avatarUrl || "",
+    avatarUrlAbs: toPublicUrl(req, u.avatarUrl || ""),
+
     verified: !!u.verified,
     verificationStatus: u.verificationStatus || (u.verified ? "APPROVED" : "PENDING"),
+
     verificationPhotoUrl: u.verificationPhotoUrl || "",
+    verificationPhotoUrlAbs: toPublicUrl(req, u.verificationPhotoUrl || ""),
+
     verifiedAt: u.verifiedAt || null,
     verifiedBy: u.verifiedBy || null,
   }));
 
   res.json(list);
 });
+  
 
 app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const target = db.users.find((u) => u.id === req.params.id);
