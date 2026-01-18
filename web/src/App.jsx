@@ -1,30 +1,26 @@
 // web/src/App.jsx
 import React, { useEffect, useState } from "react";
-import { fetchCurrentUser } from "./auth"; // use auth helper so avatarUrl is attached
+import { fetchCurrentUser } from "./auth";
 
-/* ---------- Shared UI ---------- */
 import Header from "./components/Header";
 
-/* ---------- Main pages ---------- */
 import Home from "./pages/Home";
 import Available from "./pages/Available";
 import MyJobs from "./pages/MyJobs";
 import Payments from "./pages/Payments";
 import JobDetails from "./pages/JobDetails";
 import PMJobDetails from "./pages/PMJobDetails";
-import Admin from "./pages/Admin"; // Wages
+import Admin from "./pages/Admin";
 import Scanner from "./components/Scanner";
-import AdminUsers from "./pages/AdminUsers"; // NE
+import AdminUsers from "./pages/AdminUsers";
 import AdminAudit from "./pages/AdminAudit";
-import Profile from "./pages/Profile"; // <— NEW
+import Profile from "./pages/Profile"; // now "Status" page
 
-/* ---------- Auth ---------- */
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Forgot from "./pages/Forgot";
 import Reset from "./pages/Reset";
 
-/* ---------------- Auth hook ---------------- */
 function useAuth() {
   const [user, setUser] = useState(null);
   const [loaded, setLoaded] = useState(false);
@@ -39,12 +35,18 @@ function useAuth() {
   return { user, setUser, loaded };
 }
 
-/* ---------------- Mini hash router ---------------- */
 function getHash() {
   return typeof window === "undefined" ? "#/" : window.location.hash || "#/";
 }
 function parseSegments(hash) {
   return hash.replace(/^#\//, "").split("?")[0].split("/").filter(Boolean);
+}
+
+function isVerifiedUser(u) {
+  if (!u) return false;
+  if (u.verified === true) return true;
+  const s = String(u.verificationStatus || u.verifyStatus || "").toLowerCase();
+  return ["verified", "approved", "approve"].includes(s);
 }
 
 export default function App() {
@@ -63,47 +65,49 @@ export default function App() {
     if (!loaded) return <div className="container">Loading...</div>;
 
     const segs = parseSegments(route);
-    const path = segs[0] || ""; // e.g. "", "available", "jobs", ...
+    const path = segs[0] || "";
 
-    /* -------- Top-level main pages -------- */
+    const authed = !!user;
+    const verified = isVerifiedUser(user);
+
+    // ✅ If logged in but NOT verified, force them to Status page (Profile route)
+    const needsVerificationGate = authed && !verified;
+    const allowWhenUnverified = new Set(["profile", "login", "register", "forgot", "reset"]);
+    if (needsVerificationGate && !allowWhenUnverified.has(path)) {
+      return <Profile navigate={navigate} user={user} setUser={setUser} />;
+    }
+
     if (path === "" || path === "home") return <Home navigate={navigate} user={user} />;
     if (path === "available") return <Available navigate={navigate} user={user} />;
     if (path === "my-jobs") return <MyJobs navigate={navigate} user={user} />;
     if (path === "payments") return <Payments navigate={navigate} user={user} />;
 
-    /* -------- Profile (requires login) -------- */
     if (path === "profile") {
       if (!user) return <Login navigate={navigate} setUser={setUser} />;
       return <Profile navigate={navigate} user={user} setUser={setUser} />;
     }
 
-    /* -------- Admin / Wages -------- */
     if (path === "admin-users" || path === "users") {
       return <AdminUsers user={user} />;
     }
 
-    if (path === "admin-audit" || path === "audit")
-      return <AdminAudit user={user} />;
+    if (path === "admin-audit" || path === "audit") return <AdminAudit user={user} />;
 
-    // AdminUsers was removed. Keep legacy routes but redirect them to Wages.
     if (path === "wages" || path === "users-audit") {
       return <Admin navigate={navigate} user={user} />;
     }
 
-    /* -------- Auth -------- */
     if (path === "login") return <Login navigate={navigate} setUser={setUser} />;
     if (path === "register") return <Register navigate={navigate} setUser={setUser} />;
     if (path === "forgot") return <Forgot navigate={navigate} />;
     if (path === "reset") return <Reset navigate={navigate} />;
 
-    /* -------- Jobs (detail + PM + scanner) -------- */
     if (path === "jobs") {
       const jobId = segs[1];
-      const sub = segs[2]; // "scanner" etc.
+      const sub = segs[2];
 
       if (!jobId) return <div className="container">Not Found</div>;
 
-      // Canonical scanner route: #/jobs/:id/scanner
       if (sub === "scanner") {
         if (user && (user.role === "pm" || user.role === "admin")) {
           return <Scanner navigate={navigate} user={user} />;
@@ -111,20 +115,17 @@ export default function App() {
         return <div className="container">Not Found</div>;
       }
 
-      // PM/Admin vs Part-timer views
       if (user && (user.role === "pm" || user.role === "admin")) {
         return <PMJobDetails jobId={jobId} navigate={navigate} user={user} />;
       }
       return <JobDetails jobId={jobId} navigate={navigate} user={user} />;
     }
 
-    /* -------- Fallback -------- */
     return <div className="container">Not Found</div>;
   }
 
   return (
     <div>
-      {/* Keep navigate for backward-compat; harmless if Header ignores it */}
       <Header user={user} navigate={navigate} setUser={setUser} />
       {renderRoute()}
     </div>
