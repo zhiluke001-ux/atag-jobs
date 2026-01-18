@@ -1,5 +1,6 @@
 // web/src/pages/AdminUsers.jsx
 import React, { useEffect, useMemo, useState } from "react";
+import dayjs from "dayjs";
 import { apiGet, apiPatch } from "../api";
 
 const ROLES = ["part-timer", "pm", "admin"];
@@ -21,29 +22,131 @@ function pillStyle(bg, border, color) {
   };
 }
 
-function fmtWhen(v) {
-  if (!v) return "—";
+/* ---------- URL helper (supports relative urls + data urls) ---------- */
+const API_BASE_CLEAN = (() => {
   try {
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleString();
+    const v = import.meta?.env?.VITE_API_BASE || import.meta?.env?.VITE_API_URL || "";
+    return String(v || "").replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+})();
+
+function toAbsUrl(u) {
+  if (!u) return "";
+  const s = String(u);
+  if (/^data:/i.test(s) || /^https?:\/\//i.test(s)) return s;
+  if (s.startsWith("//")) return window.location.protocol + s;
+  if (API_BASE_CLEAN) return API_BASE_CLEAN + (s.startsWith("/") ? s : `/${s}`);
+  return s;
+}
+
+/* ---------- flexible getters for backend field name differences ---------- */
+function pickFirstString(obj, keys) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+function getVerifyPicUrl(u) {
+  // supports: url OR dataUrl saved in DB
+  const raw = pickFirstString(u, [
+    "verifyImageUrl",
+    "verify_image_url",
+    "verificationImageUrl",
+    "verification_image_url",
+    "verifyPhotoUrl",
+    "verify_photo_url",
+    "verificationPhotoUrl",
+    "verification_photo_url",
+    "verifyImageDataUrl",
+    "verify_image_data_url",
+    "verificationDataUrl",
+    "verification_data_url",
+  ]);
+  return toAbsUrl(raw);
+}
+
+function getVerifyStatus(u) {
+  const raw = pickFirstString(u, ["verificationStatus", "verifyStatus", "verification_status", "verify_status"]);
+  const s = (raw || "").toLowerCase();
+
+  // normalize common values
+  if (["verified", "approve", "approved"].includes(s)) return "verified";
+  if (["rejected", "reject", "declined"].includes(s)) return "rejected";
+  if (["pending", "awaiting", "new"].includes(s)) return "pending";
+
+  // fallback to boolean
+  if (u?.verified === true) return "verified";
+  if (u?.verified === false) return "pending";
+  return "pending";
+}
+
+function fmtSubmitted(u) {
+  const t =
+    u?.verificationSubmittedAt ||
+    u?.verifySubmittedAt ||
+    u?.submittedAt ||
+    u?.createdAt ||
+    u?.created_at ||
+    null;
+
+  if (!t) return "—";
+  try {
+    return dayjs(t).format("YYYY/MM/DD HH:mm");
   } catch {
     return "—";
   }
 }
 
+function TabBtn({ active, onClick, children, badge }) {
+  return (
+    <button
+      className="btn"
+      onClick={onClick}
+      style={{
+        borderRadius: 12,
+        fontWeight: 800,
+        background: active ? "#ef4444" : "#fff",
+        color: active ? "#fff" : "#111827",
+        borderColor: active ? "#ef4444" : "var(--border)",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      {children}
+      {Number.isFinite(badge) ? (
+        <span
+          style={{
+            background: active ? "rgba(255,255,255,.25)" : "#fee2e2",
+            color: active ? "#fff" : "#991b1b",
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontSize: 12,
+            fontWeight: 900,
+          }}
+        >
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
 export default function AdminUsers({ user }) {
-  const [tab, setTab] = useState("users"); // "users" | "verification"
+  const [tab, setTab] = useState("manage"); // "manage" | "verify"
 
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
-
   const [q, setQ] = useState("");
 
   const [savingId, setSavingId] = useState(null);
   const [edits, setEdits] = useState({}); // { [userId]: { role?, grade? } }
 
-  const [busyVerifyId, setBusyVerifyId] = useState(null);
+  const [busyActionId, setBusyActionId] = useState(null); // verify/reject action busy
   const [imgOpen, setImgOpen] = useState(null); // url string
 
   const isAdmin = !!user && user.role === "admin";
@@ -64,7 +167,39 @@ export default function AdminUsers({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
-  // ---------------- Draft helpers (User Management tab) ----------------
+  const pendingCount = useMemo(() => {
+    return (list || []).filter((u) => getVerifyStatus(u) === "pending").length;
+  }, [list]);
+
+  // ----- search filter depends on tab -----
+  const filtered = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    if (!t) return list;
+
+    return (list || []).filter((u) => {
+      const email = (u.email || "").toLowerCase();
+      const uname = (u.username || "").toLowerCase();
+      const name = (u.name || "").toLowerCase();
+      const phone = (u.phone || "").toLowerCase();
+      const discord = (u.discord || "").toLowerCase();
+
+      const status = getVerifyStatus(u);
+      const statusText = String(status);
+
+      return (
+        email.includes(t) ||
+        uname.includes(t) ||
+        name.includes(t) ||
+        phone.includes(t) ||
+        discord.includes(t) ||
+        statusText.includes(t)
+      );
+    });
+  }, [q, list]);
+
+  // =========================
+  // User Management helpers
+  // =========================
   function getDraft(u) {
     const d = edits[u.id] || {};
     return {
@@ -124,103 +259,52 @@ export default function AdminUsers({ user }) {
     });
   }
 
-  // ---------------- Verification actions (Verification tab) ----------------
-  async function verifyUser(u) {
+  // =========================
+  // Verification actions
+  // =========================
+  async function setVerification(u, nextStatus) {
+    // nextStatus: "verified" | "rejected" | "pending"
     try {
-      setBusyVerifyId(u.id);
-      const res = await apiPatch(`/admin/users/${u.id}`, { verified: true });
-      const updated = res?.user || { ...u, verified: true, verificationStatus: "verified" };
-      setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
-      alert("User verified ✅");
-    } catch (err) {
-      alert(err?.message || "Verify failed");
-    } finally {
-      setBusyVerifyId(null);
-    }
-  }
+      setBusyActionId(u.id);
 
-  // "Reject" tries to persist a rejected state if backend supports it,
-  // and falls back safely to verified:false (so user still can't login).
-  async function rejectUser(u) {
-    if (!window.confirm(`Reject verification for ${u.email || u.username || "this user"}?`)) return;
+      // Send multiple keys so backend with different schema still works
+      const body = {
+        verificationStatus: nextStatus,
+        verified: nextStatus === "verified",
+      };
 
-    try {
-      setBusyVerifyId(u.id);
-
-      let res = null;
-
-      // Try richer payloads first (if your backend supports them)
-      try {
-        res = await apiPatch(`/admin/users/${u.id}`, {
-          verified: false,
-          verificationStatus: "rejected",
-        });
-      } catch {
-        // fallback to simplest supported contract
-        res = await apiPatch(`/admin/users/${u.id}`, { verified: false });
-      }
-
+      const res = await apiPatch(`/admin/users/${u.id}`, body);
       const updated =
         res?.user ||
-        ({
+        res ||
+        {
           ...u,
-          verified: false,
-          verificationStatus: "rejected",
-        });
+          ...body,
+        };
 
       setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
-      alert("Rejected ❌");
+
+      if (nextStatus === "verified") alert("User verified ✅");
+      if (nextStatus === "rejected") alert("User rejected.");
     } catch (err) {
-      alert(err?.message || "Reject failed");
+      alert(err?.message || "Action failed");
     } finally {
-      setBusyVerifyId(null);
+      setBusyActionId(null);
     }
   }
 
-  if (!isAdmin) return <div className="container">Not authorized.</div>;
+  if (!isAdmin) {
+    return <div className="container">Not authorized.</div>;
+  }
 
-  // ---------------- Tab-specific dataset + search ----------------
-  const pendingList = useMemo(() => {
-    const arr = (list || []).filter((u) => !u.verified); // anything not verified goes to verification tab
-    // try newest first if timestamps exist
-    return arr.sort((a, b) => {
-      const ta = new Date(a.verifySubmittedAt || a.updatedAt || a.createdAt || 0).getTime() || 0;
-      const tb = new Date(b.verifySubmittedAt || b.updatedAt || b.createdAt || 0).getTime() || 0;
-      return tb - ta;
-    });
-  }, [list]);
+  const showManage = tab === "manage";
+  const showVerify = tab === "verify";
 
-  const baseList = tab === "verification" ? pendingList : list;
-
-  const filtered = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    if (!t) return baseList;
-
-    return (baseList || []).filter((u) => {
-      const email = (u.email || "").toLowerCase();
-      const uname = (u.username || "").toLowerCase();
-      const name = (u.name || "").toLowerCase();
-      const phone = (u.phone || "").toLowerCase();
-      const discord = (u.discord || "").toLowerCase();
-
-      const statusWord = u.verified
-        ? "verified"
-        : (u.verificationStatus || "").toLowerCase().includes("reject")
-        ? "rejected"
-        : "pending";
-
-      return (
-        email.includes(t) ||
-        uname.includes(t) ||
-        name.includes(t) ||
-        phone.includes(t) ||
-        discord.includes(t) ||
-        statusWord.includes(t)
-      );
-    });
-  }, [q, baseList]);
-
-  const pendingCount = pendingList.length;
+  const verificationRows = (filtered || []).filter((u) => {
+    const st = getVerifyStatus(u);
+    // show pending + rejected (you can search "verified" if you want, but default hide)
+    return st !== "verified";
+  });
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
@@ -233,7 +317,6 @@ export default function AdminUsers({ user }) {
           alignItems: "center",
           justifyContent: "space-between",
           marginBottom: 12,
-          flexWrap: "wrap",
         }}
       >
         <div>
@@ -242,35 +325,28 @@ export default function AdminUsers({ user }) {
             Use <strong>Verification</strong> to approve/reject new registrations.
           </div>
 
-          {/* Tabs */}
-          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-            <button
-              className={tab === "users" ? "btn primary" : "btn"}
-              onClick={() => setTab("users")}
-            >
+          <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <TabBtn active={showManage} onClick={() => setTab("manage")}>
               User Management
-            </button>
-            <button
-              className={tab === "verification" ? "btn primary" : "btn"}
-              onClick={() => setTab("verification")}
-              title="Review uploaded pics and verify users"
-            >
-              Verification {pendingCount ? `(${pendingCount})` : ""}
-            </button>
+            </TabBtn>
+
+            <TabBtn active={showVerify} onClick={() => setTab("verify")} badge={pendingCount}>
+              Verification
+            </TabBtn>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input
             placeholder={
-              tab === "verification"
-                ? 'Search name/email/phone/discord ("pending", "rejected")'
+              showVerify
+                ? 'Search name/email/phone/discord ("pending","rejected")'
                 : "Search email / username / name / phone / discord"
             }
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="card"
-            style={{ padding: 8, width: 360, maxWidth: "100%" }}
+            style={{ padding: 8, width: 420, maxWidth: "100%" }}
           />
           <button className="btn" onClick={refresh} disabled={loading}>
             {loading ? "Refreshing..." : "Refresh"}
@@ -280,8 +356,8 @@ export default function AdminUsers({ user }) {
 
       {loading ? (
         <div className="card">Loading...</div>
-      ) : tab === "users" ? (
-        // ===================== User Management =====================
+      ) : showManage ? (
+        /* ========================= User Management ========================= */
         <div className="card table-shell" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -291,7 +367,6 @@ export default function AdminUsers({ user }) {
                 <th style={{ padding: "8px" }}>Username</th>
                 <th style={{ padding: "8px" }}>Phone</th>
                 <th style={{ padding: "8px" }}>Discord</th>
-
                 <th style={{ padding: "8px" }}>Account Role</th>
                 <th style={{ padding: "8px" }}>Staff Grade</th>
                 <th style={{ padding: "8px" }} />
@@ -333,11 +408,7 @@ export default function AdminUsers({ user }) {
 
                     <td style={{ padding: 8 }}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button
-                          className="btn primary"
-                          disabled={savingId === u.id || !dirty}
-                          onClick={() => save(u)}
-                        >
+                        <button className="btn primary" disabled={savingId === u.id || !dirty} onClick={() => save(u)}>
                           {savingId === u.id ? "Saving..." : "Save"}
                         </button>
 
@@ -363,7 +434,7 @@ export default function AdminUsers({ user }) {
           </table>
         </div>
       ) : (
-        // ===================== Verification =====================
+        /* ========================= Verification ========================= */
         <div className="card table-shell" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -380,19 +451,10 @@ export default function AdminUsers({ user }) {
             </thead>
 
             <tbody>
-              {filtered.map((u) => {
-                const hasPic = !!u.verifyImageUrl; // backend should provide this
-                const picUrl = u.verifyImageUrl || "";
-                const submittedAt =
-                  u.verifySubmittedAt || u.verifyUploadedAt || u.verifyUpdatedAt || u.updatedAt || u.createdAt || null;
-
-                const statusWord = u.verified
-                  ? "verified"
-                  : (u.verificationStatus || "").toLowerCase().includes("reject")
-                  ? "rejected"
-                  : "pending";
-
-                const busy = busyVerifyId === u.id;
+              {verificationRows.map((u) => {
+                const status = getVerifyStatus(u);
+                const picUrl = getVerifyPicUrl(u);
+                const hasPic = !!picUrl;
 
                 return (
                   <tr key={u.id} style={{ borderTop: "1px solid #eee" }}>
@@ -400,7 +462,8 @@ export default function AdminUsers({ user }) {
                     <td style={{ padding: 8 }}>{u.email || "—"}</td>
                     <td style={{ padding: 8 }}>{u.phone || "—"}</td>
                     <td style={{ padding: 8 }}>{u.discord || "—"}</td>
-                    <td style={{ padding: 8, fontSize: 12, color: "#444" }}>{fmtWhen(submittedAt)}</td>
+
+                    <td style={{ padding: 8 }}>{fmtSubmitted(u)}</td>
 
                     <td style={{ padding: 8 }}>
                       {hasPic ? (
@@ -428,8 +491,10 @@ export default function AdminUsers({ user }) {
                     </td>
 
                     <td style={{ padding: 8 }}>
-                      {statusWord === "rejected" ? (
-                        <span style={pillStyle("#fef2f2", "#fca5a5", "#991b1b")}>❌ Rejected</span>
+                      {status === "verified" ? (
+                        <span style={pillStyle("#ecfdf5", "#6ee7b7", "#065f46")}>✅ Verified</span>
+                      ) : status === "rejected" ? (
+                        <span style={pillStyle("#fee2e2", "#fca5a5", "#991b1b")}>⛔ Rejected</span>
                       ) : (
                         <span style={pillStyle("#fff7ed", "#fdba74", "#9a3412")}>⏳ Pending</span>
                       )}
@@ -439,20 +504,19 @@ export default function AdminUsers({ user }) {
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                         <button
                           className="btn primary"
-                          disabled={busy || !hasPic}
+                          disabled={busyActionId === u.id || !hasPic}
                           title={!hasPic ? "User must upload verification picture first" : ""}
-                          onClick={() => verifyUser(u)}
+                          onClick={() => setVerification(u, "verified")}
                         >
-                          {busy ? "Working..." : "Verify"}
+                          {busyActionId === u.id ? "Working..." : "Verify"}
                         </button>
 
                         <button
                           className="btn"
-                          disabled={busy || !hasPic}
-                          title={!hasPic ? "No verification picture" : ""}
-                          onClick={() => rejectUser(u)}
+                          disabled={busyActionId === u.id}
+                          onClick={() => setVerification(u, "rejected")}
                         >
-                          {busy ? "Working..." : "Reject"}
+                          {busyActionId === u.id ? "Working..." : "Reject"}
                         </button>
                       </div>
                     </td>
@@ -460,10 +524,10 @@ export default function AdminUsers({ user }) {
                 );
               })}
 
-              {!filtered.length && (
+              {!verificationRows.length && (
                 <tr>
                   <td colSpan={8} style={{ padding: 12, color: "#666" }}>
-                    No pending verifications.
+                    No pending/rejected users.
                   </td>
                 </tr>
               )}
@@ -471,13 +535,12 @@ export default function AdminUsers({ user }) {
           </table>
 
           <div style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
-            Tip: Reject will keep the account <code>unverified</code>. If you want rejected users to be hidden permanently,
-            your backend should store something like <code>verificationStatus: "rejected"</code>.
+            Tip: Reject keeps the account unverified. User can re-upload from <code>Profile → Status</code>.
           </div>
         </div>
       )}
 
-      {/* Image modal */}
+      {/* Simple image modal */}
       {imgOpen && (
         <div
           onClick={() => setImgOpen(null)}
@@ -495,27 +558,18 @@ export default function AdminUsers({ user }) {
           <div
             className="card"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: 760, width: "100%", padding: 12 }}
+            style={{
+              maxWidth: 760,
+              width: "100%",
+              padding: 12,
+            }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
               <div style={{ fontWeight: 800 }}>Verification Picture</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  className="btn"
-                  onClick={() => {
-                    try {
-                      window.open(imgOpen, "_blank");
-                    } catch {}
-                  }}
-                >
-                  Open
-                </button>
-                <button className="btn" onClick={() => setImgOpen(null)}>
-                  Close
-                </button>
-              </div>
+              <button className="btn" onClick={() => setImgOpen(null)}>
+                Close
+              </button>
             </div>
-
             <div style={{ marginTop: 10 }}>
               <img
                 src={imgOpen}
