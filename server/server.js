@@ -19,9 +19,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "12mb" })); 
 app.use(morgan("dev"));
+;
 
 /* ---- uploads (images) ---- */
 const DATA_DIR = process.env.DATA_DIR
@@ -43,6 +45,15 @@ app.use("/uploads", express.static(uploadsRoot));
 
 /* ---------------- DB + defaults ---------------- */
 let db = await loadDB();
+
+/* =========================
+   DB-backed blob store
+   (Render free-safe)
+========================= */
+db.blobs = db.blobs || {};              // { [blobId]: { mime, b64, size, createdAt, meta } }
+db.blobOrder = Array.isArray(db.blobOrder) ? db.blobOrder : []; // keep insertion order
+const BLOB_CAP = Number(process.env.BLOB_CAP || 300); // keep latest 300 images only
+
 
 db.config = db.config || {};
 db.config.jwtSecret = db.config.jwtSecret || "dev-secret";
@@ -734,28 +745,102 @@ async function sendResetEmail(to, link) {
  * ✅ Generic image saver for DataURL -> file in absDir -> returns public url.
  * - publicPrefix example: "/uploads/verifications" or "/uploads/parking-receipts"
  */
-function saveDataUrlImage(dataUrl, absDir, publicPrefix, fileBaseNoExt) {
+function parseImageDataUrl(dataUrl) {
   const s = String(dataUrl || "");
   const m = s.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
   if (!m) throw new Error("invalid_image_data");
 
+  const mime = m[1].toLowerCase();
   const extRaw = m[2].toLowerCase();
   const ext = extRaw === "jpeg" ? "jpg" : extRaw;
 
   const b64 = m[3];
   const buf = Buffer.from(b64, "base64");
 
-  const MAX = 2 * 1024 * 1024;
+  const MAX = 2 * 1024 * 1024; // 2MB binary
   if (buf.length > MAX) throw new Error("image_too_large");
 
-  fs.ensureDirSync(absDir);
-  const filename = `${fileBaseNoExt}.${ext}`;
-  const abs = path.join(absDir, filename);
-  fs.writeFileSync(abs, buf);
-
-  const pfx = String(publicPrefix || "").replace(/\/$/, "");
-  return `${pfx}/${filename}?v=${Date.now()}`;
+  return { mime, ext, b64, size: buf.length };
 }
+
+function pruneBlobsIfNeeded() {
+  // keep only latest BLOB_CAP
+  while (db.blobOrder.length > BLOB_CAP) {
+    const oldest = db.blobOrder.shift();
+    if (oldest && db.blobs[oldest]) delete db.blobs[oldest];
+  }
+}
+
+/** Save image into DB and return public path: /blob/<id>?v=... */
+async function saveDataUrlBlob(dataUrl, meta = {}) {
+  const { mime, b64, size } = parseImageDataUrl(dataUrl);
+
+  const id = "b" + Math.random().toString(36).slice(2, 12);
+  db.blobs[id] = {
+    mime,
+    b64,
+    size,
+    createdAt: new Date().toISOString(),
+    meta: {
+      kind: meta.kind || "",
+      ownerUserId: meta.ownerUserId || null,
+      jobId: meta.jobId || null,
+    },
+  };
+
+  db.blobOrder.push(id);
+  pruneBlobsIfNeeded();
+  await saveDB(db);
+
+  return `/blob/${id}?v=${Date.now()}`;
+}
+
+function blobIdFromAnyUrl(u) {
+  if (!u) return null;
+  const s = String(u);
+
+  // allow absolute
+  const noHost = s.replace(/^https?:\/\/[^/]+/i, "");
+  const clean = noHost.split("?")[0];
+
+  const m = clean.match(/^\/blob\/([a-z0-9]+)/i);
+  return m ? m[1] : null;
+}
+
+async function deleteBlobByUrl(u) {
+  const id = blobIdFromAnyUrl(u);
+  if (!id) return false;
+  if (!db.blobs || !db.blobs[id]) return false;
+
+  delete db.blobs[id];
+  db.blobOrder = (db.blobOrder || []).filter((x) => x !== id);
+  await saveDB(db);
+  return true;
+}
+
+/** Backward-compatible delete for old /uploads files (best-effort) */
+async function deleteStoredImage(u) {
+  if (!u) return;
+
+  // new DB blob
+  const blobId = blobIdFromAnyUrl(u);
+  if (blobId) {
+    await deleteBlobByUrl(u);
+    return;
+  }
+
+  // old local uploads (may not exist on Render free)
+  try {
+    const s = String(u).replace(/^https?:\/\/[^/]+/i, "");
+    const clean = s.split("?")[0];
+    if (clean.startsWith("/uploads/")) {
+      const rel = clean.replace("/uploads/", "");
+      const abs = path.join(uploadsRoot, rel);
+      if (fs.existsSync(abs)) fs.unlinkSync(abs);
+    }
+  } catch {}
+}
+
 
 /* -------------- auth --------------- */
 
@@ -835,12 +920,10 @@ app.post("/register", async (req, res) => {
 
   let verificationPhotoUrl = "";
   try {
-    verificationPhotoUrl = saveDataUrlImage(
-      verificationDataUrl,
-      verificationsDir,
-      "/uploads/verifications",
-      `${id}-${Date.now()}`
-    );
+  verificationPhotoUrl = await saveDataUrlBlob(verificationDataUrl, {
+    kind: "verification",
+    ownerUserId: id,
+  });
   } catch (e) {
     return res.status(400).json({ error: e?.message || "invalid_verification_photo" });
   }
@@ -1060,25 +1143,29 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
   const dataUrl = req.body?.dataUrl;
   if (!dataUrl || typeof dataUrl !== "string") return res.status(400).json({ error: "dataUrl_required" });
 
-  const m = dataUrl.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
-  if (!m) return res.status(400).json({ error: "invalid_image_data" });
+  // delete old avatar (if any)
+  const old = user.avatarUrl || "";
 
-  const ext = m[2] === "jpeg" ? "jpg" : m[2];
-  const b64 = m[3];
-  const buf = Buffer.from(b64, "base64");
+  let avatarUrl = "";
+  try {
+    avatarUrl = await saveDataUrlBlob(dataUrl, {
+      kind: "avatar",
+      ownerUserId: user.id,
+    });
+  } catch (e) {
+    return res.status(400).json({ error: e?.message || "invalid_avatar" });
+  }
 
-  if (buf.length > 2 * 1024 * 1024) return res.status(400).json({ error: "image_too_large" });
-
-  const filename = `${user.id}.${ext}`;
-  const abs = path.join(avatarsDir, filename);
-  await fs.writeFile(abs, buf);
-
-  user.avatarUrl = `/uploads/avatars/${filename}?v=${Date.now()}`;
+  user.avatarUrl = avatarUrl;
   await saveDB(db);
-  addAudit("me_update_avatar", { userId: user.id, ext }, req);
 
+  // best-effort remove old
+  await deleteStoredImage(old);
+
+  addAudit("me_update_avatar", { userId: user.id }, req);
   return res.json({ ok: true, avatarUrl: user.avatarUrl });
 });
+
 
 /* -------- Admin: users -------- */
 app.get("/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
@@ -1191,6 +1278,9 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
 app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const uid = req.params.id;
   const user = (db.users || []).find((u) => u.id === uid);
+  await deleteStoredImage(user.avatarUrl || "");
+  await deleteStoredImage(user.verificationPhotoUrl || "");
+
   if (!user) return res.status(404).json({ error: "user_not_found" });
 
   if (user.role === "admin") {
@@ -1219,8 +1309,12 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
 
     // ✅ remove any parking receipts by this user
     if (Array.isArray(j.parkingReceipts)) {
+      for (const r of j.parkingReceipts) {
+        if (r?.userId === uid) await deleteStoredImage(r.photoUrl);
+      }
       j.parkingReceipts = j.parkingReceipts.filter((r) => r?.userId !== uid);
     }
+
   }
 
   delete db.notifications?.[uid];
@@ -1230,6 +1324,26 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
   addAudit("admin_delete_user", { userId: uid, email: user.email }, req);
   res.json({ ok: true, removed: { id: user.id, email: user.email } });
 });
+
+app.post(
+  "/admin/users/:id/verification-photo/remove",
+  authMiddleware,
+  requireRole("admin"),
+  async (req, res) => {
+    const target = db.users.find((u) => u.id === req.params.id);
+    if (!target) return res.status(404).json({ error: "user_not_found" });
+
+    const old = target.verificationPhotoUrl || "";
+    target.verificationPhotoUrl = "";
+    await saveDB(db);
+
+    await deleteStoredImage(old);
+    addAudit("admin_remove_verification_photo", { userId: target.id }, req);
+
+    return res.json({ ok: true });
+  }
+);
+
 
 /* -------- Config (Admin) -------- */
 app.get("/config/rates", authMiddleware, requireRole("admin"), (_req, res) => {
@@ -1716,6 +1830,18 @@ function toPublicUrl(req, p) {
   return `${publicBase(req)}${p.startsWith("/") ? "" : "/"}${p}`;
 }
 
+app.get("/blob/:id", (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const item = db.blobs?.[id];
+  if (!item) return res.status(404).send("Not Found");
+
+  const buf = Buffer.from(item.b64, "base64");
+  res.setHeader("Content-Type", item.mime || "image/jpeg");
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  return res.end(buf);
+});
+
+
 function absPathFromReceiptUrl(photoUrl) {
   try {
     const clean = String(photoUrl || "").split("?")[0];
@@ -1773,12 +1899,11 @@ app.post(
 
     let photoUrl = "";
     try {
-      photoUrl = saveDataUrlImage(
-        dataUrl,
-        parkingReceiptsDir,
-        "/uploads/parking-receipts",
-        `${job.id}-${uid}-${Date.now()}`
-      );
+      photoUrl = await saveDataUrlBlob(dataUrl, {
+        kind: "parking-receipt",
+        ownerUserId: uid,
+        jobId: job.id,
+      });
     } catch (e) {
       return res.status(400).json({ error: e?.message || "invalid_receipt_image" });
     }
@@ -1925,6 +2050,7 @@ app.post(
     }
 
     job.parkingReceipts.splice(idx, 1);
+    await deleteStoredImage(receipt.photoUrl);
 
     // best-effort delete file
     const abs = absPathFromReceiptUrl(receipt.photoUrl);
