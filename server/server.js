@@ -21,7 +21,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.set("trust proxy", 1);
 app.use(cors());
-app.use(express.json({ limit: "12mb" })); 
+app.use(express.json({ limit: "12mb" }));
 app.use(morgan("dev"));
 ;
 
@@ -53,7 +53,6 @@ let db = await loadDB();
 db.blobs = db.blobs || {};              // { [blobId]: { mime, b64, size, createdAt, meta } }
 db.blobOrder = Array.isArray(db.blobOrder) ? db.blobOrder : []; // keep insertion order
 const BLOB_CAP = Number(process.env.BLOB_CAP || 300); // keep latest 300 images only
-
 
 db.config = db.config || {};
 db.config.jwtSecret = db.config.jwtSecret || "dev-secret";
@@ -841,7 +840,6 @@ async function deleteStoredImage(u) {
   } catch {}
 }
 
-
 /* -------------- auth --------------- */
 
 app.post("/login", async (req, res) => {
@@ -865,28 +863,28 @@ app.post("/login", async (req, res) => {
 
   const token = signUserToken(user);
   addAudit("login", { identifier: id }, { user });
-res.json({
-  token,
-  user: {
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    name: user.name,
-    grade: user.grade || "junior",
-    username: user.username || "",
-    phone: user.phone || "",
-    discord: user.discord || "",
-    avatarUrl: user.avatarUrl || "",
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      name: user.name,
+      grade: user.grade || "junior",
+      username: user.username || "",
+      phone: user.phone || "",
+      discord: user.discord || "",
+      avatarUrl: user.avatarUrl || "",
 
-    // ✅ add these
-    verified: !!user.verified,
-    verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
-    verificationPhotoUrl: user.verificationPhotoUrl || "",
-    verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
-    verifiedAt: user.verifiedAt || null,
-    verifiedBy: user.verifiedBy || null,
-  },
-});
+      // ✅ add these
+      verified: !!user.verified,
+      verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
+      verificationPhotoUrl: user.verificationPhotoUrl || "",
+      verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
+      verifiedAt: user.verifiedAt || null,
+      verifiedBy: user.verifiedBy || null,
+    },
+  });
 });
 
 app.post("/register", async (req, res) => {
@@ -920,10 +918,10 @@ app.post("/register", async (req, res) => {
 
   let verificationPhotoUrl = "";
   try {
-  verificationPhotoUrl = await saveDataUrlBlob(verificationDataUrl, {
-    kind: "verification",
-    ownerUserId: id,
-  });
+    verificationPhotoUrl = await saveDataUrlBlob(verificationDataUrl, {
+      kind: "verification",
+      ownerUserId: id,
+    });
   } catch (e) {
     return res.status(400).json({ error: e?.message || "invalid_verification_photo" });
   }
@@ -1063,7 +1061,6 @@ app.get("/me", authMiddleware, (req, res) => {
   });
 });
 
-
 async function handleUpdateMe(req, res) {
   const user = (db.users || []).find((u) => u.id === req.user.id);
   if (!user) return res.status(404).json({ error: "user_not_found" });
@@ -1106,7 +1103,7 @@ async function handleUpdateMe(req, res) {
       phone: user.phone || "",
       discord: user.discord || "",
       avatarUrl: user.avatarUrl || "",
-    
+
       // ✅ add these
       verified: !!user.verified,
       verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
@@ -1166,7 +1163,6 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
   return res.json({ ok: true, avatarUrl: user.avatarUrl });
 });
 
-
 /* -------- Admin: users -------- */
 app.get("/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
   const list = (db.users || []).map((u) => ({
@@ -1194,7 +1190,6 @@ app.get("/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
 
   res.json(list);
 });
-  
 
 app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const target = db.users.find((u) => u.id === req.params.id);
@@ -1314,7 +1309,6 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
       }
       j.parkingReceipts = j.parkingReceipts.filter((r) => r?.userId !== uid);
     }
-
   }
 
   delete db.notifications?.[uid];
@@ -1343,7 +1337,6 @@ app.post(
     return res.json({ ok: true });
   }
 );
-
 
 /* -------- Config (Admin) -------- */
 app.get("/config/rates", authMiddleware, requireRole("admin"), (_req, res) => {
@@ -1470,14 +1463,20 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   await saveDB(db);
   addAudit("create_job", { jobId: id, title }, req);
 
+  // ✅✅✅ FIXED: New job notify only to part-timers + admins (NOT PM) ✅✅✅
   try {
-    const recipients = (db.users || []).map((u) => u.id);
-    notifyUsers(recipients, {
-      title: `New job: ${title}`,
-      body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
-      link: `/#/jobs/${id}`,
-      type: "job_new",
-    }).catch(() => {});
+    const recipients = (db.users || [])
+      .filter((u) => u && (u.role === "part-timer" || u.role === "admin"))
+      .map((u) => u.id);
+
+    if (recipients.length) {
+      notifyUsers(recipients, {
+        title: `New job: ${title}`,
+        body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
+        link: `/#/jobs/${id}`,
+        type: "job_new",
+      }).catch(() => {});
+    }
   } catch {}
 
   res.json(job);
@@ -1740,6 +1739,21 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
       await saveDB(db);
       exportJobCSV(job);
       addAudit("reapply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
+
+      // ✅✅✅ FIXED: notify admins when someone applies (including reapply) ✅✅✅
+      try {
+        const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
+        const me = (db.users || []).find((u) => u.id === req.user.id);
+        if (adminIds.length) {
+          notifyUsers(adminIds, {
+            title: `New application: ${job.title}`,
+            body: `${me?.name || req.user.email} applied • ${transport}`,
+            link: `/#/admin/jobs/${job.id}`, // adjust if your admin route differs
+            type: "app_new",
+          }).catch(() => {});
+        }
+      } catch {}
+
       return res.json({ ok: true, reapply: true });
     }
 
@@ -1754,6 +1768,21 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
       }
       await saveDB(db);
       exportJobCSV(job);
+
+      // ✅✅✅ FIXED: notify admins when someone applies (existing application updated with LU) ✅✅✅
+      try {
+        const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
+        const me = (db.users || []).find((u) => u.id === req.user.id);
+        if (adminIds.length) {
+          notifyUsers(adminIds, {
+            title: `Application update: ${job.title}`,
+            body: `${me?.name || req.user.email} updated application • ${transport}`,
+            link: `/#/admin/jobs/${job.id}`,
+            type: "app_new",
+          }).catch(() => {});
+        }
+      } catch {}
+
       return res.json({ ok: true, updated: true });
     }
 
@@ -1762,6 +1791,21 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
       ensureLoadingUnload(job);
       await saveDB(db);
       exportJobCSV(job);
+
+      // ✅✅✅ FIXED: notify admins when someone updates their application ✅✅✅
+      try {
+        const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
+        const me = (db.users || []).find((u) => u.id === req.user.id);
+        if (adminIds.length) {
+          notifyUsers(adminIds, {
+            title: `Application update: ${job.title}`,
+            body: `${me?.name || req.user.email} updated application • ${transport}`,
+            link: `/#/admin/jobs/${job.id}`,
+            type: "app_new",
+          }).catch(() => {});
+        }
+      } catch {}
+
       return res.json({ ok: true, updated: true });
     }
 
@@ -1787,6 +1831,21 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
   await saveDB(db);
   exportJobCSV(job);
   addAudit("apply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
+
+  // ✅✅✅ FIXED: notify admins when someone applies ✅✅✅
+  try {
+    const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
+    const me = (db.users || []).find((u) => u.id === req.user.id);
+    if (adminIds.length) {
+      notifyUsers(adminIds, {
+        title: `New application: ${job.title}`,
+        body: `${me?.name || req.user.email} applied • ${transport}`,
+        link: `/#/admin/jobs/${job.id}`,
+        type: "app_new",
+      }).catch(() => {});
+    }
+  } catch {}
+
   res.json({ ok: true });
 });
 
@@ -1794,13 +1853,6 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
    POST /jobs/:id/parking-receipt
    Body: { dataUrl, amount?, note? }
 */
-/* ✅✅✅ Parking receipt APIs ✅✅✅
-   - Submit: POST /jobs/:id/parking-receipt
-   - My receipts: GET /jobs/:id/parking-receipt/me
-   - PM/Admin all receipts: GET /jobs/:id/parking-receipts
-   - Delete (owner or PM/Admin): POST /jobs/:id/parking-receipt/:rid/delete
-*/
-
 /* ✅✅✅ Parking receipt APIs ✅✅✅
    - Submit: POST /jobs/:id/parking-receipt
    - My receipts: GET /jobs/:id/parking-receipt/me
@@ -1840,7 +1892,6 @@ app.get("/blob/:id", (req, res) => {
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
   return res.end(buf);
 });
-
 
 function absPathFromReceiptUrl(photoUrl) {
   try {
@@ -2015,7 +2066,6 @@ app.post(
   }
 );
 
-
 app.get("/__debug/receipt-file", (req, res) => {
   const p = String(req.query.p || "");
   const abs = absPathFromReceiptUrl(p);
@@ -2026,7 +2076,6 @@ app.get("/__debug/receipt-file", (req, res) => {
     exists: abs ? fs.existsSync(abs) : false,
   });
 });
-
 
 /** Delete receipt (owner or PM/Admin) */
 app.post(
@@ -2170,14 +2219,16 @@ app.post("/jobs/:id/approve", authMiddleware, requireRole("pm", "admin"), async 
   exportJobCSV(job);
   addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
 
+  // ✅✅✅ FIXED: approve -> notify applicant; reject -> NO notification ✅✅✅
   try {
-    const msg = approve ? "approved ✅" : "rejected ❌";
-    notifyUsers([userId], {
-      title: `Your application ${msg}`,
-      body: job.title,
-      link: `/#/jobs/${job.id}`,
-      type: approve ? "app_approved" : "app_rejected",
-    }).catch(() => {});
+    if (approve) {
+      notifyUsers([userId], {
+        title: "Your application was approved ✅",
+        body: job.title,
+        link: `/#/jobs/${job.id}`,
+        type: "app_approved",
+      }).catch(() => {});
+    }
   } catch {}
 
   res.json({ ok: true });
@@ -2213,8 +2264,6 @@ function ensureEarlyCall(job) {
 
   return job.earlyCall;
 }
-
-
 
 app.get("/jobs/:id/earlycall", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const job = db.jobs.find((j) => j.id === req.params.id);
@@ -2676,7 +2725,6 @@ app.get("/jobs/:id/scanner", authMiddleware, (req, res) => {
   if (!s) return res.status(404).json({ error: "scanner_unknown" });
   res.json({ lat: s.lat, lng: s.lng, updatedAt: s.updatedAt });
 });
-
 
 function listRoutes(appInstance) {
   const out = [];
