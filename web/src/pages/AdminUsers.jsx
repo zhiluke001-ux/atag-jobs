@@ -564,9 +564,6 @@ export default function AdminUsers({ user }) {
                             View
                           </button>
 
-                          <button className="btn" disabled={busyPicId === u.id} onClick={() => removeVerifyPic(u)}>
-                            {busyPicId === u.id ? "Removing..." : "Remove"}
-                          </button>
                         </div>
                       ) : (
                         <span style={{ color: "#666", fontSize: 12 }}>No pic</span>
@@ -699,7 +696,7 @@ export default function AdminUsers({ user }) {
                 }}
                 onError={() => {
                   setImgLoadErr(
-                    "Image failed to load (likely old /uploads file missing after Render restart). You can click 'Remove Pic' and ask user to re-upload."
+                    "Image failed to load (likely old /uploads file missing after Render restart)."
                   );
                 }}
               />
