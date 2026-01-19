@@ -12,6 +12,29 @@ const N = (v, d = 0) => {
   const x = Number(v);
   return Number.isFinite(x) ? x : d;
 };
+
+const fmtDateOnly = (value) => {
+  if (!value) return "";
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    if (!d || Number.isNaN(d.getTime())) return "";
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
+  } catch {
+    return "";
+  }
+};
+
+const fmtTimeOnly = (value) => {
+  if (!value) return "";
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    if (!d || Number.isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+};
+
 const fmtRange = (start, end) => {
   try {
     const s = new Date(start),
@@ -30,11 +53,14 @@ const fmtRange = (start, end) => {
         hour: "2-digit",
         minute: "2-digit",
       });
-    return same ? `${dt(s)} — ${t(e)}` : `${dt(s)} — ${dt(e)}`;
+
+    // ✅ use ASCII dash to avoid Excel mojibake (â€”)
+    return same ? `${dt(s)} - ${t(e)}` : `${dt(s)} - ${dt(e)}`;
   } catch {
     return "";
   }
 };
+
 const fmtDateTime = (value) => {
   if (!value) return "";
   try {
@@ -47,6 +73,33 @@ const fmtDateTime = (value) => {
       hour: "2-digit",
       minute: "2-digit",
     });
+  } catch {
+    return "";
+  }
+};
+
+const fmtPayrollDateRange = (start, end) => {
+  try {
+    const s = new Date(start);
+    const e = new Date(end);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return "";
+    const sd = fmtDateOnly(s);
+    const ed = fmtDateOnly(e);
+    return sd === ed ? sd : `${sd} - ${ed}`;
+  } catch {
+    return "";
+  }
+};
+
+const fmtPayrollTimeRange = (start, end) => {
+  try {
+    const s = new Date(start);
+    const e = new Date(end);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return "";
+    const st = fmtTimeOnly(s);
+    const et = fmtTimeOnly(e);
+    const sameDay = s.toDateString() === e.toDateString();
+    return sameDay ? `${st} - ${et}` : `${st} - ${et} (multi-day)`;
   } catch {
     return "";
   }
@@ -87,7 +140,6 @@ function normalizeReceiptUrl(raw) {
 
   return p;
 }
-
 
 /* =========================
    ✅ parking receipt resolver (MULTIPLE) + supports receiptIndex (ParkingReceipt table)
@@ -217,10 +269,6 @@ function getReceiptUrlsForUser(job, uid, email, appRec, attendanceRec, receiptIn
 
   return out;
 }
-
-
-
-
 
 function receiptCsvValue(url) {
   if (!url) return "";
@@ -415,24 +463,24 @@ export default function Admin({ navigate, user }) {
 
   // ✅ Receipt modal supports MULTIPLE urls + arrows
   const [receiptModal, setReceiptModal] = useState(null); // { title: string, urls: string[], idx: number }
-const openReceiptModal = (title, urls, startIdx = 0) => {
-  const safe = Array.isArray(urls) ? urls.map(normalizeReceiptUrl).filter(Boolean) : [];
-  if (!safe.length) return;
+  const openReceiptModal = (title, urls, startIdx = 0) => {
+    const safe = Array.isArray(urls) ? urls.map(normalizeReceiptUrl).filter(Boolean) : [];
+    if (!safe.length) return;
 
-  const seen = new Set();
-  const uniq = [];
-  for (const u of safe) {
-    const key = isDataLike(u) ? u : u.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    uniq.push(u);
-  }
+    const seen = new Set();
+    const uniq = [];
+    for (const u of safe) {
+      const key = isDataLike(u) ? u : u.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniq.push(u);
+    }
 
-  if (!uniq.length) return;
+    if (!uniq.length) return;
 
-  const idx = Math.max(0, Math.min(startIdx, uniq.length - 1));
-  setReceiptModal({ title: title || "Parking Receipt", urls: uniq, idx });
-};
+    const idx = Math.max(0, Math.min(startIdx, uniq.length - 1));
+    setReceiptModal({ title: title || "Parking Receipt", urls: uniq, idx });
+  };
 
   const closeReceiptModal = () => setReceiptModal(null);
 
@@ -1015,12 +1063,7 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
   /* ===== Wage Calculation (PART-TIMERS ONLY) ===== */
   const [rows, setRows] = useState([]);
   const [summary, setSummary] = useState({ employees: 0, hours: 0, wages: 0, jobs: 0 });
-  const [deductions, setDeductions] = useState({});
   const [search, setSearch] = useState("");
-
-  const setDeduction = (uid, val) => {
-    setDeductions((prev) => ({ ...prev, [uid]: Math.max(0, N(val, 0)) }));
-  };
 
   function calcWages() {
     if (!job) {
@@ -1104,8 +1147,9 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
       const inTime = rec.in ? new Date(rec.in) : null;
       const outTime = rec.out ? new Date(rec.out) : null;
 
-      const scanInStr = fmtDateTime(inTime);
-      const scanOutStr = fmtDateTime(outTime);
+      // ✅ Scan In/Out: time-only (no date)
+      const scanInStr = inTime ? fmtTimeOnly(inTime) : "";
+      const scanOutStr = outTime ? fmtTimeOnly(outTime) : "";
 
       let workedHours = scheduledHours;
       if (inTime && outTime) workedHours = hrs(inTime, outTime);
@@ -1165,14 +1209,17 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
 
       const earlyChecked = !!rec?.earlyCall || !!appRec?.earlyCallConfirmed || !!appRec?.addOns?.earlyCall || earlyCheckedByList;
       const gotEarlyCall = !!(ec.enabled && ecAmt > 0 && earlyChecked);
+      const earlyCallAmt = gotEarlyCall ? ecAmt : 0;
       if (gotEarlyCall) allowances += ecAmt;
 
       const gotLDU = !!(lduOn && lduHelpers.has(uid));
+      const lduAmt = gotLDU ? lduPriceNum : 0;
       if (gotLDU) allowances += lduPriceNum;
 
       const gross = basePay + otPay + specificPay + allowances;
-      const deduction = Math.max(0, N(deductions[uid], 0));
-      const net = Math.max(0, gross - deduction);
+
+      // ✅ deduction removed (as requested)
+      const net = gross;
 
       const appUser = (appRec && appRec.user) || {};
       const coreUser = userMap[uid] || {};
@@ -1181,8 +1228,18 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
         appRec && (appRec.firstName || appRec.lastName) ? `${appRec.firstName || ""} ${appRec.lastName || ""}`.trim() : "";
 
       const name =
-        pick(coreUser.name, coreUser.fullName, coreUser.displayName, appUser.name, appUser.fullName, appUser.displayName, appRec?.name, appRec?.fullName, appRec?.displayName, combinedAppName) ||
-        uid;
+        pick(
+          coreUser.name,
+          coreUser.fullName,
+          coreUser.displayName,
+          appUser.name,
+          appUser.fullName,
+          appUser.displayName,
+          appRec?.name,
+          appRec?.fullName,
+          appRec?.displayName,
+          combinedAppName
+        ) || uid;
 
       const phone = pick(coreUser.phone, coreUser.phoneNumber, appUser.phone, appUser.phoneNumber, appUser.contact, appRec?.phone, appRec?.phoneNumber, appRec?.contact) || "-";
       const emailFinal = pick(coreUser.email, appUser.email, appRec?.email, uid) || uid;
@@ -1203,7 +1260,6 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
         receiptUrls,
         receiptUrl: receiptUrls[0] || "",
         wageGross: gross,
-        deduction,
         wageNet: net,
         _basePay: basePay,
         _otPay: otPay,
@@ -1211,6 +1267,8 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
         _allowances: allowances,
         _gotEarlyCall: gotEarlyCall,
         _gotLDU: gotLDU,
+        _earlyCallAmt: earlyCallAmt,
+        _lduAmt: lduAmt,
       });
     };
 
@@ -1244,17 +1302,17 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
   useEffect(() => {
     calcWages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job, deductions, userMap, search, receiptIndex]);
+  }, [job, userMap, search, receiptIndex]);
 
   /* ===== Payroll meta (UI + CSV header block) ===== */
   const kindLabel = (kind) => {
     if (kind === "virtual") return "Virtual (Hourly)";
-    if (kind === "hourly_by_role") return "Physical — Hourly (by role)";
-    if (kind === "hourly_flat") return "Physical — Flat hourly";
-    if (kind === "half_day") return "Physical — Half Day";
-    if (kind === "full_day") return "Physical — Full Day";
-    if (kind === "2d1n") return "Physical — 2D1N";
-    if (kind === "3d2n") return "Physical — 3D2N";
+    if (kind === "hourly_by_role") return "Physical - Hourly (by role)";
+    if (kind === "hourly_flat") return "Physical - Flat hourly";
+    if (kind === "half_day") return "Physical - Half Day";
+    if (kind === "full_day") return "Physical - Full Day";
+    if (kind === "2d1n") return "Physical - 2D1N";
+    if (kind === "3d2n") return "Physical - 3D2N";
     return String(kind || "-");
   };
 
@@ -1326,8 +1384,9 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
     const pairs = [
       ["Job Title", j.title || "-"],
       ["Venue", j.venue || "-"],
-      ["When", fmtRange(j.startTime, j.endTime)],
-      ["Status", j.status || "-"],
+      // ✅ Requested: show Date once (or 2 dates for multi-day) + time line separately
+      ["Date", fmtPayrollDateRange(j.startTime, j.endTime)],
+      ["Time", fmtPayrollTimeRange(j.startTime, j.endTime)],
       ["Session Type", kindLabel(kind)],
       ["Pay Setup", paySetup],
     ];
@@ -1338,12 +1397,12 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
       pairs.push(["Parking Allowance", `${money(parkingAmt)} (applies only when ATAG Transport selected)`]);
     }
 
-    if (ec?.enabled && N(ec?.amount, 0) > 0) pairs.push(["Early Call", `Enabled — ${money(ec.amount)} per person (PM marked only)`]);
+    if (ec?.enabled && N(ec?.amount, 0) > 0) pairs.push(["Early Call", `Enabled - ${money(ec.amount)} per person (PM marked only)`]);
     else if (ec?.enabled) pairs.push(["Early Call", "Enabled"]);
 
     if (ldu?.enabled && N(ldu?.price, 0) > 0) {
       const helperCount = Array.isArray(ldu.participants) ? ldu.participants.length : 0;
-      pairs.push(["Loading & Unloading", `Enabled — ${money(ldu.price)} per helper (helpers: ${helperCount})`]);
+      pairs.push(["Loading & Unloading", `Enabled - ${money(ldu.price)} per helper (helpers: ${helperCount})`]);
     } else if (ldu?.enabled) {
       pairs.push(["Loading & Unloading", "Enabled"]);
     }
@@ -1353,7 +1412,7 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
 
   const payrollMetaUI = useMemo(() => {
     if (!job) return [];
-    const keep = new Set(["Session Type", "Pay Setup", "Hourly Add-on", "Parking Allowance", "Early Call", "Loading & Unloading"]);
+    const keep = new Set(["Date", "Time", "Session Type", "Pay Setup", "Hourly Add-on", "Parking Allowance", "Early Call", "Loading & Unloading"]);
     return buildPayrollMetaPairs(job).filter(([k]) => keep.has(k));
   }, [job]);
 
@@ -1370,7 +1429,22 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
     metaPairs.forEach(([k, v]) => lines.push(`${q(k)},${q(v)}`));
     lines.push("");
 
-    const headers = ["No", "Name", "Email", "Phone", "Transport", "Scan In", "Scan Out", "Parking Receipt(s)", "Session Pay", "Allowances", "Gross", "Deduction", "Net"];
+    // ✅ Requested: remove Allowances + Deduction, add Early Call + Loading & Unloading
+    const headers = [
+      "No",
+      "Name",
+      "Email",
+      "Phone",
+      "Transport",
+      "Scan In",
+      "Scan Out",
+      "Parking Receipt(s)",
+      "Session Pay",
+      "Early Call",
+      "Loading & Unloading",
+      "Gross",
+      "Net",
+    ];
     lines.push(headers.join(","));
 
     rows.forEach((r, idx) => {
@@ -1384,9 +1458,9 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
         q(r.scanOut || ""),
         q(receiptCsvValueList(r.receiptUrls)),
         Math.round(N(r._specific, 0)),
-        Math.round(N(r._allowances, 0)),
+        Math.round(N(r._earlyCallAmt, 0)),
+        Math.round(N(r._lduAmt, 0)),
         Math.round(N(r.wageGross, 0)),
-        Math.round(N(r.deduction, 0)),
         Math.round(N(r.wageNet, 0)),
       ].join(",");
       lines.push(line);
@@ -1398,7 +1472,9 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
     lines.push(`Total Net Wages,${Math.round(summary.wages)}`);
     lines.push(`Jobs Included,${summary.jobs}`);
 
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    // ✅ Excel-friendly: add UTF-8 BOM so characters never become â€” etc.
+    const csv = "\ufeff" + lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1496,16 +1572,64 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
     return (
       <div style={{ display: "grid", gap: 14 }}>
         {showHalf && (
-          <SessionGrid title="Half Day (per person)" v={pHalfJr} setV={setPHalfJr} w={pHalfSr} setW={setPHalfSr} x={pHalfLead} setX={setPHalfLead} y={pHalfJrEmcee} setY={setPHalfJrEmcee} z={pHalfSrEmcee} setZ={setPHalfSrEmcee} />
+          <SessionGrid
+            title="Half Day (per person)"
+            v={pHalfJr}
+            setV={setPHalfJr}
+            w={pHalfSr}
+            setW={setPHalfSr}
+            x={pHalfLead}
+            setX={setPHalfLead}
+            y={pHalfJrEmcee}
+            setY={setPHalfJrEmcee}
+            z={pHalfSrEmcee}
+            setZ={setPHalfSrEmcee}
+          />
         )}
         {showFull && (
-          <SessionGrid title="Full Day (per person)" v={pFullJr} setV={setPFullJr} w={pFullSr} setW={setPFullSr} x={pFullLead} setX={setPFullLead} y={pFullJrEmcee} setY={setPFullJrEmcee} z={pFullSrEmcee} setZ={setPFullSrEmcee} />
+          <SessionGrid
+            title="Full Day (per person)"
+            v={pFullJr}
+            setV={setPFullJr}
+            w={pFullSr}
+            setW={setPFullSr}
+            x={pFullLead}
+            setX={setPFullLead}
+            y={pFullJrEmcee}
+            setY={setPFullJrEmcee}
+            z={pFullSrEmcee}
+            setZ={setPFullSrEmcee}
+          />
         )}
         {show2d1n && (
-          <SessionGrid title="2D1N (per person)" v={p2d1nJr} setV={setP2d1nJr} w={p2d1nSr} setW={setP2d1nSr} x={p2d1nLead} setX={setP2d1nLead} y={p2d1nJrEmcee} setY={setP2d1nJrEmcee} z={p2d1nSrEmcee} setZ={setP2d1nSrEmcee} />
+          <SessionGrid
+            title="2D1N (per person)"
+            v={p2d1nJr}
+            setV={setP2d1nJr}
+            w={p2d1nSr}
+            setW={setP2d1nSr}
+            x={p2d1nLead}
+            setX={setP2d1nLead}
+            y={p2d1nJrEmcee}
+            setY={setP2d1nJrEmcee}
+            z={p2d1nSrEmcee}
+            setZ={setP2d1nSrEmcee}
+          />
         )}
         {show3d2n && (
-          <SessionGrid title="3D2N (per person)" v={p3d2nJr} setV={setP3d2nJr} w={p3d2nSr} setW={setP3d2nSr} x={p3d2nLead} setX={setP3d2nLead} y={p3d2nJrEmcee} setY={setP3d2nJrEmcee} z={p3d2nSrEmcee} setZ={setP3d2nSrEmcee} />
+          <SessionGrid
+            title="3D2N (per person)"
+            v={p3d2nJr}
+            setV={setP3d2nJr}
+            w={p3d2nSr}
+            setW={setP3d2nSr}
+            x={p3d2nLead}
+            setX={setP3d2nLead}
+            y={p3d2nJrEmcee}
+            setY={setP3d2nJrEmcee}
+            z={p3d2nSrEmcee}
+            setZ={setP3d2nSrEmcee}
+          />
         )}
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -1547,7 +1671,7 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
       {tab === "defaults" && (
         <Panel
           title="Global Wage Defaults"
-          subtitle="Used by JobModal as starting values (cleaner view — collapsible sections)."
+          subtitle="Used by JobModal as starting values (cleaner view - collapsible sections)."
           right={
             <button className="btn primary" onClick={saveGlobal}>
               Save Defaults
@@ -1726,7 +1850,7 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
 
               <Field
                 label="Parking Allowance (RM)"
-                hint={job?.transportOptions?.bus ? "Applied only when ATAG Transport is selected." : "ATAG Transport isn't enabled on this job — allowance won’t apply."}
+                hint={job?.transportOptions?.bus ? "Applied only when ATAG Transport is selected." : "ATAG Transport isn't enabled on this job - allowance won’t apply."}
               >
                 <input style={styles.input} inputMode="decimal" value={parkingAllowance} onChange={(e) => setParkingAllowance(e.target.value)} />
               </Field>
@@ -1750,7 +1874,7 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
       {tab === "payroll" && (
         <Panel
           title="Payroll Summary"
-          subtitle="Select a job from the dropdown — you can view EACH person’s uploaded receipt images."
+          subtitle="Select a job from the dropdown - you can view EACH person’s uploaded receipt images."
           right={
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button className="btn" onClick={exportPayrollCSV} disabled={!rows.length}>
@@ -1799,8 +1923,7 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
               </div>
               {/* quick debug line */}
               <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-                Receipt index loaded:{" "}
-                <b>{Object.keys(receiptIndex.byUserId || {}).length}</b> users / <b>{Object.keys(receiptIndex.byEmail || {}).length}</b> emails
+                Receipt index loaded: <b>{Object.keys(receiptIndex.byUserId || {}).length}</b> users / <b>{Object.keys(receiptIndex.byEmail || {}).length}</b> emails
               </div>
             </div>
           ) : null}
@@ -1839,13 +1962,13 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
                     Session Pay
                   </th>
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Allowances
+                    Early Call
+                  </th>
+                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
+                    Loading/Unloading
                   </th>
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
                     Gross
-                  </th>
-                  <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
-                    Deduct
                   </th>
                   <th align="right" style={{ position: "sticky", top: 0, background: "#f9fafb" }}>
                     Net
@@ -1877,7 +2000,7 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
                             </span>
 
                             {isAdmin ? (
-                              <button className="btn" onClick={() => openReceiptModal(`Parking Receipt — ${r.name}`, r.receiptUrls, 0)}>
+                              <button className="btn" onClick={() => openReceiptModal(`Parking Receipt - ${r.name}`, r.receiptUrls, 0)}>
                                 View
                               </button>
                             ) : (
@@ -1893,19 +2016,13 @@ const openReceiptModal = (title, urls, startIdx = 0) => {
                         {money(r._specific)}
                       </td>
                       <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                        {money(r._allowances)}
+                        {money(r._earlyCallAmt)}
+                      </td>
+                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
+                        {money(r._lduAmt)}
                       </td>
                       <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
                         {money(r.wageGross)}
-                      </td>
-
-                      <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
-                        <input
-                          style={{ ...styles.input, width: 90, textAlign: "right", padding: "8px 10px" }}
-                          inputMode="decimal"
-                          value={String(deductions[r.userId] ?? 0)}
-                          onChange={(e) => setDeduction(r.userId, e.target.value)}
-                        />
                       </td>
                       <td style={{ borderTop: "1px solid #eef2f7" }} align="right">
                         <span style={{ fontWeight: 900 }}>{money(r.wageNet)}</span>
