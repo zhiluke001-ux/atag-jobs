@@ -1231,7 +1231,24 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
     }
   }
 
-  await saveDB(db);
+  // ✅ AUTO-DELETE verification photo after APPROVED / REJECTED
+  try {
+    const decided =
+      target.verificationStatus === "APPROVED" || target.verificationStatus === "REJECTED";
+
+    if (decided && target.verificationPhotoUrl) {
+      const old = target.verificationPhotoUrl;
+      target.verificationPhotoUrl = "";
+      await saveDB(db);              // save first so UI immediately stops showing it
+      await deleteStoredImage(old);  // best-effort delete (blob/local)
+    } else {
+      await saveDB(db);
+    }
+  } catch {
+    // if delete fails, still keep the DB updated
+    await saveDB(db);
+  }
+
   addAudit(
     "admin_update_user_role_grade",
     { userId: target.id, before, after: { role: target.role, grade: target.grade } },
@@ -1269,6 +1286,7 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
     },
   });
 });
+
 
 app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const uid = req.params.id;
