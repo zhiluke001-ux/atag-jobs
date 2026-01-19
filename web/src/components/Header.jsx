@@ -95,8 +95,7 @@ export default function Header({ user, setUser }) {
       <div className="header-inner">
         {/* Brand */}
         <a className="brand" href="#/" onClick={() => setMenuOpen(false)}>
-          <span className="brand-box">ATAG</span>
-          <span className="brand-text">Jobs</span>
+          <span className="brand-box">ATAG Jobs</span>
         </a>
 
         {/* Desktop Nav */}
@@ -115,11 +114,6 @@ export default function Header({ user, setUser }) {
 
         {/* Right Side */}
         <div className="right-side">
-          <div className="socials">
-            {/* keep your svg icons same here */}
-          </div>
-
-          <div className="v-sep" />
 
           <div className="auth">
             {user ? (
