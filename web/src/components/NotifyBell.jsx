@@ -140,6 +140,7 @@ export default function NotificationsBell({ user }) {
         "application",
         "job_applied_pm",
         "job_applied_admin",
+        "app_new",
       ].includes(t)
     ) {
       return `${applicantName} applied for ${jobTitle}`;
@@ -264,12 +265,14 @@ function iconFor(type) {
     case "application":
     case "job_applied_pm":
     case "job_applied_admin":
+    case "app_new":
       return "📨";
 
     // approved/rejected (old + new)
     case "approved":
     case "app_approved":
       return "✅";
+      
     case "rejected":
     case "app_rejected":
       return "❌";
