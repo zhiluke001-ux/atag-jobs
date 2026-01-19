@@ -20,6 +20,7 @@ export default function NotificationsBell({ user }) {
     () => items.filter((i) => !i.read).length,
     [items]
   );
+
   const shown = useMemo(
     () => (tab === "unread" ? items.filter((i) => !i.read) : items),
     [tab, items]
@@ -47,9 +48,9 @@ export default function NotificationsBell({ user }) {
     if (!user) return;
     setLoading(true);
     try {
-      // IMPORTANT: always load the full list, not unread-only
+      // Always load full list so "All" stays stable
       const list = await apiGet(`/notifications?limit=100`);
-      setItems(list || []);
+      setItems(Array.isArray(list) ? list : []);
     } catch {
       // ignore
     } finally {
@@ -60,7 +61,6 @@ export default function NotificationsBell({ user }) {
   useEffect(() => {
     if (!user) return;
     loadAll();
-    // Light polling; keep full list so "All" doesn't disappear
     pollRef.current = setInterval(loadAll, 15000);
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -108,34 +108,39 @@ export default function NotificationsBell({ user }) {
 
   if (!user) return null;
 
-  // Helper: derive "who applied for what job" for admin/pm
+  // robust extractor
+  function pick(n, keys = []) {
+    for (const k of keys) {
+      if (n && n[k] != null && String(n[k]).trim() !== "") return n[k];
+    }
+    return null;
+  }
+
   function getDisplayTitle(n) {
-    // Try to be robust with different payload shapes:
     const applicantName =
-      n.applicantName ||
-      n.actorName ||
-      n.userName ||
-      n.user_full_name ||
-      (n.data && (n.data.applicantName || n.data.userName || n.data.actorName)) ||
-      (n.meta && (n.meta.applicantName || n.meta.userName || n.meta.actorName));
+      pick(n, ["applicantName", "actorName", "userName", "user_full_name"]) ||
+      pick(n?.data || {}, ["applicantName", "userName", "actorName"]) ||
+      pick(n?.meta || {}, ["applicantName", "userName", "actorName"]);
 
     const jobTitle =
-      n.jobTitle ||
-      (n.data && (n.data.jobTitle || n.data.job_name || n.data.jobTitle)) ||
-      (n.meta && (n.meta.jobTitle || n.meta.job_name || n.meta.jobTitle));
+      pick(n, ["jobTitle", "job_name"]) ||
+      pick(n?.data || {}, ["jobTitle", "job_name"]) ||
+      pick(n?.meta || {}, ["jobTitle", "job_name"]);
 
-    // Only override for admin/pm AND when both pieces of info exist
+    const t = String(n?.type || "");
+
+    // Show "who applied" for admin/pm
     if (
       isAdminOrPM &&
       applicantName &&
       jobTitle &&
-      (n.type === "job_applied" ||
-        n.type === "job_application" ||
-        n.type === "application" ||
-        n.type === "job_applied_pm" ||
-        n.type === "job_applied_admin" ||
-        n.type === "approved" ||
-        n.type === "rejected")
+      [
+        "job_applied",
+        "job_application",
+        "application",
+        "job_applied_pm",
+        "job_applied_admin",
+      ].includes(t)
     ) {
       return `${applicantName} applied for ${jobTitle}`;
     }
@@ -145,7 +150,6 @@ export default function NotificationsBell({ user }) {
   }
 
   function getDisplayBody(n) {
-    // You can still show backend body underneath (extra info)
     return n.body || "";
   }
 
@@ -192,7 +196,6 @@ export default function NotificationsBell({ user }) {
           className="notif-popover no-scrollbar"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Tabs / actions */}
           <div className="notif-tabs">
             <button
               className={`btn ${tab === "all" ? "is-active" : ""}`}
@@ -217,7 +220,6 @@ export default function NotificationsBell({ user }) {
             </button>
           </div>
 
-          {/* List */}
           <div className="notif-list">
             {loading && <div className="notif-empty">Loading…</div>}
             {!loading && shown.length === 0 && (
@@ -251,18 +253,30 @@ export default function NotificationsBell({ user }) {
 
 function iconFor(type) {
   switch (type) {
+    // job created (old + new)
     case "job_created":
+    case "job_new":
       return "🧰";
+
+    // applied
     case "job_applied":
     case "job_application":
     case "application":
+    case "job_applied_pm":
+    case "job_applied_admin":
       return "📨";
+
+    // approved/rejected (old + new)
     case "approved":
+    case "app_approved":
       return "✅";
     case "rejected":
+    case "app_rejected":
       return "❌";
+
     case "account_update":
       return "👤";
+
     default:
       return "🔔";
   }
