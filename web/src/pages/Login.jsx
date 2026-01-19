@@ -2,31 +2,19 @@
 import React, { useState, useEffect } from "react";
 import { login, getToken, fetchCurrentUser, logout } from "../auth";
 
-/** More defensive pending detection */
 function isPendingVerificationError(e) {
   const data = e?.data || {};
-  const status = e?.status || e?.response?.status || data?.status;
   const code = data?.code || e?.code || null;
-
   const err = data?.error || data?.message || "";
   const msg = e?.message || "";
-  const asText = String(e || "");
 
-  const looksPending =
+  return (
     code === "PENDING_VERIFICATION" ||
-    /pending_verification/i.test(String(err)) ||
-    /pending_verification/i.test(String(msg)) ||
-    /pending_verification/i.test(asText) ||
-    /pending/i.test(String(err)) ||
-    /pending/i.test(String(msg));
-
-  // Your backend uses 403 only for pending verification at /login
-  if (Number(status) === 403 && looksPending) return true;
-
-  // fallback: even if status is missing, treat explicit pending text as pending
-  if (looksPending) return true;
-
-  return false;
+    String(err).toLowerCase() === "pending_verification" ||
+    String(msg).toLowerCase().includes("pending_verification") ||
+    String(err).toLowerCase().includes("pending") ||
+    String(msg).toLowerCase().includes("pending")
+  );
 }
 
 function parseLoginError(e) {
@@ -38,6 +26,7 @@ function parseLoginError(e) {
     "Login failed. Check your email/username and password.";
 
   return {
+    type: "error",
     title: "⚠️ Login failed",
     body: String(fallback),
   };
@@ -46,19 +35,16 @@ function parseLoginError(e) {
 export default function Login({ navigate, setUser }) {
   const [identifier, setIdentifier] = useState(""); // email or username
   const [password, setPassword] = useState("");
-  const [notice, setNotice] = useState(null); // { title, body }
+  const [notice, setNotice] = useState(null); // { type, title, body }
   const [busy, setBusy] = useState(false);
   const [checkingToken, setCheckingToken] = useState(true);
 
-  // ✅ reliable hash navigation
   const go = (hash) => {
-    const h = String(hash || "#/").trim();
-    if (navigate) return navigate(h);
-    // location.hash expects WITHOUT the leading '#'
-    const clean = h.startsWith("#") ? h.slice(1) : h;
-    window.location.hash = clean;
+    if (navigate) navigate(hash);
+    else window.location.replace(hash);
   };
 
+  // on mount: only redirect if the token is actually valid
   useEffect(() => {
     let cancelled = false;
 
@@ -79,13 +65,13 @@ export default function Login({ navigate, setUser }) {
           return;
         }
 
-        // invalid session
+        // if me() returns null/falsey, treat as invalid token
         logout();
         setCheckingToken(false);
       } catch (e) {
         if (cancelled) return;
 
-        // ✅ if /me fails due to pending, go status page
+        // ✅ IMPORTANT: if backend says pending verification, go status page
         if (isPendingVerificationError(e)) {
           setCheckingToken(false);
           go("#/status");
@@ -111,17 +97,17 @@ export default function Login({ navigate, setUser }) {
     try {
       const u = await login(identifier, password);
 
-      // ✅ login succeeded means verified (your backend blocks otherwise)
+      // ✅ if login succeeded, user is verified (backend blocks otherwise)
       if (setUser) setUser(u);
       go("#/");
     } catch (e) {
-      // keep a log, but don't block redirect
       console.error("login failed:", e);
 
-      // ✅ pending → status page (NO pending notice)
+      // ✅ unverified users: route to status page (NO pending notice)
       if (isPendingVerificationError(e)) {
-        // optional: your status page can read this to show which account
-        localStorage.setItem("pending_identifier", identifier);
+        // optional: you might still want to store identifier somewhere
+        // localStorage.setItem("pending_identifier", identifier);
+
         go("#/status");
         return;
       }
@@ -139,6 +125,11 @@ export default function Login({ navigate, setUser }) {
       </div>
     );
   }
+
+  const noticeStyle =
+    notice?.type === "pending"
+      ? { background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412" }
+      : { background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b" };
 
   return (
     <div className="container">
@@ -169,9 +160,7 @@ export default function Login({ navigate, setUser }) {
         {notice && (
           <div
             style={{
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              color: "#991b1b",
+              ...noticeStyle,
               marginTop: 10,
               padding: 10,
               borderRadius: 10,
