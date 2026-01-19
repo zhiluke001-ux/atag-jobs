@@ -3,7 +3,6 @@ import React, { useEffect, useState } from "react";
 import { fetchCurrentUser } from "./auth";
 
 import Header from "./components/Header";
-import Footer from "./components/Footer"; // ✅ NEW
 
 import Home from "./pages/Home";
 import Available from "./pages/Available";
@@ -15,8 +14,8 @@ import Admin from "./pages/Admin";
 import Scanner from "./components/Scanner";
 import AdminUsers from "./pages/AdminUsers";
 import AdminAudit from "./pages/AdminAudit";
-import Profile from "./pages/Profile";
-import Status from "./pages/Status";
+import Profile from "./pages/Profile"; // keep old profile
+import Status from "./pages/Status";   // ✅ NEW status page
 
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -73,8 +72,11 @@ export default function App() {
     const verified = isVerifiedUser(user);
 
     // ✅ Gate: if logged in but NOT verified -> always show Status
+    // (they can refresh, remove, reupload; once verified -> normal)
     if (authed && !verified) {
+      // keep URL clean
       if (path !== "status") {
+        // no hard redirect needed; but helps user not stuck on other pages
         window.location.hash = "#/status";
       }
       return <Status user={user} setUser={setUser} navigate={navigate} />;
@@ -86,11 +88,13 @@ export default function App() {
     if (path === "my-jobs") return <MyJobs navigate={navigate} user={user} />;
     if (path === "payments") return <Payments navigate={navigate} user={user} />;
 
+    // keep old profile page
     if (path === "profile") {
       if (!user) return <Login navigate={navigate} setUser={setUser} />;
       return <Profile navigate={navigate} user={user} setUser={setUser} />;
     }
 
+    // status route is still accessible when verified too (optional)
     if (path === "status") {
       if (!user) return <Login navigate={navigate} setUser={setUser} />;
       return <Status user={user} setUser={setUser} navigate={navigate} />;
@@ -99,8 +103,7 @@ export default function App() {
     if (path === "admin-users" || path === "users") return <AdminUsers user={user} />;
     if (path === "admin-audit" || path === "audit") return <AdminAudit user={user} />;
 
-    if (path === "wages" || path === "users-audit")
-      return <Admin navigate={navigate} user={user} />;
+    if (path === "wages" || path === "users-audit") return <Admin navigate={navigate} user={user} />;
 
     if (path === "login") return <Login navigate={navigate} setUser={setUser} />;
     if (path === "register") return <Register navigate={navigate} setUser={setUser} />;
@@ -130,14 +133,9 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div>
       <Header user={user} navigate={navigate} setUser={setUser} />
-
-      <main className="app-main">
-        {renderRoute()}
-      </main>
-
-      <Footer />
+      {renderRoute()}
     </div>
   );
 }
