@@ -1,7 +1,7 @@
 // web/src/pages/AdminUsers.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
-import { apiGet, apiPatch } from "../api";
+import { apiGet, apiPatch, apiPost } from "../api";
 
 const ROLES = ["part-timer", "pm", "admin"];
 // ✅ keep in sync with backend STAFF_ROLES
@@ -171,7 +171,11 @@ export default function AdminUsers({ user }) {
   const [edits, setEdits] = useState({}); // { [userId]: { role?, grade? } }
 
   const [busyActionId, setBusyActionId] = useState(null); // verify/reject action busy
-  const [imgOpen, setImgOpen] = useState(null); // url string
+  const [busyPicId, setBusyPicId] = useState(null); // remove photo busy
+
+  // ✅ modal state now keeps user context
+  const [imgOpen, setImgOpen] = useState(null); // { userId, email, url } | null
+  const [imgLoadErr, setImgLoadErr] = useState("");
 
   const isAdmin = !!user && user.role === "admin";
 
@@ -310,6 +314,44 @@ export default function AdminUsers({ user }) {
       alert(err?.message || "Action failed");
     } finally {
       setBusyActionId(null);
+    }
+  }
+
+  // =========================
+  // Remove verification picture
+  // =========================
+  async function removeVerifyPic(u) {
+    if (!u?.id) return;
+    const email = u.email || u.name || "this user";
+    if (!window.confirm(`Remove verification picture for ${email}?`)) return;
+
+    try {
+      setBusyPicId(u.id);
+      await apiPost(`/admin/users/${u.id}/verification-photo/remove`, {});
+
+      // Optimistic update (so no need to refresh to see it removed)
+      setList((old) =>
+        old.map((x) => {
+          if (x.id !== u.id) return x;
+          return {
+            ...x,
+            verificationPhotoUrl: "",
+            verificationPhotoUrlAbs: "",
+            verifyPhotoUrl: "",
+            verifyPhotoUrlAbs: "",
+            verificationDataUrl: "",
+          };
+        })
+      );
+
+      // Close modal if it is this user
+      setImgOpen((cur) => (cur?.userId === u.id ? null : cur));
+      setImgLoadErr("");
+      alert("Verification picture removed.");
+    } catch (err) {
+      alert(err?.message || "Remove failed");
+    } finally {
+      setBusyPicId(null);
     }
   }
 
@@ -487,10 +529,13 @@ export default function AdminUsers({ user }) {
 
                     <td style={{ padding: 8 }}>
                       {hasPic ? (
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          {/* thumbnail (lazy) */}
                           <img
                             src={picUrl}
                             alt="verification"
+                            loading="lazy"
+                            decoding="async"
                             style={{
                               width: 38,
                               height: 38,
@@ -499,14 +544,28 @@ export default function AdminUsers({ user }) {
                               border: "1px solid #eee",
                               cursor: "pointer",
                             }}
-                            onClick={() => setImgOpen(picUrl)}
+                            onClick={() => {
+                              setImgLoadErr("");
+                              setImgOpen({ userId: u.id, email: u.email || "", url: picUrl });
+                            }}
                             onError={(e) => {
-                              // avoid broken-image icon spam
+                              // hide thumb if broken, but keep actions
                               e.currentTarget.style.display = "none";
                             }}
                           />
-                          <button className="btn" onClick={() => setImgOpen(picUrl)}>
+
+                          <button
+                            className="btn"
+                            onClick={() => {
+                              setImgLoadErr("");
+                              setImgOpen({ userId: u.id, email: u.email || "", url: picUrl });
+                            }}
+                          >
                             View
+                          </button>
+
+                          <button className="btn" disabled={busyPicId === u.id} onClick={() => removeVerifyPic(u)}>
+                            {busyPicId === u.id ? "Removing..." : "Remove"}
                           </button>
                         </div>
                       ) : (
@@ -567,7 +626,10 @@ export default function AdminUsers({ user }) {
       {/* Simple image modal */}
       {imgOpen && (
         <div
-          onClick={() => setImgOpen(null)}
+          onClick={() => {
+            setImgOpen(null);
+            setImgLoadErr("");
+          }}
           style={{
             position: "fixed",
             inset: 0,
@@ -588,16 +650,46 @@ export default function AdminUsers({ user }) {
               padding: 12,
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-              <div style={{ fontWeight: 800 }}>Verification Picture</div>
-              <button className="btn" onClick={() => setImgOpen(null)}>
-                Close
-              </button>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+              <div>
+                <div style={{ fontWeight: 800 }}>Verification Picture</div>
+                <div style={{ fontSize: 12, color: "#666" }}>{imgOpen.email || ""}</div>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  className="btn"
+                  onClick={() => {
+                    setImgOpen(null);
+                    setImgLoadErr("");
+                  }}
+                >
+                  Close
+                </button>
+
+                <button
+                  className="btn"
+                  disabled={busyPicId === imgOpen.userId}
+                  onClick={() => {
+                    const u = list.find((x) => x.id === imgOpen.userId);
+                    if (u) removeVerifyPic(u);
+                  }}
+                >
+                  {busyPicId === imgOpen.userId ? "Removing..." : "Remove Pic"}
+                </button>
+              </div>
             </div>
+
             <div style={{ marginTop: 10 }}>
+              {imgLoadErr ? (
+                <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 12 }}>{imgLoadErr}</div>
+              ) : null}
+
               <img
-                src={imgOpen}
+                src={imgOpen.url}
                 alt="verification-large"
+                loading="lazy"
+                decoding="async"
                 style={{
                   width: "100%",
                   maxHeight: "70vh",
@@ -605,12 +697,15 @@ export default function AdminUsers({ user }) {
                   borderRadius: 12,
                   border: "1px solid #eee",
                 }}
-                onError={(e) => {
-                  e.currentTarget.style.display = "none";
+                onError={() => {
+                  setImgLoadErr(
+                    "Image failed to load (likely old /uploads file missing after Render restart). You can click 'Remove Pic' and ask user to re-upload."
+                  );
                 }}
               />
+
               <div style={{ marginTop: 8, fontSize: 12, color: "#666", wordBreak: "break-all" }}>
-                {imgOpen}
+                {imgOpen.url}
               </div>
             </div>
           </div>
