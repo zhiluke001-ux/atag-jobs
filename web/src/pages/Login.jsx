@@ -2,23 +2,31 @@
 import React, { useState, useEffect } from "react";
 import { login, getToken, fetchCurrentUser, logout } from "../auth";
 
-function isPendingVerificationError(e) {
+function parseLoginError(e) {
+  // ✅ your auth.js throws Error with e.data
   const data = e?.data || {};
   const code = data?.code || e?.code || null;
   const err = data?.error || data?.message || "";
   const msg = e?.message || "";
 
-  return (
+  const isPending =
     code === "PENDING_VERIFICATION" ||
     String(err).toLowerCase() === "pending_verification" ||
     String(msg).toLowerCase().includes("pending_verification") ||
-    String(err).toLowerCase().includes("pending") ||
-    String(msg).toLowerCase().includes("pending")
-  );
-}
+    String(err).toLowerCase().includes("pending");
 
-function parseLoginError(e) {
-  const data = e?.data || {};
+  if (isPending) {
+    return {
+      type: "pending",
+      title: "⏳ Account pending verification",
+      body:
+        "Your registration is received, but your account is not verified yet.\n\n" +
+        "What to do:\n" +
+        "• Please wait for admin to approve your account\n" +
+        "• If it takes too long, contact the admin (WhatsApp) and tell them your email/username",
+    };
+  }
+
   const fallback =
     data?.error ||
     data?.message ||
@@ -39,11 +47,6 @@ export default function Login({ navigate, setUser }) {
   const [busy, setBusy] = useState(false);
   const [checkingToken, setCheckingToken] = useState(true);
 
-  const go = (hash) => {
-    if (navigate) navigate(hash);
-    else window.location.replace(hash);
-  };
-
   // on mount: only redirect if the token is actually valid
   useEffect(() => {
     let cancelled = false;
@@ -55,29 +58,13 @@ export default function Login({ navigate, setUser }) {
         return;
       }
 
-      try {
-        const me = await fetchCurrentUser();
-        if (cancelled) return;
+      const me = await fetchCurrentUser();
+      if (cancelled) return;
 
-        if (me) {
-          if (setUser) setUser(me);
-          go("#/");
-          return;
-        }
-
-        // if me() returns null/falsey, treat as invalid token
-        logout();
-        setCheckingToken(false);
-      } catch (e) {
-        if (cancelled) return;
-
-        // ✅ IMPORTANT: if backend says pending verification, go status page
-        if (isPendingVerificationError(e)) {
-          setCheckingToken(false);
-          go("#/status");
-          return;
-        }
-
+      if (me) {
+        if (setUser) setUser(me);
+        window.location.replace("#/");
+      } else {
         logout();
         setCheckingToken(false);
       }
@@ -96,22 +83,11 @@ export default function Login({ navigate, setUser }) {
 
     try {
       const u = await login(identifier, password);
-
-      // ✅ if login succeeded, user is verified (backend blocks otherwise)
       if (setUser) setUser(u);
-      go("#/");
+      window.location.replace("#/");
+      // or: if (navigate) navigate("#/");
     } catch (e) {
       console.error("login failed:", e);
-
-      // ✅ unverified users: route to status page (NO pending notice)
-      if (isPendingVerificationError(e)) {
-        // optional: you might still want to store identifier somewhere
-        // localStorage.setItem("pending_identifier", identifier);
-
-        go("#/status");
-        return;
-      }
-
       setNotice(parseLoginError(e));
     } finally {
       setBusy(false);
