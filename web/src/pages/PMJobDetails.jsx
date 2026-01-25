@@ -210,74 +210,238 @@ async function apiGetFallback(urls, fallbackValue) {
   return fallbackValue;
 }
 
-/* Applicants table (3 sections) */
-function ApplicantsTable({ title, rows, onApprove, onReject }) {
+/* ---------------- UI helpers ---------------- */
+function Chip({ children, tone = "gray" }) {
+  const tones = {
+    gray: { bg: "#f3f4f6", fg: "#111827", bd: "#e5e7eb" },
+    black: { bg: "#111827", fg: "#ffffff", bd: "#111827" },
+    violet: { bg: "#ede9fe", fg: "#5b21b6", bd: "#ddd6fe" },
+    green: { bg: "#dcfce7", fg: "#065f46", bd: "#bbf7d0" },
+    red: { bg: "#fee2e2", fg: "#991b1b", bd: "#fecaca" },
+  };
+  const t = tones[tone] || tones.gray;
   return (
-    <div className="card" style={{ marginTop: 14 }}>
-      <div style={{ fontWeight: 800, marginBottom: 8 }}>
-        {title} <span style={{ color: "#6b7280", fontWeight: 600 }}>({rows.length})</span>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        borderRadius: 999,
+        background: t.bg,
+        color: t.fg,
+        border: `1px solid ${t.bd}`,
+        fontSize: 12,
+        fontWeight: 700,
+        lineHeight: 1,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function StatCard({ label, value, sub }) {
+  return (
+    <div
+      style={{
+        border: "1px solid #e5e7eb",
+        background: "#ffffff",
+        borderRadius: 14,
+        padding: 12,
+        minWidth: 140,
+        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+      }}
+    >
+      <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 900, color: "#111827", marginTop: 4 }}>{value}</div>
+      {sub ? <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{sub}</div> : null}
+    </div>
+  );
+}
+
+function CollapsibleSection({ title, count, open, onToggle, subtitle, children }) {
+  return (
+    <div
+      className="card"
+      style={{
+        marginTop: 14,
+        padding: 0,
+        overflow: "hidden",
+        border: "1px solid #e5e7eb",
+        borderRadius: 14,
+        boxShadow: "0 2px 10px rgba(0,0,0,0.04)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: "100%",
+          textAlign: "left",
+          border: "none",
+          cursor: "pointer",
+          background: "#111827",
+          color: "#fff",
+          padding: "12px 14px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+          <div style={{ fontWeight: 900, letterSpacing: 0.2, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {title}
+          </div>
+          {subtitle ? (
+            <div style={{ fontSize: 12, opacity: 0.85, overflow: "hidden", textOverflow: "ellipsis" }}>
+              {subtitle}
+            </div>
+          ) : null}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: "0 0 auto" }}>
+          <span
+            style={{
+              background: "rgba(255,255,255,0.14)",
+              border: "1px solid rgba(255,255,255,0.18)",
+              padding: "2px 10px",
+              borderRadius: 999,
+              fontWeight: 900,
+              fontSize: 12,
+            }}
+          >
+            {count}
+          </span>
+          <span
+            style={{
+              display: "inline-block",
+              transform: open ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 160ms ease",
+              fontSize: 14,
+              opacity: 0.9,
+            }}
+          >
+            ▾
+          </span>
+        </div>
+      </button>
+
+      <div style={{ display: open ? "block" : "none", padding: 14, background: "#ffffff" }}>
+        {children}
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-              <th style={{ textAlign: "left", padding: "10px 8px", width: 60 }}>No.</th>
-              <th style={{ textAlign: "left", padding: "10px 8px" }}>Email</th>
-              <th style={{ textAlign: "left", padding: "10px 8px" }}>Name</th>
-              <th style={{ textAlign: "left", padding: "10px 8px" }}>Phone</th>
-              <th style={{ textAlign: "left", padding: "10px 8px" }}>Discord</th>
-              <th style={{ textAlign: "left", padding: "10px 8px" }}>Transport</th>
-              <th style={{ textAlign: "left", padding: "10px 8px" }}>Status</th>
-              <th style={{ textAlign: "left", padding: "10px 8px" }}>Actions</th>
+    </div>
+  );
+}
+
+/* Applicants table body */
+function ApplicantsTable({ rows, onApprove, onReject }) {
+  const normStatus = (s) => String(s || "applied").trim().toLowerCase();
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+            <th style={{ textAlign: "left", padding: "10px 10px", width: 60, color: "#6b7280", fontSize: 12 }}>
+              No.
+            </th>
+            <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Email</th>
+            <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Name</th>
+            <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Phone</th>
+            <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Discord</th>
+            <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Transport</th>
+            <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12, width: 110 }}>
+              Status
+            </th>
+            <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12, width: 180 }}>
+              Actions
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={8} style={{ padding: 12, color: "#6b7280" }}>
+                No records.
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} style={{ padding: 12, color: "#6b7280" }}>
-                  No records.
-                </td>
-              </tr>
-            ) : (
-              rows.map((a, idx) => (
-                <tr key={a.userId || a.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "10px 8px", fontWeight: 700 }}>{idx + 1}.</td>
+          ) : (
+            rows.map((a, idx) => {
+              const id = a.userId || a.email || String(idx);
+              const st = normStatus(a.status);
+
+              const approveDisabled = st === "approved";
+              const rejectDisabled = st === "rejected";
+
+              return (
+                <tr key={id} style={{ borderTop: "1px solid #f1f5f9", background: idx % 2 ? "#ffffff" : "#fbfbfb" }}>
+                  <td style={{ padding: "10px 10px", fontWeight: 900, color: "#111827" }}>{idx + 1}.</td>
                   <td
                     style={{
-                      padding: "10px 8px",
+                      padding: "10px 10px",
                       maxWidth: 260,
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
+                      color: "#111827",
+                      fontWeight: 700,
                     }}
+                    title={a.email}
                   >
                     {a.email}
                   </td>
-                  <td style={{ padding: "10px 8px" }}>{a.name || a.fullName || a.displayName || "-"}</td>
-                  <td style={{ padding: "10px 8px" }}>{a.phone || a.phoneNumber || "-"}</td>
-                  <td style={{ padding: "10px 8px" }}>{a.discord || a.discordHandle || a.username || "-"}</td>
-                  <td style={{ padding: "10px 8px" }}>{a.transport || "-"}</td>
-                  <td style={{ padding: "10px 8px", textTransform: "capitalize" }}>{a.status || "Applied"}</td>
-                  <td style={{ padding: "10px 8px" }}>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <td style={{ padding: "10px 10px", color: "#111827" }}>
+                    {a.name || a.fullName || a.displayName || "-"}
+                  </td>
+                  <td style={{ padding: "10px 10px", color: "#111827" }}>{a.phone || a.phoneNumber || "-"}</td>
+                  <td style={{ padding: "10px 10px", color: "#111827" }}>
+                    {a.discord || a.discordHandle || a.username || "-"}
+                  </td>
+                  <td style={{ padding: "10px 10px", color: "#111827" }}>{a.transport || "-"}</td>
+                  <td style={{ padding: "10px 10px", textTransform: "capitalize" }}>
+                    {st === "approved" ? <Chip tone="green">Approved</Chip> : null}
+                    {st === "rejected" ? <Chip tone="red">Rejected</Chip> : null}
+                    {st !== "approved" && st !== "rejected" ? <Chip tone="gray">Applied</Chip> : null}
+                  </td>
+                  <td style={{ padding: "10px 10px" }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                       <button
                         className="btn"
-                        style={{ background: "#22c55e", color: "#fff" }}
-                        onClick={() => onApprove(a.userId)}
+                        style={{
+                          background: approveDisabled ? "#e5e7eb" : "#22c55e",
+                          color: approveDisabled ? "#6b7280" : "#fff",
+                          border: "none",
+                        }}
+                        onClick={() => onApprove(id)}
+                        disabled={approveDisabled}
+                        title={approveDisabled ? "Already approved" : "Approve"}
                       >
-                        Approve
+                        {approveDisabled ? "Approved" : "Approve"}
                       </button>
-                      <button className="btn danger" onClick={() => onReject(a.userId)}>
-                        Reject
+                      <button
+                        className="btn danger"
+                        style={{
+                          background: rejectDisabled ? "#e5e7eb" : undefined,
+                          color: rejectDisabled ? "#6b7280" : undefined,
+                          border: rejectDisabled ? "none" : undefined,
+                        }}
+                        onClick={() => onReject(id)}
+                        disabled={rejectDisabled}
+                        title={rejectDisabled ? "Already rejected" : "Reject"}
+                      >
+                        {rejectDisabled ? "Rejected" : "Reject"}
                       </button>
                     </div>
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              );
+            })
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -303,6 +467,39 @@ export default function PMJobDetails({ jobId }) {
 
   // addon toggles busy
   const [addonBusy, setAddonBusy] = useState({}); // { "<userId>:<kind>": boolean }
+
+  // ✅ Collapsible sections (black toggles)
+  const SECTIONS_KEY = (id) => `atag.jobs.${id}.pmjobdetails.sections`;
+  const [sections, setSections] = useState({
+    applied: true,
+    approved: true,
+    rejected: false,
+    attendance: true,
+  });
+
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      const raw = localStorage.getItem(SECTIONS_KEY(jobId));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setSections((prev) => ({ ...prev, ...parsed }));
+      } else {
+        // sensible defaults per job open
+        setSections({ applied: true, approved: true, rejected: false, attendance: true });
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId]);
+
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      localStorage.setItem(SECTIONS_KEY(jobId), JSON.stringify(sections));
+    } catch {}
+  }, [sections, jobId]);
+
+  const toggleSection = (k) => setSections((p) => ({ ...p, [k]: !p[k] }));
 
   // camera
   const videoRef = useRef(null);
@@ -456,7 +653,7 @@ export default function PMJobDetails({ jobId }) {
     lastDecodedRef.current = "";
     pendingTokenRef.current = null;
 
-    // reset local scan locks each time scanner opens (optional; keeps it simple)
+    // reset local scan locks each time scanner opens
     scanLockRef.current = { in: new Set(), out: new Set() };
 
     setScannerOpen(true);
@@ -677,7 +874,7 @@ export default function PMJobDetails({ jobId }) {
       vibrateOk();
       setTimeout(() => setScanPopup(null), 1500);
 
-      // ✅ lock after success (so a later accidental re-scan won't overwrite)
+      // ✅ lock after success
       if (tokenDir && candidateKeys.length) {
         const lockSet = scanLockRef.current?.[tokenDir];
         if (lockSet) candidateKeys.forEach((k) => lockSet.add(k));
@@ -891,8 +1088,8 @@ export default function PMJobDetails({ jobId }) {
 
   const pill = (() => {
     const s = statusEff;
-    const bg = s === "ongoing" ? "#d1fae5" : s === "ended" ? "#fee2e2" : "#e5e7eb";
-    const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#374151";
+    const bg = s === "ongoing" ? "#dcfce7" : s === "ended" ? "#fee2e2" : "#f3f4f6";
+    const fg = s === "ongoing" ? "#065f46" : s === "ended" ? "#991b1b" : "#111827";
     return (
       <span
         className="status"
@@ -900,8 +1097,10 @@ export default function PMJobDetails({ jobId }) {
           background: bg,
           color: fg,
           borderRadius: 999,
-          padding: "4px 10px",
-          fontWeight: 700,
+          padding: "6px 12px",
+          fontWeight: 900,
+          border: "1px solid #e5e7eb",
+          textTransform: "capitalize",
         }}
       >
         {s}
@@ -918,146 +1117,232 @@ export default function PMJobDetails({ jobId }) {
   const approvedApplicants = (applicants || []).filter((a) => normStatus(a.status) === "approved");
   const rejectedApplicants = (applicants || []).filter((a) => normStatus(a.status) === "rejected");
 
+  // stats
+  const approvedCount = approvedRows.length;
+  const checkedInCount = approvedRows.filter((r) => !!r.in).length;
+  const checkedOutCount = approvedRows.filter((r) => !!r.out).length;
+  const earlyCount = approvedRows.filter((r) => !!r.hasEarly).length;
+  const luCount = approvedRows.filter((r) => !!r.hasLU).length;
+
   return (
-    <div className="container" style={{ paddingTop: 16 }}>
+    <div className="container" style={{ paddingTop: 16, maxWidth: 1120 }}>
       {/* header */}
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 800 }}>{job.title}</div>
-            <div style={{ color: "#374151", marginTop: 6 }}>{job.description || ""}</div>
-            <div
-              style={{
-                marginTop: 10,
-                display: "flex",
-                gap: 16,
-                flexWrap: "wrap",
-                color: "#374151",
-              }}
-            >
-              <div>
-                <strong>{job.venue}</strong>
+      <div
+        className="card"
+        style={{
+          border: "1px solid #e5e7eb",
+          borderRadius: 16,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
+          overflow: "hidden",
+        }}
+      >
+        <div style={{ padding: 16, background: "linear-gradient(180deg, #ffffff, #fafafa)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 22, fontWeight: 950, color: "#111827" }}>{job.title}</div>
+                {pill}
+                {isVirtual ? <Chip tone="violet">Virtual (no scanning)</Chip> : <Chip tone="black">Physical</Chip>}
               </div>
-              <div>{fmtRange(job.startTime, job.endTime)}</div>
-              <div>Headcount: {job.headcount}</div>
-              <div>Early call: {job.earlyCall?.enabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</div>
-              {isVirtual && <div style={{ fontWeight: 700, color: "#7c3aed" }}>Mode: Virtual (no scanning)</div>}
+
+              {job.description ? (
+                <div style={{ color: "#374151", marginTop: 8, fontWeight: 600 }}>{job.description}</div>
+              ) : null}
+
+              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Chip>{job.venue || "—"}</Chip>
+                <Chip>{fmtRange(job.startTime, job.endTime) || "—"}</Chip>
+                <Chip>Headcount: {job.headcount ?? "-"}</Chip>
+                <Chip tone={earlyEnabled ? "green" : "gray"}>
+                  Early call: {earlyEnabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
+                </Chip>
+              </div>
             </div>
 
-            <div
-              className="card"
-              style={{
-                marginTop: 10,
-                padding: 10,
-                background: "#f8fafc",
-                border: "1px solid #e2e8f0",
-              }}
-            >
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                <div>
-                  <b>Initial End Time:</b>
-                  <br />
-                  {fmtDateTime(job.endTime) || "-"}
-                </div>
-                <div>
-                  <b>PM Ended At:</b>
-                  <br />
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {canStart ? (
+                <button className="btn red" onClick={startAndOpen} disabled={startBusy}>
+                  {startBusy ? "Starting…" : isVirtual ? "Start event" : "Start & scan"}
+                </button>
+              ) : isOngoing ? (
+                <button className="btn gray" disabled>
+                  Started
+                </button>
+              ) : (
+                <button className="btn gray" disabled>
+                  Ended
+                </button>
+              )}
+
+              {isOngoing && !isVirtual && !scannerOpen && (
+                <button className="btn" onClick={openScanner}>
+                  Open scanner
+                </button>
+              )}
+              {!isVirtual && scannerOpen && (
+                <button className="btn gray" onClick={closeScanner}>
+                  Hide scanner
+                </button>
+              )}
+
+              <button className="btn" onClick={endEvent} disabled={statusEff === "ended"}>
+                End event
+              </button>
+            </div>
+          </div>
+
+          {/* stats row */}
+          <div
+            style={{
+              marginTop: 14,
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "stretch",
+            }}
+          >
+            <StatCard label="Approved" value={approvedCount} sub={`Headcount: ${job.headcount ?? "-"}`} />
+            <StatCard label="Checked-in" value={checkedInCount} sub="Has IN time" />
+            <StatCard label="Checked-out" value={checkedOutCount} sub="Has OUT time" />
+            <StatCard label="Early Call" value={earlyCount} sub={earlyEnabled ? "Enabled" : "Disabled"} />
+            <StatCard label="Loading/Unloading" value={luCount} sub="Confirmed" />
+          </div>
+
+          {/* OT / end-time card */}
+          <div
+            style={{
+              marginTop: 14,
+              padding: 12,
+              background: "#ffffff",
+              border: "1px solid #e5e7eb",
+              borderRadius: 14,
+            }}
+          >
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 900 }}>Initial End Time</div>
+                <div style={{ marginTop: 3, fontWeight: 800, color: "#111827" }}>{fmtDateTime(job.endTime) || "-"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 900 }}>PM Ended At</div>
+                <div style={{ marginTop: 3, fontWeight: 800, color: "#111827" }}>
                   {actualEndDJ ? fmtDateTime(actualEndDJ.toISOString()) : "— (not ended)"}
                 </div>
-                <div>
-                  <b>OT (rounded hours):</b>
-                  <br />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 900 }}>OT (rounded hours)</div>
+                <div style={{ marginTop: 3, fontWeight: 800, color: "#111827" }}>
                   {actualEndDJ ? (otRoundedHours > 0 ? `${otRoundedHours} hour(s)` : "0 (no OT)") : "—"}
                 </div>
               </div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-                OT rule: whole hours only — ≤30 min rounds down, &gt;30 min rounds up.
-              </div>
+            </div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>
+              OT rule: whole hours only — ≤30 min rounds down, &gt;30 min rounds up.
+            </div>
+
+            {/* reset area */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+              <button className="btn" onClick={() => resetEvent(true)}>
+                Reset (keep attendance)
+              </button>
+              <button className="btn danger" onClick={() => resetEvent(false)}>
+                Reset (delete attendance)
+              </button>
             </div>
           </div>
-          <div>{pill}</div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
-          {canStart ? (
-            <button className="btn red" onClick={startAndOpen} disabled={startBusy}>
-              {startBusy ? "Starting…" : isVirtual ? "Start event" : "Start & scan"}
-            </button>
-          ) : isOngoing ? (
-            <button className="btn gray" disabled>
-              Started
-            </button>
-          ) : (
-            <button className="btn gray" disabled>
-              Ended
-            </button>
-          )}
-
-          {isOngoing && !isVirtual && !scannerOpen && (
-            <button className="btn" onClick={openScanner}>
-              Open scanner
-            </button>
-          )}
-          {!isVirtual && scannerOpen && (
-            <button className="btn gray" onClick={closeScanner}>
-              Hide scanner
-            </button>
-          )}
-
-          <button className="btn" onClick={() => resetEvent(true)}>
-            Reset (keep attendance)
-          </button>
-          <button className="btn danger" onClick={() => resetEvent(false)}>
-            Reset (delete attendance)
-          </button>
-          <button className="btn" onClick={endEvent}>
-            End event
-          </button>
         </div>
       </div>
 
-      {/* Applicants (3 tables) */}
-      <ApplicantsTable
+      {/* Applicants (black toggles) */}
+      <CollapsibleSection
         title="Applicants — Applied"
-        rows={appliedApplicants}
-        onApprove={(uid) => setApproval(uid, true)}
-        onReject={(uid) => setApproval(uid, false)}
-      />
-      <ApplicantsTable
-        title="Applicants — Approved"
-        rows={approvedApplicants}
-        onApprove={(uid) => setApproval(uid, true)}
-        onReject={(uid) => setApproval(uid, false)}
-      />
-      <ApplicantsTable
-        title="Applicants — Rejected"
-        rows={rejectedApplicants}
-        onApprove={(uid) => setApproval(uid, true)}
-        onReject={(uid) => setApproval(uid, false)}
-      />
+        count={appliedApplicants.length}
+        open={sections.applied}
+        onToggle={() => toggleSection("applied")}
+        subtitle="New / pending applications waiting for approval"
+      >
+        <ApplicantsTable
+          rows={appliedApplicants}
+          onApprove={(uid) => setApproval(uid, true)}
+          onReject={(uid) => setApproval(uid, false)}
+        />
+      </CollapsibleSection>
 
-      {/* Approved List & Attendance */}
-      <div className="card" style={{ marginTop: 14 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Approved List & Attendance</div>
+      <CollapsibleSection
+        title="Applicants — Approved"
+        count={approvedApplicants.length}
+        open={sections.approved}
+        onToggle={() => toggleSection("approved")}
+        subtitle="Approved applicants (can still Reject if needed)"
+      >
+        <ApplicantsTable
+          rows={approvedApplicants}
+          onApprove={(uid) => setApproval(uid, true)}
+          onReject={(uid) => setApproval(uid, false)}
+        />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Applicants — Rejected"
+        count={rejectedApplicants.length}
+        open={sections.rejected}
+        onToggle={() => toggleSection("rejected")}
+        subtitle="Rejected applicants (can still Approve back if needed)"
+      >
+        <ApplicantsTable
+          rows={rejectedApplicants}
+          onApprove={(uid) => setApproval(uid, true)}
+          onReject={(uid) => setApproval(uid, false)}
+        />
+      </CollapsibleSection>
+
+      {/* Attendance (black toggle) */}
+      <CollapsibleSection
+        title="Approved List & Attendance"
+        count={approvedRows.length}
+        open={sections.attendance}
+        onToggle={() => toggleSection("attendance")}
+        subtitle="Confirm add-ons + view IN/OUT timestamps"
+      >
         <div style={{ overflowX: "auto" }}>
-          <table className="table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 920 }}>
+          <table
+            className="table"
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              minWidth: 980,
+              border: "1px solid #e5e7eb",
+              borderRadius: 12,
+              overflow: "hidden",
+            }}
+          >
             <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: "8px 4px", width: 60 }}>No.</th>
-                <th style={{ textAlign: "left", padding: "8px 4px" }}>Email</th>
-                <th style={{ textAlign: "left", padding: "8px 4px" }}>Name</th>
-                <th style={{ textAlign: "left", padding: "8px 4px" }}>Phone</th>
-                <th style={{ textAlign: "left", padding: "8px 4px" }}>Discord</th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Early Call</th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 160 }}>Loading/Unloading</th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>In</th>
-                <th style={{ textAlign: "center", padding: "8px 4px", width: 120 }}>Out</th>
+              <tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
+                <th style={{ textAlign: "left", padding: "10px 10px", width: 60, color: "#6b7280", fontSize: 12 }}>
+                  No.
+                </th>
+                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Email</th>
+                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Name</th>
+                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Phone</th>
+                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Discord</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
+                  Early Call
+                </th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 170, color: "#6b7280", fontSize: 12 }}>
+                  Loading/Unloading
+                </th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
+                  In
+                </th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
+                  Out
+                </th>
               </tr>
             </thead>
             <tbody>
               {approvedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} style={{ color: "#6b7280", padding: 8 }}>
+                  <td colSpan={9} style={{ color: "#6b7280", padding: 12 }}>
                     No approved users yet.
                   </td>
                 </tr>
@@ -1069,15 +1354,18 @@ export default function PMJobDetails({ jobId }) {
                   const earlyDisabled = !earlyEnabled || !!addonBusy[earlyKey];
                   const luDisabled = !!addonBusy[luKey];
 
+                  const inTone = r.in ? "green" : "gray";
+                  const outTone = r.out ? "green" : "gray";
+
                   return (
                     <tr key={r.userId || r.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "8px 4px", fontWeight: 700 }}>{idx + 1}.</td>
-                      <td style={{ padding: "8px 4px" }}>{r.email}</td>
-                      <td style={{ padding: "8px 4px" }}>{r.name || "-"}</td>
-                      <td style={{ padding: "8px 4px" }}>{r.phone || "-"}</td>
-                      <td style={{ padding: "8px 4px" }}>{r.discord || "-"}</td>
+                      <td style={{ padding: "10px 10px", fontWeight: 900, color: "#111827" }}>{idx + 1}.</td>
+                      <td style={{ padding: "10px 10px", fontWeight: 800, color: "#111827" }}>{r.email}</td>
+                      <td style={{ padding: "10px 10px", color: "#111827" }}>{r.name || "-"}</td>
+                      <td style={{ padding: "10px 10px", color: "#111827" }}>{r.phone || "-"}</td>
+                      <td style={{ padding: "10px 10px", color: "#111827" }}>{r.discord || "-"}</td>
 
-                      <td style={{ padding: "8px 4px", textAlign: "center" }}>
+                      <td style={{ padding: "10px 10px", textAlign: "center" }}>
                         {earlyEnabled ? (
                           <input
                             type="checkbox"
@@ -1091,7 +1379,7 @@ export default function PMJobDetails({ jobId }) {
                         )}
                       </td>
 
-                      <td style={{ padding: "8px 4px", textAlign: "center" }}>
+                      <td style={{ padding: "10px 10px", textAlign: "center" }}>
                         <input
                           type="checkbox"
                           checked={!!r.hasLU}
@@ -1103,23 +1391,24 @@ export default function PMJobDetails({ jobId }) {
 
                       <td
                         style={{
-                          padding: "8px 4px",
+                          padding: "10px 10px",
                           textAlign: "center",
                           fontFamily:
                             "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
                         }}
                       >
-                        {fmtTime(r.in)}
+                        <Chip tone={inTone}>{fmtTime(r.in) || "—"}</Chip>
                       </td>
+
                       <td
                         style={{
-                          padding: "8px 4px",
+                          padding: "10px 10px",
                           textAlign: "center",
                           fontFamily:
                             "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
                         }}
                       >
-                        {fmtTime(r.out)}
+                        <Chip tone={outTone}>{fmtTime(r.out) || "—"}</Chip>
                       </td>
                     </tr>
                   );
@@ -1127,8 +1416,14 @@ export default function PMJobDetails({ jobId }) {
               )}
             </tbody>
           </table>
+
+          {isVirtual ? (
+            <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
+              Virtual mode: no QR scan required. (If you want, we can add a “Mark Present” button here later.)
+            </div>
+          ) : null}
         </div>
-      </div>
+      </CollapsibleSection>
 
       {/* ---------- SCANNER OVERLAY ---------- */}
       {!isVirtual && scannerOpen && (
@@ -1165,8 +1460,10 @@ export default function PMJobDetails({ jobId }) {
               height: "38vh",
               maxHeight: 300,
               border: "2px solid rgba(255,255,255,0.35)",
-              borderRadius: 8,
+              borderRadius: 10,
               overflow: "hidden",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+              backdropFilter: "blur(6px)",
             }}
           >
             <div
@@ -1206,13 +1503,19 @@ export default function PMJobDetails({ jobId }) {
               style={{
                 background: "rgba(0,0,0,0.6)",
                 color: "white",
-                border: "none",
-                padding: "6px 12px",
-                borderRadius: 8,
+                border: "1px solid rgba(255,255,255,0.18)",
+                padding: "8px 12px",
+                borderRadius: 10,
+                fontWeight: 800,
               }}
             >
               ← Back
             </button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 800 }}>
+                {camReady ? "Camera ready" : "Opening camera…"}
+              </span>
+            </div>
           </div>
 
           <div
@@ -1221,38 +1524,40 @@ export default function PMJobDetails({ jobId }) {
               bottom: 0,
               left: 0,
               right: 0,
-              padding: 10,
-              background: "linear-gradient(transparent, rgba(0,0,0,0.6))",
+              padding: 12,
+              background: "linear-gradient(transparent, rgba(0,0,0,0.65))",
               display: "flex",
               flexDirection: "column",
-              gap: 6,
+              gap: 8,
             }}
           >
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", width: "100%" }}>
               <input
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 placeholder="Token…"
                 style={{
-                  flex: "1 1 120px",
+                  flex: "1 1 160px",
                   minWidth: 0,
-                  borderRadius: 6,
-                  border: "1px solid rgba(255,255,255,0.35)",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.28)",
                   background: "rgba(0,0,0,0.35)",
                   color: "white",
-                  padding: "6px 8px",
+                  padding: "10px 10px",
                   fontSize: 13,
+                  outline: "none",
                 }}
               />
               <button
                 onClick={pasteFromClipboard}
                 style={{
-                  background: "rgba(255,255,255,0.12)",
+                  background: "rgba(255,255,255,0.14)",
                   color: "white",
-                  border: "none",
-                  padding: "6px 10px",
-                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  padding: "10px 12px",
+                  borderRadius: 10,
                   fontSize: 12,
+                  fontWeight: 900,
                   flex: "0 0 auto",
                 }}
               >
@@ -1265,9 +1570,9 @@ export default function PMJobDetails({ jobId }) {
                   background: scanBusy ? "rgba(148,163,184,0.7)" : "#22c55e",
                   color: "white",
                   border: "none",
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  fontWeight: 600,
+                  padding: "10px 14px",
+                  borderRadius: 10,
+                  fontWeight: 900,
                   fontSize: 12,
                   flex: "0 0 auto",
                 }}
@@ -1275,13 +1580,11 @@ export default function PMJobDetails({ jobId }) {
                 {scanBusy ? "..." : "Scan"}
               </button>
             </div>
-            <div style={{ color: "white", fontSize: 11 }}>
-              {camReady ? "Camera ready — point at a QR code." : "Opening camera…"}
-            </div>
-            <div style={{ color: "white", fontSize: 11 }}>
+
+            <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 700 }}>
               {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
-            {scanMsg && <div style={{ color: "white", fontSize: 11 }}>{scanMsg}</div>}
+            {scanMsg ? <div style={{ color: "white", fontSize: 12, fontWeight: 800 }}>{scanMsg}</div> : null}
           </div>
 
           {scanPopup && (
@@ -1291,11 +1594,11 @@ export default function PMJobDetails({ jobId }) {
                 top: "50%",
                 left: "50%",
                 transform: "translate(-50%, -50%)",
-                background: scanPopup.kind === "success" ? "rgba(34,197,94,0.9)" : "rgba(248,113,113,0.9)",
+                background: scanPopup.kind === "success" ? "rgba(34,197,94,0.92)" : "rgba(248,113,113,0.92)",
                 color: "white",
                 padding: "10px 20px",
                 borderRadius: 999,
-                fontWeight: 700,
+                fontWeight: 900,
                 textAlign: "center",
                 maxWidth: "80%",
                 boxShadow: "0 10px 40px rgba(0,0,0,0.35)",
