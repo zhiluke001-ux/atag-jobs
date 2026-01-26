@@ -20,7 +20,26 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.set("trust proxy", 1);
-app.use(cors());
+app.disable("x-powered-by");
+
+// ---- CORS (optional allowlist via env CORS_ORIGINS="https://a.com,https://b.com") ----
+const CORS_ORIGINS = String(process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // allow server-to-server/no-origin
+      if (!origin) return cb(null, true);
+      // if no allowlist configured -> allow all (same behavior as your current code)
+      if (!CORS_ORIGINS.length) return cb(null, true);
+      return cb(null, CORS_ORIGINS.includes(origin));
+    },
+  })
+);
+
 app.use(express.json({ limit: "12mb" }));
 app.use(morgan("dev"));
 
@@ -33,7 +52,7 @@ const uploadsRoot = path.join(DATA_DIR, "uploads");
 
 const avatarsDir = path.join(uploadsRoot, "avatars");
 const verificationsDir = path.join(uploadsRoot, "verifications");
-// ✅ NEW: parking receipts
+// legacy/compat (you now mainly use /blob)
 const parkingReceiptsDir = path.join(uploadsRoot, "parking-receipts");
 
 fs.ensureDirSync(avatarsDir);
@@ -50,8 +69,9 @@ let db = await loadDB();
    (Render free-safe)
 ========================= */
 db.blobs = db.blobs || {}; // { [blobId]: { mime, b64, size, createdAt, meta } }
-db.blobOrder = Array.isArray(db.blobOrder) ? db.blobOrder : []; // keep insertion order
-const BLOB_CAP = Number(process.env.BLOB_CAP || 300); // keep latest 300 images only
+db.blobOrder = Array.isArray(db.blobOrder) ? db.blobOrder : []; // insertion order
+const BLOB_CAP = Number(process.env.BLOB_CAP || 80); // default smaller to reduce lag
+const BLOB_MAX_BYTES = Number(process.env.BLOB_MAX_BYTES || 1.5 * 1024 * 1024); // default 1.5MB
 
 db.config = db.config || {};
 db.config.jwtSecret = db.config.jwtSecret || "dev-secret";
@@ -67,20 +87,19 @@ const DEFAULT_RATES = {
   },
   physicalHourly: { junior: 20, senior: 30, lead: 30 },
   loadingUnloading: { amount: 30 },
-  // ✅ add thresholdHours default so ensureEarlyCall has a real default
   earlyCall: { defaultAmount: 20, thresholdHours: 3 },
 };
 
 db.config.rates = db.config.rates || DEFAULT_RATES;
 
-// ✅ backfill missing earlyCall.thresholdHours if old DB doesn’t have it
+// backfill earlyCall fields
 db.config.rates.earlyCall = db.config.rates.earlyCall || {};
 if (db.config.rates.earlyCall.defaultAmount == null)
   db.config.rates.earlyCall.defaultAmount = DEFAULT_RATES.earlyCall.defaultAmount;
 if (db.config.rates.earlyCall.thresholdHours == null)
   db.config.rates.earlyCall.thresholdHours = DEFAULT_RATES.earlyCall.thresholdHours;
 
-// ✅ Ensure roleRatesDefaults exists & has all staff grades, including emcees
+// Ensure roleRatesDefaults exists & has all staff grades
 db.config.roleRatesDefaults = db.config.roleRatesDefaults || {};
 const rrd = db.config.roleRatesDefaults;
 
@@ -102,7 +121,6 @@ rrd.lead = rrd.lead || {
   specificPayment: null,
   otMultiplier: 0,
 };
-// ✅ NEW emcee grades
 rrd.junior_emcee = rrd.junior_emcee || {
   payMode: "hourly",
   base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
@@ -127,14 +145,11 @@ const MAX_DISTANCE_METERS = Number(
   process.env.SCAN_MAX_DISTANCE_METERS || db.config.scanMaxDistanceMeters || 500
 );
 const ROLES = ["part-timer", "pm", "admin"];
-
-// ✅ extended staff grades to include emcees
 const STAFF_ROLES = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"];
 
 const toRad = (deg) => (deg * Math.PI) / 180;
 const clampRole = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
 
-// ✅ make grade handling more forgiving
 const clampGrade = (g) => {
   const x = String(g || "")
     .toLowerCase()
@@ -273,91 +288,7 @@ function scheduledHours(job) {
   return Number(hoursBetweenISO(job?.startTime, job?.endTime).toFixed(2));
 }
 
-/* =========================
-   ✅ BREAK HELPERS (NEW)
-   - Stored at job.breaks[userId] = { segments: [{ out, in }] }
-   - Deduction hours = Math.round(rawBreakHours)  // 1.5→2, 1.3→1
-========================= */
-function ensureBreaks(job) {
-  if (!job.breaks || typeof job.breaks !== "object") job.breaks = {};
-  for (const [uid, rec] of Object.entries(job.breaks)) {
-    if (!rec || typeof rec !== "object") {
-      job.breaks[uid] = { segments: [] };
-      continue;
-    }
-    if (!Array.isArray(rec.segments)) rec.segments = [];
-    rec.segments = rec.segments
-      .filter(Boolean)
-      .map((s) => ({
-        out: s.out || s.breakOut || null,
-        in: s.in || s.breakIn || null,
-      }))
-      .filter((s) => s.out || s.in);
-  }
-  return job.breaks;
-}
-
-function findOpenBreakSegment(segments) {
-  if (!Array.isArray(segments)) return null;
-  for (let i = segments.length - 1; i >= 0; i--) {
-    const s = segments[i];
-    if (s && s.out && !s.in) return s;
-  }
-  return null;
-}
-
-function breakRawHoursFromSegments(segments) {
-  if (!Array.isArray(segments) || !segments.length) return 0;
-  let total = 0;
-  for (const s of segments) {
-    if (s?.out && s?.in) total += hoursBetweenISO(s.out, s.in);
-  }
-  return total;
-}
-
-function breakRoundedHours(rawHours) {
-  // your examples: 1.5→2, 1.3→1
-  const n = Number(rawHours || 0);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.max(0, Math.round(n));
-}
-
-function getBreakSummary(job, userId) {
-  ensureBreaks(job);
-  const rec = job.breaks?.[userId] || { segments: [] };
-  const raw = breakRawHoursFromSegments(rec.segments);
-  const rounded = breakRoundedHours(raw);
-  return {
-    rawHours: Number(raw.toFixed(2)),
-    roundedHours: rounded,
-    segments: rec.segments,
-    open: !!findOpenBreakSegment(rec.segments),
-  };
-}
-
-function applyBreakScan(job, userId, dir, atISO) {
-  ensureBreaks(job);
-  job.breaks[userId] = job.breaks[userId] || { segments: [] };
-  const segments = job.breaks[userId].segments;
-
-  const open = findOpenBreakSegment(segments);
-
-  if (dir === "break_out") {
-    if (open) return { error: "break_already_started" };
-    segments.push({ out: atISO, in: null });
-    return { ok: true };
-  }
-
-  if (dir === "break_in") {
-    if (!open) return { error: "break_not_started" };
-    open.in = atISO;
-    return { ok: true };
-  }
-
-  return { error: "bad_break_direction" };
-}
-
-/* ===== Loading/Unloading normalizer (FIXES stale closed + enabled) ===== */
+/* ===== Loading/Unloading normalizer ===== */
 function ensureLoadingUnload(job) {
   const basePrice = Number(db.config?.rates?.loadingUnloading?.amount ?? 0);
 
@@ -378,11 +309,10 @@ function ensureLoadingUnload(job) {
     ? Array.from(new Set(job.loadingUnload.participants))
     : [];
 
-  // ✅ important: treat quota>0 as enabled even if enabled was not set
   const enabled = Boolean(job.loadingUnload.enabled) || quota > 0;
   const price = Number(job.loadingUnload.price ?? basePrice);
 
-  // ✅ critical fix: if quota <= 0 => unlimited => NEVER closed
+  // quota<=0 => unlimited => never closed
   const closed = quota > 0 ? participants.length >= quota : false;
 
   job.loadingUnload.enabled = enabled;
@@ -392,7 +322,6 @@ function ensureLoadingUnload(job) {
   job.loadingUnload.participants = participants;
   job.loadingUnload.closed = closed;
 
-  // keep applicants tidy when closed (optional)
   if (job.loadingUnload.closed) {
     const keep = new Set(job.loadingUnload.participants);
     job.loadingUnload.applicants = job.loadingUnload.applicants.filter((uid) => keep.has(uid));
@@ -408,8 +337,8 @@ function jobPublicView(job) {
 
   const lu = ensureLoadingUnload(job);
 
-  const appliedCount = Array.isArray(job.applications) ? job.applications.length : 0;
-  const approvedCount = Array.isArray(job.approved) ? job.approved.length : 0;
+  const apps = Array.isArray(job.applications) ? job.applications : [];
+  const approved = Array.isArray(job.approved) ? job.approved : [];
   const fullTimers = Array.isArray(job.fullTimers) ? job.fullTimers : [];
 
   return {
@@ -437,8 +366,8 @@ function jobPublicView(job) {
       junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
       senior_emcee: Number(roleCounts?.senior_emcee ?? 0),
     },
-    appliedCount,
-    approvedCount,
+    appliedCount: apps.length,
+    approvedCount: approved.length,
     fullTimersCount: fullTimers.length,
     paySummary: paySummaryFromRate(job.rate || {}),
   };
@@ -489,83 +418,14 @@ function normalizeAdjustments(obj, actor) {
   return out;
 }
 
-/* =========================
-   ✅ PAY CALC HELPERS (NEW)
-   - Only key change: hourly paid hours deduct breakRoundedHours()
-========================= */
-function getUserGrade(userId) {
-  const u = (db.users || []).find((x) => x.id === userId);
-  return clampGrade(u?.grade || "junior");
-}
-function getRoleRateFor(job, grade) {
-  const rr = job?.roleRates?.[grade] || db.config?.roleRatesDefaults?.[grade] || null;
-  if (!rr) return { payMode: "hourly", base: 0, specificPayment: null, otMultiplier: 0 };
-  return {
-    payMode: rr.payMode ?? "hourly",
-    base: Number(rr.base ?? 0),
-    specificPayment: rr.specificPayment ?? rr.specificPayment ?? rr.specificPayment,
-    otMultiplier: Number(rr.otMultiplier ?? 0),
-  };
-}
-function computeWorkedAndPaidHours(job, userId) {
-  const att = job?.attendance?.[userId];
-  if (!att?.in || !att?.out) {
-    const b = getBreakSummary(job, userId);
-    return {
-      workedHours: 0,
-      breakRawHours: b.rawHours,
-      breakRoundedHours: b.roundedHours,
-      paidHours: 0,
-    };
-  }
-  const worked = hoursBetweenISO(att.in, att.out);
-  const b = getBreakSummary(job, userId);
-  const paid = Math.max(0, worked - b.roundedHours);
-
-  return {
-    workedHours: Number(worked.toFixed(2)),
-    breakRawHours: b.rawHours,
-    breakRoundedHours: b.roundedHours,
-    paidHours: Number(paid.toFixed(2)),
-  };
-}
-function computePayForUser(job, userId) {
-  const grade = getUserGrade(userId);
-  const rate = getRoleRateFor(job, grade);
-  const hrs = computeWorkedAndPaidHours(job, userId);
-
-  const payMode = String(rate.payMode || "hourly");
-  const hourlyRate = Number(rate.base || 0);
-  const specificPayment =
-    rate.specificPayment == null || rate.specificPayment === ""
-      ? null
-      : Number(rate.specificPayment);
-
-  let total = 0;
-
-  if (payMode === "specific") {
-    total = Number.isFinite(specificPayment) ? specificPayment : 0;
-  } else if (payMode === "specific_plus_hourly") {
-    total =
-      (Number.isFinite(specificPayment) ? specificPayment : 0) + hourlyRate * (hrs.paidHours || 0);
-  } else {
-    // hourly (default)
-    total = hourlyRate * (hrs.paidHours || 0);
-  }
-
-  return {
-    grade,
-    payMode,
-    hourlyRate,
-    specificPayment: specificPayment == null ? "" : specificPayment,
-    ...hrs,
-    totalPay: Number(total.toFixed(2)),
-  };
-}
-
 /* ------------ CSV helpers ------------- */
 function generateJobCSV(job) {
   const rows = [];
+
+  job.applications = Array.isArray(job.applications) ? job.applications : [];
+  job.approved = Array.isArray(job.approved) ? job.approved : [];
+  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
+  job.attendance = job.attendance && typeof job.attendance === "object" ? job.attendance : {};
 
   const schedStart = job.startTime || "";
   const schedEnd = job.endTime || "";
@@ -574,7 +434,6 @@ function generateJobCSV(job) {
   const evEnd = job.events?.endedAt || "";
 
   ensureLoadingUnload(job);
-  ensureBreaks(job);
 
   for (const u of job.applications) {
     const luApplied = !!(job.loadingUnload?.applicants || []).includes(u.userId);
@@ -602,15 +461,6 @@ function generateJobCSV(job) {
       eventEndedAt: evEnd,
       luApplied,
       luConfirmed,
-
-      // ✅ break/pay cols (blank for application rows)
-      breakRawHours: "",
-      breakRoundedHours: "",
-      paidHours: "",
-      payMode: "",
-      hourlyRate: "",
-      specificPayment: "",
-      totalPay: "",
     });
   }
 
@@ -619,8 +469,6 @@ function generateJobCSV(job) {
     const luApplied = !!(job.loadingUnload?.applicants || []).includes(userId);
     const luConfirmed = !!(job.loadingUnload?.participants || []).includes(userId);
     const present = !!rec.in || !!rec.out;
-
-    const pay = computePayForUser(job, userId);
 
     rows.push({
       section: "attendance",
@@ -643,15 +491,6 @@ function generateJobCSV(job) {
       eventEndedAt: evEnd,
       luApplied,
       luConfirmed,
-
-      // ✅ break/pay cols
-      breakRawHours: pay.breakRawHours,
-      breakRoundedHours: pay.breakRoundedHours,
-      paidHours: pay.paidHours,
-      payMode: pay.payMode,
-      hourlyRate: pay.hourlyRate,
-      specificPayment: pay.specificPayment,
-      totalPay: pay.totalPay,
     });
   }
 
@@ -672,15 +511,6 @@ function generateJobCSV(job) {
     "eventEndedAt",
     "luApplied",
     "luConfirmed",
-
-    // ✅ new cols
-    "breakRawHours",
-    "breakRoundedHours",
-    "paidHours",
-    "payMode",
-    "hourlyRate",
-    "specificPayment",
-    "totalPay",
   ];
   return { headers, rows };
 }
@@ -770,7 +600,6 @@ for (const j of db.jobs) {
     }
   }
 
-  // ✅ normalize L&U hard to prevent stale closed/disabled
   if (!j.loadingUnload || typeof j.loadingUnload !== "object") {
     j.loadingUnload = {
       enabled: false,
@@ -791,20 +620,9 @@ for (const j of db.jobs) {
     bootMutated = true;
   }
 
-  // ✅ NEW: ensure parkingReceipts container exists (optional)
   if (j.parkingReceipts && !Array.isArray(j.parkingReceipts)) {
     j.parkingReceipts = [];
     bootMutated = true;
-  }
-
-  // ✅ NEW: ensure breaks exists
-  if (!j.breaks || typeof j.breaks !== "object") {
-    j.breaks = {};
-    bootMutated = true;
-  } else {
-    const before = JSON.stringify(j.breaks);
-    ensureBreaks(j);
-    if (JSON.stringify(j.breaks) !== before) bootMutated = true;
   }
 }
 if (bootMutated) await saveDB(db);
@@ -938,8 +756,7 @@ async function sendResetEmail(to, link) {
 }
 
 /**
- * ✅ Generic image saver for DataURL -> file in absDir -> returns public url.
- * - publicPrefix example: "/uploads/verifications" or "/uploads/parking-receipts"
+ * Generic image saver for DataURL -> DB blob -> returns public url.
  */
 function parseImageDataUrl(dataUrl) {
   const s = String(dataUrl || "");
@@ -953,17 +770,72 @@ function parseImageDataUrl(dataUrl) {
   const b64 = m[3];
   const buf = Buffer.from(b64, "base64");
 
-  const MAX = 2 * 1024 * 1024; // 2MB binary
-  if (buf.length > MAX) throw new Error("image_too_large");
+  if (buf.length > BLOB_MAX_BYTES) throw new Error("image_too_large");
 
   return { mime, ext, b64, size: buf.length };
 }
 
+function blobIdFromAnyUrl(u) {
+  if (!u) return null;
+  const s = String(u);
+  const noHost = s.replace(/^https?:\/\/[^/]+/i, "");
+  const clean = noHost.split("?")[0];
+  const m = clean.match(/^\/blob\/([a-z0-9]+)/i);
+  return m ? m[1] : null;
+}
+
+// build referenced set so we NEVER prune an in-use blob
+function collectReferencedBlobIds() {
+  const ids = new Set();
+  const grab = (u) => {
+    const id = blobIdFromAnyUrl(u);
+    if (id) ids.add(id);
+  };
+
+  for (const u of db.users || []) {
+    grab(u.avatarUrl);
+    grab(u.verificationPhotoUrl);
+  }
+  for (const j of db.jobs || []) {
+    if (Array.isArray(j.parkingReceipts)) {
+      for (const r of j.parkingReceipts) grab(r?.photoUrl);
+    }
+  }
+  return ids;
+}
+
+function normalizeBlobOrder() {
+  const seen = new Set();
+  db.blobOrder = (db.blobOrder || [])
+    .filter((id) => id && typeof id === "string" && db.blobs?.[id])
+    .filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+}
+
 function pruneBlobsIfNeeded() {
-  // keep only latest BLOB_CAP
-  while (db.blobOrder.length > BLOB_CAP) {
-    const oldest = db.blobOrder.shift();
-    if (oldest && db.blobs[oldest]) delete db.blobs[oldest];
+  normalizeBlobOrder();
+  if (db.blobOrder.length <= BLOB_CAP) return;
+
+  const refs = collectReferencedBlobIds();
+
+  let guard = db.blobOrder.length * 2; // prevent infinite loops
+  while (db.blobOrder.length > BLOB_CAP && guard-- > 0) {
+    const oldest = db.blobOrder[0];
+
+    if (refs.has(oldest)) {
+      // still referenced -> move to end and try next
+      db.blobOrder.push(db.blobOrder.shift());
+      continue;
+    }
+
+    db.blobOrder.shift();
+    if (db.blobs?.[oldest]) delete db.blobs[oldest];
+  }
+
+  // If still exceeds cap, it means too many referenced blobs. Don't delete referenced.
+  if (db.blobOrder.length > BLOB_CAP) {
+    console.warn(
+      `[blob] BLOB_CAP=${BLOB_CAP} exceeded because many blobs are still referenced. Raise BLOB_CAP or cleanup receipts/users.`
+    );
   }
 }
 
@@ -985,22 +857,12 @@ async function saveDataUrlBlob(dataUrl, meta = {}) {
   };
 
   db.blobOrder.push(id);
+
+  // ✅ safe prune (won't delete referenced)
   pruneBlobsIfNeeded();
+
   await saveDB(db);
-
   return `/blob/${id}?v=${Date.now()}`;
-}
-
-function blobIdFromAnyUrl(u) {
-  if (!u) return null;
-  const s = String(u);
-
-  // allow absolute
-  const noHost = s.replace(/^https?:\/\/[^/]+/i, "");
-  const clean = noHost.split("?")[0];
-
-  const m = clean.match(/^\/blob\/([a-z0-9]+)/i);
-  return m ? m[1] : null;
 }
 
 async function deleteBlobByUrl(u) {
@@ -1025,7 +887,7 @@ async function deleteStoredImage(u) {
     return;
   }
 
-  // old local uploads (may not exist on Render free)
+  // old local uploads
   try {
     const s = String(u).replace(/^https?:\/\/[^/]+/i, "");
     const clean = s.split("?")[0];
@@ -1037,7 +899,55 @@ async function deleteStoredImage(u) {
   } catch {}
 }
 
-/* -------------- auth --------------- */
+/* ---- Parking receipt helpers ---- */
+function absPathFromReceiptUrl(photoUrl) {
+  try {
+    const clean = String(photoUrl || "").split("?")[0];
+    const prefixes = ["/uploads/parking-receipts/", "/uploads/parking-receceipts/"];
+    for (const pfx of prefixes) {
+      if (clean.startsWith(pfx)) {
+        const filename = clean.slice(pfx.length);
+        return path.join(parkingReceiptsDir, filename);
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** Build public base URL safely (Render / proxies) */
+function publicBase(req) {
+  const forced = String(process.env.PUBLIC_API_URL || "").replace(/\/$/, "");
+  if (forced) return forced;
+
+  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http")
+    .split(",")[0]
+    .trim();
+  const host = String(req.headers["x-forwarded-host"] || req.get("host") || "")
+    .split(",")[0]
+    .trim();
+
+  return `${proto}://${host}`;
+}
+
+/** Convert relative path to absolute URL */
+function toPublicUrl(req, p) {
+  if (!p) return "";
+  if (/^https?:\/\//i.test(p)) return p;
+  return `${publicBase(req)}${p.startsWith("/") ? "" : "/"}${p}`;
+}
+
+function enrichReceipt(req, r) {
+  const u = (db.users || []).find((x) => x.id === r.userId);
+  return {
+    ...r,
+    photoUrlAbs: toPublicUrl(req, r.photoUrl),
+    name: u?.name || r.name || "",
+    phone: u?.phone || "",
+    discord: u?.discord || "",
+  };
+}
+
+/* -------------- AUTH --------------- */
 
 app.post("/login", async (req, res) => {
   const { identifier, email, username, password } = req.body || {};
@@ -1060,6 +970,7 @@ app.post("/login", async (req, res) => {
 
   const token = signUserToken(user);
   addAudit("login", { identifier: id }, { user });
+
   res.json({
     token,
     user: {
@@ -1072,8 +983,6 @@ app.post("/login", async (req, res) => {
       phone: user.phone || "",
       discord: user.discord || "",
       avatarUrl: user.avatarUrl || "",
-
-      // ✅ add these
       verified: !!user.verified,
       verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
       verificationPhotoUrl: user.verificationPhotoUrl || "",
@@ -1173,6 +1082,7 @@ app.post("/forgot-password", async (req, res) => {
   const emailLower = String(email).toLowerCase();
   const user = db.users.find((u) => String(u.email || "").toLowerCase() === emailLower);
 
+  // Always return ok (don’t leak user existence)
   if (!user) return res.json({ ok: true });
 
   const token = crypto.randomBytes(24).toString("hex");
@@ -1197,7 +1107,8 @@ app.post("/forgot-password", async (req, res) => {
     console.error("sendResetEmail error (outer):", err);
   }
 
-  res.json({ ok: true, token, resetLink });
+  // ✅ do NOT return token. Link is OK (still not ideal, but far better than token).
+  res.json({ ok: true, resetLink });
 });
 
 app.post("/reset-password", async (req, res) => {
@@ -1246,8 +1157,6 @@ app.get("/me", authMiddleware, (req, res) => {
       phone: user.phone || "",
       discord: user.discord || "",
       avatarUrl: user.avatarUrl || "",
-
-      // ✅ add these
       verified: !!user.verified,
       verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
       verificationPhotoUrl: user.verificationPhotoUrl || "",
@@ -1274,8 +1183,7 @@ async function handleUpdateMe(req, res) {
   if (username && String(username).toLowerCase() !== String(user.username || "").toLowerCase()) {
     const takenU = (db.users || []).some(
       (u) =>
-        u.id !== user.id &&
-        String(u.username || "").toLowerCase() === String(username).toLowerCase()
+        u.id !== user.id && String(u.username || "").toLowerCase() === String(username).toLowerCase()
     );
     if (takenU) return res.status(409).json({ error: "username_taken" });
     user.username = String(username);
@@ -1302,8 +1210,6 @@ async function handleUpdateMe(req, res) {
       phone: user.phone || "",
       discord: user.discord || "",
       avatarUrl: user.avatarUrl || "",
-
-      // ✅ add these
       verified: !!user.verified,
       verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
       verificationPhotoUrl: user.verificationPhotoUrl || "",
@@ -1337,10 +1243,8 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
   if (!user) return res.status(404).json({ error: "user_not_found" });
 
   const dataUrl = req.body?.dataUrl;
-  if (!dataUrl || typeof dataUrl !== "string")
-    return res.status(400).json({ error: "dataUrl_required" });
+  if (!dataUrl || typeof dataUrl !== "string") return res.status(400).json({ error: "dataUrl_required" });
 
-  // delete old avatar (if any)
   const old = user.avatarUrl || "";
 
   let avatarUrl = "";
@@ -1356,7 +1260,6 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
   user.avatarUrl = avatarUrl;
   await saveDB(db);
 
-  // best-effort remove old
   await deleteStoredImage(old);
 
   addAudit("me_update_avatar", { userId: user.id }, req);
@@ -1374,16 +1277,12 @@ app.get("/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
     grade: u.grade || "junior",
     phone: u.phone || "",
     discord: u.discord || "",
-
     avatarUrl: u.avatarUrl || "",
     avatarUrlAbs: toPublicUrl(req, u.avatarUrl || ""),
-
     verified: !!u.verified,
     verificationStatus: u.verificationStatus || (u.verified ? "APPROVED" : "PENDING"),
-
     verificationPhotoUrl: u.verificationPhotoUrl || "",
     verificationPhotoUrlAbs: toPublicUrl(req, u.verificationPhotoUrl || ""),
-
     verifiedAt: u.verifiedAt || null,
     verifiedBy: u.verifiedBy || null,
   }));
@@ -1431,7 +1330,7 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
     }
   }
 
-  // ✅ AUTO-DELETE verification photo after APPROVED / REJECTED
+  // AUTO-DELETE verification photo after APPROVED / REJECTED
   try {
     const decided =
       target.verificationStatus === "APPROVED" || target.verificationStatus === "REJECTED";
@@ -1439,13 +1338,12 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
     if (decided && target.verificationPhotoUrl) {
       const old = target.verificationPhotoUrl;
       target.verificationPhotoUrl = "";
-      await saveDB(db); // save first so UI immediately stops showing it
-      await deleteStoredImage(old); // best-effort delete (blob/local)
+      await saveDB(db);              // save first so UI stops showing it
+      await deleteStoredImage(old);  // delete blob/local
     } else {
       await saveDB(db);
     }
   } catch {
-    // if delete fails, still keep the DB updated
     await saveDB(db);
   }
 
@@ -1489,9 +1387,9 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
 
 app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const uid = req.params.id;
-
-  // ✅ FIX: check existence BEFORE referencing user fields
   const user = (db.users || []).find((u) => u.id === uid);
+
+  // ✅ FIX: check existence BEFORE dereferencing user fields
   if (!user) return res.status(404).json({ error: "user_not_found" });
 
   await deleteStoredImage(user.avatarUrl || "");
@@ -1510,9 +1408,6 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
     j.rejected = (j.rejected || []).filter((x) => x !== uid);
     if (j.attendance && j.attendance[uid]) delete j.attendance[uid];
 
-    // ✅ also remove breaks for that user
-    if (j.breaks && j.breaks[uid]) delete j.breaks[uid];
-
     if (j.loadingUnload) {
       ensureLoadingUnload(j);
       j.loadingUnload.applicants = (j.loadingUnload.applicants || []).filter((x) => x !== uid);
@@ -1524,7 +1419,7 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
       j.fullTimers = j.fullTimers.filter((ft) => ft && ft.userId !== uid);
     }
 
-    // ✅ remove any parking receipts by this user
+    // remove any parking receipts by this user
     if (Array.isArray(j.parkingReceipts)) {
       for (const r of j.parkingReceipts) {
         if (r?.userId === uid) await deleteStoredImage(r.photoUrl);
@@ -1573,7 +1468,6 @@ app.post("/config/rates", authMiddleware, requireRole("admin"), async (req, res)
   if (body.roleRatesDefaults && typeof body.roleRatesDefaults === "object") {
     db.config.roleRatesDefaults = { ...db.config.roleRatesDefaults, ...body.roleRatesDefaults };
   }
-  // ensure earlyCall thresholdHours exists after updates
   db.config.rates.earlyCall = db.config.rates.earlyCall || {};
   if (db.config.rates.earlyCall.thresholdHours == null)
     db.config.rates.earlyCall.thresholdHours = DEFAULT_RATES.earlyCall.thresholdHours;
@@ -1588,19 +1482,49 @@ app.post("/config/rates", authMiddleware, requireRole("admin"), async (req, res)
 });
 
 /* -------------- jobs --------------- */
-app.get("/jobs", (_req, res) => {
-  const jobs = db.jobs.map((j) => jobPublicView(j)).sort((a, b) => dayjs(a.startTime) - dayjs(b.startTime));
-  res.json(_req.query.limit ? jobs.slice(0, Number(_req.query.limit)) : jobs);
+app.get("/jobs", (req, res) => {
+  const jobs = (db.jobs || [])
+    .map((j) => jobPublicView(j))
+    .sort((a, b) => dayjs(a.startTime).valueOf() - dayjs(b.startTime).valueOf());
+  res.json(req.query.limit ? jobs.slice(0, Number(req.query.limit)) : jobs);
 });
 
 app.get("/jobs/:id", (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   ensureLoadingUnload(job);
-  ensureBreaks(job);
   const hydrated = hydrateJobFullTimers(job);
   res.json({ ...hydrated, status: computeStatus(hydrated) });
 });
+
+function ensureEarlyCall(job) {
+  const defaultAmount = Number(db.config?.rates?.earlyCall?.defaultAmount ?? 0);
+  const defaultThreshold = Number(db.config?.rates?.earlyCall?.thresholdHours ?? 0);
+
+  if (!job.earlyCall || typeof job.earlyCall !== "object") {
+    job.earlyCall = {
+      enabled: false,
+      amount: defaultAmount,
+      thresholdHours: defaultThreshold,
+      participants: [],
+    };
+  }
+
+  job.earlyCall.enabled = Boolean(job.earlyCall.enabled);
+  job.earlyCall.amount = Number.isFinite(Number(job.earlyCall.amount))
+    ? Number(job.earlyCall.amount)
+    : defaultAmount;
+  job.earlyCall.thresholdHours = Number.isFinite(Number(job.earlyCall.thresholdHours))
+    ? Number(job.earlyCall.thresholdHours)
+    : defaultThreshold;
+
+  if (!Array.isArray(job.earlyCall.participants)) job.earlyCall.participants = [];
+  job.earlyCall.participants = Array.from(
+    new Set(job.earlyCall.participants.filter((x) => typeof x === "string" && x.trim()))
+  );
+
+  return job.earlyCall;
+}
 
 app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const {
@@ -1618,7 +1542,8 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     roleCounts,
     roleRates,
   } = req.body || {};
-  if (!title || !venue || !startTime || !endTime) return res.status(400).json({ error: "missing_fields" });
+  if (!title || !venue || !startTime || !endTime)
+    return res.status(400).json({ error: "missing_fields" });
 
   const id = "j" + Math.random().toString(36).slice(2, 8);
   const lduBody = ldu || loadingUnload || {};
@@ -1660,9 +1585,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     earlyCall: {
       enabled: !!earlyCall?.enabled,
       amount: Number(earlyCall?.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20),
-      thresholdHours: Number(
-        earlyCall?.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3
-      ),
+      thresholdHours: Number(earlyCall?.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3),
       participants: Array.isArray(earlyCall?.participants) ? earlyCall.participants : [],
     },
     loadingUnload: {
@@ -1677,22 +1600,18 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     approved: [],
     rejected: [],
     attendance: {},
-    breaks: {}, // ✅ NEW
     events: { startedAt: null, endedAt: null, scanner: null },
     adjustments: {},
     fullTimers: [],
-    // ✅ NEW: parking receipts container
     parkingReceipts: [],
   };
 
   ensureLoadingUnload(job);
-  ensureBreaks(job);
 
   db.jobs.push(job);
   await saveDB(db);
   addAudit("create_job", { jobId: id, title }, req);
 
-  // ✅✅✅ FIXED: New job notify only to part-timers + admins (NOT PM) ✅✅✅
   try {
     const recipients = (db.users || [])
       .filter((u) => u && (u.role === "part-timer" || u.role === "admin"))
@@ -1712,7 +1631,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
 });
 
 app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const {
@@ -1744,7 +1663,6 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
     job.rate = { ...job.rate, ...rate };
   }
 
-  // ✅ FIX: do NOT wipe participants when editing earlyCall config
   if (earlyCall) {
     const ec = ensureEarlyCall(job);
     ec.enabled = !!earlyCall.enabled;
@@ -1752,10 +1670,7 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
       earlyCall.amount ?? ec.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20
     );
     ec.thresholdHours = Number(
-      earlyCall.thresholdHours ??
-        ec.thresholdHours ??
-        db.config.rates.earlyCall?.thresholdHours ??
-        3
+      earlyCall.thresholdHours ?? ec.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3
     );
     if (Array.isArray(earlyCall.participants)) {
       ec.participants = Array.from(new Set(earlyCall.participants.filter(Boolean)));
@@ -1772,8 +1687,6 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
       job.loadingUnload.price = Number(lduBody.price ?? db.config.rates.loadingUnloading.amount);
     if (lduBody.closed === false) job.loadingUnload.closed = false;
     if (lduBody.closed === true) job.loadingUnload.closed = true;
-
-    // ✅ re-normalize after changes (fixes stale closed when quota becomes 0)
     ensureLoadingUnload(job);
   }
 
@@ -1811,82 +1724,13 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
     job.adjustments = normalizeAdjustments(req.body.adjustments, req.user);
   }
 
-  ensureBreaks(job);
-
   await saveDB(db);
   addAudit("edit_job", { jobId: job.id }, req);
   res.json(job);
 });
 
-app.post("/jobs/:id/rate", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const {
-    base,
-    transportBus,
-    ownTransport,
-    payMode,
-    specificPayment,
-    paymentPrice,
-    lduPrice,
-    lduEnabled,
-    earlyCallAmount,
-    earlyCallThresholdHours,
-    roleRates,
-  } = req.body || {};
-
-  job.rate = job.rate || {};
-  if (base !== undefined) job.rate.base = Number(base);
-  if (transportBus !== undefined) job.rate.transportBus = Number(transportBus);
-  if (ownTransport !== undefined) job.rate.ownTransport = Number(ownTransport);
-  if (payMode !== undefined) job.rate.payMode = String(payMode);
-  if (specificPayment !== undefined) job.rate.specificPayment = Number(specificPayment);
-  if (paymentPrice !== undefined) job.rate.specificPayment = Number(paymentPrice);
-  if (lduPrice !== undefined) job.rate.lduPrice = Number(lduPrice);
-
-  ensureLoadingUnload(job);
-  if (lduEnabled !== undefined) job.loadingUnload.enabled = !!lduEnabled;
-  if (lduPrice !== undefined) job.loadingUnload.price = Number(lduPrice);
-  ensureLoadingUnload(job);
-
-  job.earlyCall = job.earlyCall || {
-    enabled: false,
-    amount: Number(db.config.rates.earlyCall?.defaultAmount ?? 20),
-    thresholdHours: Number(db.config.rates.earlyCall?.thresholdHours ?? 3),
-    participants: [],
-  };
-  if (earlyCallAmount !== undefined) job.earlyCall.amount = Number(earlyCallAmount);
-  if (earlyCallThresholdHours !== undefined)
-    job.earlyCall.thresholdHours = Number(earlyCallThresholdHours);
-
-  if (roleRates && typeof roleRates === "object") {
-    job.roleRates = job.roleRates || {};
-    for (const r of STAFF_ROLES) {
-      job.roleRates[r] = {
-        payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-        base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
-        specificPayment:
-          roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
-        otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
-      };
-    }
-  }
-
-  await saveDB(db);
-  addAudit("update_job_rate", { jobId: job.id }, req);
-  res.json({
-    ok: true,
-    rate: job.rate,
-    earlyCall: job.earlyCall,
-    loadingUnload: job.loadingUnload,
-    roleRates: job.roleRates,
-  });
-});
-
-/* ---- adjustments endpoint ---- */
 app.post("/jobs/:id/adjustments", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const incoming = req.body?.adjustments || {};
@@ -1911,9 +1755,20 @@ app.post("/jobs/:id/adjustments", authMiddleware, requireRole("pm", "admin"), as
 
 /* ---- delete job ---- */
 app.delete("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const idx = db.jobs.findIndex((j) => j.id === req.params.id);
+  const idx = (db.jobs || []).findIndex((j) => j.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: "job_not_found" });
+
   const removed = db.jobs.splice(idx, 1)[0];
+
+  // ✅ cleanup receipt blobs when deleting job
+  try {
+    if (removed && Array.isArray(removed.parkingReceipts)) {
+      for (const r of removed.parkingReceipts) {
+        await deleteStoredImage(r?.photoUrl);
+      }
+    }
+  } catch {}
+
   await saveDB(db);
   addAudit("delete_job", { jobId: removed.id }, req);
   res.json({ ok: true });
@@ -1921,7 +1776,7 @@ app.delete("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, 
 
 /* ---- apply ---- */
 app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   let { transport, wantsLU } = req.body || {};
@@ -1943,6 +1798,10 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
       return res.status(400).json({ error: "transport_not_allowed" });
     }
   }
+
+  job.applications = Array.isArray(job.applications) ? job.applications : [];
+  job.approved = Array.isArray(job.approved) ? job.approved : [];
+  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
 
   ensureLoadingUnload(job);
   const luEnabled = !!job.loadingUnload.enabled || Number(job.loadingUnload.quota || 0) > 0;
@@ -1975,7 +1834,6 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
       exportJobCSV(job);
       addAudit("reapply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
 
-      // ✅✅✅ FIXED: notify admins when someone applies (including reapply) ✅✅✅
       try {
         const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
         const me = (db.users || []).find((u) => u.id === req.user.id);
@@ -1983,7 +1841,7 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
           notifyUsers(adminIds, {
             title: `New application: ${job.title}`,
             body: `${me?.name || req.user.email} applied • ${transport}`,
-            link: `/#/admin/jobs/${job.id}`, // adjust if your admin route differs
+            link: `/#/admin/jobs/${job.id}`,
             type: "app_new",
           }).catch(() => {});
         }
@@ -2004,7 +1862,6 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
       await saveDB(db);
       exportJobCSV(job);
 
-      // ✅✅✅ FIXED: notify admins when someone applies (existing application updated with LU) ✅✅✅
       try {
         const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
         const me = (db.users || []).find((u) => u.id === req.user.id);
@@ -2027,7 +1884,6 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
       await saveDB(db);
       exportJobCSV(job);
 
-      // ✅✅✅ FIXED: notify admins when someone updates their application ✅✅✅
       try {
         const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
         const me = (db.users || []).find((u) => u.id === req.user.id);
@@ -2067,7 +1923,6 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
   exportJobCSV(job);
   addAudit("apply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
 
-  // ✅✅✅ FIXED: notify admins when someone applies ✅✅✅
   try {
     const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
     const me = (db.users || []).find((u) => u.id === req.user.id);
@@ -2084,35 +1939,7 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
   res.json({ ok: true });
 });
 
-/* ✅✅✅ Parking receipt APIs ✅✅✅
-   - Submit: POST /jobs/:id/parking-receipt
-   - My receipts: GET /jobs/:id/parking-receipt/me
-   - PM/Admin all receipts: GET /jobs/:id/parking-receipts
-   - Delete (owner or PM/Admin): POST /jobs/:id/parking-receipt/:rid/delete
-*/
-
-/** Build public base URL safely (Render / proxies) */
-function publicBase(req) {
-  const forced = String(process.env.PUBLIC_API_URL || "").replace(/\/$/, "");
-  if (forced) return forced;
-
-  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http")
-    .split(",")[0]
-    .trim();
-  const host = String(req.headers["x-forwarded-host"] || req.get("host") || "")
-    .split(",")[0]
-    .trim();
-
-  return `${proto}://${host}`;
-}
-
-/** Convert /uploads/... to absolute URL */
-function toPublicUrl(req, p) {
-  if (!p) return "";
-  if (/^https?:\/\//i.test(p)) return p;
-  return `${publicBase(req)}${p.startsWith("/") ? "" : "/"}${p}`;
-}
-
+/* ---- Blob serving ---- */
 app.get("/blob/:id", (req, res) => {
   const id = String(req.params.id || "").trim();
   const item = db.blobs?.[id];
@@ -2124,41 +1951,13 @@ app.get("/blob/:id", (req, res) => {
   return res.end(buf);
 });
 
-function absPathFromReceiptUrl(photoUrl) {
-  try {
-    const clean = String(photoUrl || "").split("?")[0];
-
-    // tolerate typo + correct path
-    const prefixes = ["/uploads/parking-receipts/", "/uploads/parking-receceipts/"];
-
-    for (const pfx of prefixes) {
-      if (clean.startsWith(pfx)) {
-        const filename = clean.slice(pfx.length);
-        return path.join(parkingReceiptsDir, filename);
-      }
-    }
-  } catch {}
-  return null;
-}
-
-function enrichReceipt(req, r) {
-  const u = (db.users || []).find((x) => x.id === r.userId);
-  return {
-    ...r,
-    photoUrlAbs: toPublicUrl(req, r.photoUrl),
-    name: u?.name || r.name || "",
-    phone: u?.phone || "",
-    discord: u?.discord || "",
-  };
-}
-
-/** Submit receipt */
+/* ---- Parking receipt APIs ---- */
 app.post(
   "/jobs/:id/parking-receipt",
   authMiddleware,
   requireRole("part-timer", "pm", "admin"),
   async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
+    const job = (db.jobs || []).find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
     const uid = req.user.id;
@@ -2211,7 +2010,6 @@ app.post(
 
     const enriched = enrichReceipt(req, receipt);
 
-    // ✅ return both relative and absolute (frontend should use photoUrlAbs)
     return res.json({
       ok: true,
       receipt: enriched,
@@ -2221,13 +2019,12 @@ app.post(
   }
 );
 
-/** PM/Admin list receipts for a job */
 app.get(
   "/jobs/:id/parking-receipts",
   authMiddleware,
   requireRole("pm", "admin"),
   async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
+    const job = (db.jobs || []).find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
     const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
@@ -2237,13 +2034,12 @@ app.get(
   }
 );
 
-/** User fetch own receipts for a job */
 app.get(
   "/jobs/:id/parking-receipt/me",
   authMiddleware,
   requireRole("part-timer", "pm", "admin"),
   async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
+    const job = (db.jobs || []).find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
     const uid = req.user.id;
@@ -2252,74 +2048,58 @@ app.get(
 
     return res.json({
       ok: true,
-      receipt: mine[0] || null, // ✅ latest
+      receipt: mine[0] || null,
       receipts: mine,
     });
   }
 );
 
-/** ✅ Remove my latest receipt record (even if file missing) */
+// ✅ FIXED: remove mine also deletes blob entries (prevents DB bloat + lag)
 app.post(
   "/jobs/:id/parking-receipt/me/remove",
   authMiddleware,
   requireRole("part-timer", "pm", "admin"),
   async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
+    const job = (db.jobs || []).find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
     const uid = req.user.id;
     job.parkingReceipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
 
-    // remove only my receipts (or just latest — but your UI seems "single receipt" style)
     const mineIdxs = [];
     for (let i = 0; i < job.parkingReceipts.length; i++) {
       if (job.parkingReceipts[i]?.userId === uid) mineIdxs.push(i);
     }
     if (!mineIdxs.length) return res.json({ ok: true, removed: 0 });
 
-    // delete files best-effort, then remove records
-    let removed = 0;
     const toDelete = mineIdxs.map((i) => job.parkingReceipts[i]).filter(Boolean);
 
-    // remove from array (from back to front)
     for (const i of mineIdxs.slice().reverse()) {
       job.parkingReceipts.splice(i, 1);
-      removed++;
     }
 
+    // delete blobs + legacy files best-effort
     for (const r of toDelete) {
+      await deleteStoredImage(r.photoUrl);
       const abs = absPathFromReceiptUrl(r.photoUrl);
       try {
-        // works for missing files too (ignore errors)
         if (abs && fs.existsSync(abs)) fs.unlinkSync(abs);
       } catch {}
     }
 
     await saveDB(db);
-    addAudit("parking_receipt_me_remove", { jobId: job.id, userId: uid, removed }, req);
+    addAudit("parking_receipt_me_remove", { jobId: job.id, userId: uid, removed: toDelete.length }, req);
 
-    return res.json({ ok: true, removed });
+    return res.json({ ok: true, removed: toDelete.length });
   }
 );
 
-app.get("/__debug/receipt-file", (req, res) => {
-  const p = String(req.query.p || "");
-  const abs = absPathFromReceiptUrl(p);
-  return res.json({
-    ok: true,
-    input: p,
-    abs,
-    exists: abs ? fs.existsSync(abs) : false,
-  });
-});
-
-/** Delete receipt (owner or PM/Admin) */
 app.post(
   "/jobs/:id/parking-receipt/:rid/delete",
   authMiddleware,
   requireRole("part-timer", "pm", "admin"),
   async (req, res) => {
-    const job = db.jobs.find((j) => j.id === req.params.id);
+    const job = (db.jobs || []).find((j) => j.id === req.params.id);
     if (!job) return res.status(404).json({ error: "job_not_found" });
 
     const rid = req.params.rid;
@@ -2337,7 +2117,6 @@ app.post(
     job.parkingReceipts.splice(idx, 1);
     await deleteStoredImage(receipt.photoUrl);
 
-    // best-effort delete file
     const abs = absPathFromReceiptUrl(receipt.photoUrl);
     try {
       if (abs && fs.existsSync(abs)) fs.unlinkSync(abs);
@@ -2353,7 +2132,11 @@ app.post(
 /* ---- part-timer "my jobs" ---- */
 app.get("/me/jobs", authMiddleware, requireRole("part-timer"), (req, res) => {
   const result = [];
-  for (const j of db.jobs) {
+  for (const j of db.jobs || []) {
+    j.applications = Array.isArray(j.applications) ? j.applications : [];
+    j.approved = Array.isArray(j.approved) ? j.approved : [];
+    j.rejected = Array.isArray(j.rejected) ? j.rejected : [];
+
     const applied = j.applications.find((a) => a.userId === req.user.id);
     if (applied) {
       ensureLoadingUnload(j);
@@ -2377,14 +2160,18 @@ app.get("/me/jobs", authMiddleware, requireRole("part-timer"), (req, res) => {
       });
     }
   }
-  result.sort((a, b) => dayjs(a.startTime) - dayjs(b.startTime));
+  result.sort((a, b) => dayjs(a.startTime).valueOf() - dayjs(b.startTime).valueOf());
   res.json(result);
 });
 
 /* ---- PM: applicants list + approve ---- */
 app.get("/jobs/:id/applicants", authMiddleware, requireRole("pm", "admin"), (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  job.applications = Array.isArray(job.applications) ? job.applications : [];
+  job.approved = Array.isArray(job.approved) ? job.approved : [];
+  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
 
   ensureLoadingUnload(job);
 
@@ -2394,7 +2181,7 @@ app.get("/jobs/:id/applicants", authMiddleware, requireRole("pm", "admin"), (req
     if (job.rejected.includes(a.userId)) state = "rejected";
     const luApplied = !!(job.loadingUnload?.applicants || []).includes(a.userId);
     const luConfirmed = !!(job.loadingUnload?.participants || []).includes(a.userId);
-    const u = db.users.find((x) => x.id === a.userId);
+    const u = (db.users || []).find((x) => x.id === a.userId);
     return {
       ...a,
       status: state,
@@ -2411,11 +2198,15 @@ app.get("/jobs/:id/applicants", authMiddleware, requireRole("pm", "admin"), (req
 });
 
 app.post("/jobs/:id/approve", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const { userId, approve } = req.body || {};
   if (!userId || typeof approve !== "boolean") return res.status(400).json({ error: "bad_request" });
+
+  job.applications = Array.isArray(job.applications) ? job.applications : [];
+  job.approved = Array.isArray(job.approved) ? job.approved : [];
+  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
 
   if (approve) {
     const otherApprovedCount = job.approved.filter((u) => u !== userId).length;
@@ -2439,7 +2230,6 @@ app.post("/jobs/:id/approve", authMiddleware, requireRole("pm", "admin"), async 
     const partsSet = new Set(job.loadingUnload.participants || []);
     const quota = Number(job.loadingUnload.quota || 0);
 
-    // ✅ allow unlimited quota (0) to still add participants
     if (wantsLU && !job.loadingUnload.closed) {
       if (quota <= 0 || partsSet.size < quota) {
         partsSet.add(userId);
@@ -2455,7 +2245,6 @@ app.post("/jobs/:id/approve", authMiddleware, requireRole("pm", "admin"), async 
   exportJobCSV(job);
   addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
 
-  // ✅✅✅ FIXED: approve -> notify applicant; reject -> NO notification ✅✅✅
   try {
     if (approve) {
       notifyUsers([userId], {
@@ -2471,52 +2260,16 @@ app.post("/jobs/:id/approve", authMiddleware, requireRole("pm", "admin"), async 
 });
 
 /* ---- Early Call (per-person toggles) ---- */
-function ensureEarlyCall(job) {
-  const defaultAmount = Number(db.config?.rates?.earlyCall?.defaultAmount ?? 0);
-  const defaultThreshold = Number(db.config?.rates?.earlyCall?.thresholdHours ?? 0);
-
-  if (!job.earlyCall || typeof job.earlyCall !== "object") {
-    job.earlyCall = {
-      enabled: false,
-      amount: defaultAmount,
-      thresholdHours: defaultThreshold,
-      participants: [],
-    };
-  }
-
-  job.earlyCall.enabled = Boolean(job.earlyCall.enabled);
-  job.earlyCall.amount = Number.isFinite(Number(job.earlyCall.amount))
-    ? Number(job.earlyCall.amount)
-    : defaultAmount;
-  job.earlyCall.thresholdHours = Number.isFinite(Number(job.earlyCall.thresholdHours))
-    ? Number(job.earlyCall.thresholdHours)
-    : defaultThreshold;
-
-  if (!Array.isArray(job.earlyCall.participants)) job.earlyCall.participants = [];
-
-  job.earlyCall.participants = Array.from(
-    new Set(job.earlyCall.participants.filter((x) => typeof x === "string" && x.trim()))
-  );
-
-  return job.earlyCall;
-}
-
 app.get("/jobs/:id/earlycall", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const ec = ensureEarlyCall(job);
   const participantDetails = ec.participants
     .map((uid) => {
-      const u = db.users.find((x) => x.id === uid);
+      const u = (db.users || []).find((x) => x.id === uid);
       if (!u) return null;
-      return {
-        userId: u.id,
-        email: u.email,
-        name: u.name || "",
-        phone: u.phone || "",
-        discord: u.discord || "",
-      };
+      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
     })
     .filter(Boolean);
 
@@ -2524,7 +2277,7 @@ app.get("/jobs/:id/earlycall", authMiddleware, requireRole("pm", "admin"), async
 });
 
 app.post("/jobs/:id/earlycall/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const { userId } = req.body || {};
@@ -2550,15 +2303,9 @@ app.post("/jobs/:id/earlycall/mark", authMiddleware, requireRole("pm", "admin"),
 
   const participantDetails = ec.participants
     .map((uid) => {
-      const u = db.users.find((x) => x.id === uid);
+      const u = (db.users || []).find((x) => x.id === uid);
       if (!u) return null;
-      return {
-        userId: u.id,
-        email: u.email,
-        name: u.name || "",
-        phone: u.phone || "",
-        discord: u.discord || "",
-      };
+      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
     })
     .filter(Boolean);
 
@@ -2566,7 +2313,7 @@ app.post("/jobs/:id/earlycall/mark", authMiddleware, requireRole("pm", "admin"),
 });
 
 app.post("/jobs/:id/earlycall/config", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const ec = ensureEarlyCall(job);
@@ -2601,14 +2348,14 @@ app.post("/jobs/:id/early-call/mark", authMiddleware, requireRole("pm", "admin")
 
 /* ---- Loading & Unloading (per-person toggles) ---- */
 app.get("/jobs/:id/loading", authMiddleware, requireRole("pm", "admin"), (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const l = ensureLoadingUnload(job);
 
   const details = (ids) =>
     ids.map((uid) => {
-      const u = db.users.find((x) => x.id === uid) || { email: "unknown", id: uid };
+      const u = (db.users || []).find((x) => x.id === uid) || { email: "unknown", id: uid };
       return { userId: uid, email: u.email, name: u.name || "" };
     });
 
@@ -2623,7 +2370,7 @@ app.get("/jobs/:id/loading", authMiddleware, requireRole("pm", "admin"), (req, r
 });
 
 app.post("/jobs/:id/loading/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const { userId } = req.body || {};
@@ -2640,15 +2387,13 @@ app.post("/jobs/:id/loading/mark", authMiddleware, requireRole("pm", "admin"), a
 
   ensureLoadingUnload(job);
 
-  const quota = Number(job.loadingUnload.quota || 0); // 0 = unlimited
+  const quota = Number(job.loadingUnload.quota || 0);
   const p = new Set(job.loadingUnload.participants || []);
   const alreadyIn = p.has(userId);
 
-  // ✅ critical: if quota<=0, force not closed (prevents stale 409)
   if (quota <= 0) job.loadingUnload.closed = false;
 
   if (present) {
-    // block only when adding NEW user AND quota>0 AND full
     if (!alreadyIn && quota > 0 && p.size >= quota) {
       return res.status(409).json({ error: "lu_quota_full", quota, count: p.size });
     }
@@ -2674,18 +2419,16 @@ app.post("/jobs/:id/loading/mark", authMiddleware, requireRole("pm", "admin"), a
 
 /* ---- Manual attendance ---- */
 app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const { userId, inAt, outAt, clear } = req.body || {};
   if (!userId) return res.status(400).json({ error: "userId_required" });
 
   job.attendance = job.attendance || {};
-  ensureBreaks(job);
 
   if (clear === true) {
     delete job.attendance[userId];
-    if (job.breaks && job.breaks[userId]) delete job.breaks[userId]; // ✅ also clear breaks
     await saveDB(db);
     exportJobCSV(job);
     addAudit("attendance_clear", { jobId: job.id, userId }, req);
@@ -2702,10 +2445,6 @@ app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin")
   }
 
   if (outAt !== undefined && outAt !== null) {
-    // ✅ prevent checkout if break is still open
-    const b = getBreakSummary(job, userId);
-    if (b.open) return res.status(400).json({ error: "break_still_open" });
-
     const d2 = dayjs(outAt);
     if (!d2.isValid()) return res.status(400).json({ error: "invalid_outAt" });
     rec.out = d2.toISOString();
@@ -2719,52 +2458,9 @@ app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin")
   return res.json({ ok: true, record: rec, jobId: job.id, status: computeStatus(job) });
 });
 
-/* =========================
-   ✅ BREAK MANUAL MARK (OPTIONAL)
-   POST /jobs/:id/break/mark
-   Body:
-     { userId, direction: "break_out"|"break_in", atISO? , clear? }
-========================= */
-app.post("/jobs/:id/break/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const { userId, direction, atISO, clear } = req.body || {};
-  if (!userId) return res.status(400).json({ error: "userId_required" });
-
-  ensureBreaks(job);
-
-  if (clear === true) {
-    if (job.breaks && job.breaks[userId]) delete job.breaks[userId];
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit("break_clear", { jobId: job.id, userId }, req);
-    return res.json({ ok: true, breaks: getBreakSummary(job, userId) });
-  }
-
-  const dir = String(direction || "");
-  if (!["break_out", "break_in"].includes(dir)) return res.status(400).json({ error: "bad_direction" });
-
-  const att = job.attendance?.[userId];
-  if (!att?.in) return res.status(400).json({ error: "not_checked_in" });
-  if (att?.out) return res.status(400).json({ error: "already_checked_out" });
-
-  const t = atISO ? dayjs(atISO) : dayjs();
-  if (!t.isValid()) return res.status(400).json({ error: "invalid_time" });
-
-  const r = applyBreakScan(job, userId, dir, t.toISOString());
-  if (!r.ok) return res.status(400).json({ error: r.error });
-
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit("break_mark", { jobId: job.id, userId, direction: dir }, req);
-
-  return res.json({ ok: true, breaks: getBreakSummary(job, userId) });
-});
-
 /* ---- Start / End / Reset ---- */
 app.post("/jobs/:id/start", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   job.events = job.events || {};
   if (job.events.startedAt) return res.json({ message: "already_started", startedAt: job.events.startedAt });
@@ -2775,7 +2471,7 @@ app.post("/jobs/:id/start", authMiddleware, requireRole("pm", "admin"), async (r
 });
 
 app.post("/jobs/:id/end", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   job.events = job.events || {};
   job.events.endedAt = dayjs().toISOString();
@@ -2786,15 +2482,12 @@ app.post("/jobs/:id/end", authMiddleware, requireRole("pm", "admin"), async (req
 });
 
 async function handleReset(req, res) {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
   const keepAttendance = !!req.body?.keepAttendance;
   job.events = { startedAt: null, endedAt: null, scanner: null };
-  if (!keepAttendance) {
-    job.attendance = {};
-    job.breaks = {}; // ✅ reset breaks too
-  }
+  if (!keepAttendance) job.attendance = {};
 
   await saveDB(db);
   exportJobCSV(job);
@@ -2810,12 +2503,12 @@ app.patch("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleR
 
 /* ---- QR + scan ---- */
 app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
 
-  const state = job.approved.includes(req.user.id)
+  const state = (job.approved || []).includes(req.user.id)
     ? "approved"
-    : job.rejected.includes(req.user.id)
+    : (job.rejected || []).includes(req.user.id)
     ? "rejected"
     : "applied";
   if (state !== "approved") return res.status(400).json({ error: "not_approved" });
@@ -2824,11 +2517,7 @@ app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) =
   const { direction, lat, lng } = req.body || {};
   const latN = Number(lat),
     lngN = Number(lng);
-
-  // ✅ allow break directions too
-  if (!["in", "out", "break_out", "break_in"].includes(direction))
-    return res.status(400).json({ error: "bad_direction" });
-
+  if (!["in", "out"].includes(direction)) return res.status(400).json({ error: "bad_direction" });
   if (!isValidCoord(latN, lngN)) return res.status(400).json({ error: "location_required" });
 
   const encLat = Math.round(latN * 1e5) / 1e5;
@@ -2863,7 +2552,7 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
 
   if (payload.typ !== "scan") return res.status(400).json({ error: "bad_token_type" });
 
-  const job = db.jobs.find((j) => j.id === payload.j);
+  const job = (db.jobs || []).find((j) => j.id === payload.j);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
 
@@ -2882,48 +2571,12 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     });
   }
 
-  job.attendance = job.attendance || {};
-  ensureBreaks(job);
-
-  const now = dayjs();
-
-  const userAttendance = job.attendance[payload.u];
-
-  // ✅ break scans
-  if (payload.dir === "break_out" || payload.dir === "break_in") {
-    if (!userAttendance?.in) return res.status(400).json({ error: "not_checked_in" });
-    if (userAttendance?.out) return res.status(400).json({ error: "already_checked_out" });
-
-    const r = applyBreakScan(job, payload.u, payload.dir, now.toISOString());
-    if (!r.ok) {
-      addAudit("scan_break_error", { jobId: job.id, userId: payload.u, dir: payload.dir, reason: r.error }, req);
-      return res.status(400).json({ error: r.error });
-    }
-
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit("scan_" + payload.dir, { jobId: job.id, userId: payload.u, distanceMeters: Math.round(dist) }, req);
-
-    return res.json({
-      ok: true,
-      jobId: job.id,
-      userId: payload.u,
-      direction: payload.dir,
-      time: now.toISOString(),
-      breaks: getBreakSummary(job, payload.u),
-    });
-  }
-
-  // ✅ attendance scans
+  const userAttendance = job.attendance?.[payload.u];
   if (userAttendance?.in && payload.dir === "in") return res.status(400).json({ error: "already_checked_in" });
   if (userAttendance?.out && payload.dir === "out") return res.status(400).json({ error: "already_checked_out" });
 
-  // ✅ prevent checkout while break still open
-  if (payload.dir === "out") {
-    const b = getBreakSummary(job, payload.u);
-    if (b.open) return res.status(400).json({ error: "break_still_open" });
-  }
-
+  job.attendance = job.attendance || {};
+  const now = dayjs();
   job.attendance[payload.u] = job.attendance[payload.u] || { in: null, out: null, lateMinutes: 0 };
 
   if (payload.dir === "in") {
@@ -2944,13 +2597,12 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     direction: payload.dir,
     time: now.toISOString(),
     record: job.attendance[payload.u],
-    breaks: getBreakSummary(job, payload.u),
   });
 });
 
 /* ---- CSV download ---- */
 app.get("/jobs/:id/csv", authMiddleware, requireRole("admin"), (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   const { headers, rows } = generateJobCSV(job);
   res.setHeader("Content-Type", "text/csv");
@@ -3046,7 +2698,7 @@ function setScannerLocation(job, lat, lng) {
   job.events.scanner = { lat, lng, updatedAt: dayjs().toISOString() };
 }
 app.post("/jobs/:id/scanner/heartbeat", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
   const { lat, lng } = req.body || {};
@@ -3059,7 +2711,7 @@ app.post("/jobs/:id/scanner/heartbeat", authMiddleware, requireRole("pm", "admin
   res.json({ ok: true, updatedAt: job.events.scanner.updatedAt });
 });
 app.get("/jobs/:id/scanner", authMiddleware, (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
   const s = job.events?.scanner;
