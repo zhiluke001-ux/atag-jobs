@@ -2577,6 +2577,11 @@ app.post("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleRe
 app.patch("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleReset);
 
 /* ---- QR + scan ---- */
+const VALID_DIR = new Set(["in", "out", "break_in", "break_out"]);
+const isBreakDir = (d) => d === "break_in" || d === "break_out";
+const getBreakEnabled = (job) =>
+  !!(job.breakEnabled ?? job.events?.breakEnabled ?? job.break?.enabled ?? job.rate?.breakEnabled);
+
 app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) => {
   const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
@@ -2592,7 +2597,13 @@ app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) =
   const { direction, lat, lng } = req.body || {};
   const latN = Number(lat),
     lngN = Number(lng);
-  if (!["in", "out"].includes(direction)) return res.status(400).json({ error: "bad_direction" });
+
+  if (!VALID_DIR.has(direction)) return res.status(400).json({ error: "bad_direction" });
+
+  // Break direction requires breakEnabled = true
+  const breakEnabled = getBreakEnabled(job);
+  if (isBreakDir(direction) && !breakEnabled) return res.status(400).json({ error: "break_disabled" });
+
   if (!isValidCoord(latN, lngN)) return res.status(400).json({ error: "location_required" });
 
   const encLat = Math.round(latN * 1e5) / 1e5;
@@ -2602,14 +2613,20 @@ app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) =
     typ: "scan",
     j: job.id,
     u: req.user.id,
-    dir: direction,
+    dir: direction, // "in" | "out" | "break_in" | "break_out"
     lat: encLat,
     lng: encLng,
     iat: Math.floor(Date.now() / 1000),
     nonce: uuidv4(),
   };
+
   const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "60s" });
-  addAudit("gen_qr", { jobId: job.id, dir: direction, userId: req.user.id, lat: encLat, lng: encLng }, req);
+  addAudit(
+    "gen_qr",
+    { jobId: job.id, dir: direction, userId: req.user.id, lat: encLat, lng: encLng },
+    req
+  );
+
   res.json({ token, maxDistanceMeters: MAX_DISTANCE_METERS });
 });
 
@@ -2626,10 +2643,15 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   }
 
   if (payload.typ !== "scan") return res.status(400).json({ error: "bad_token_type" });
+  if (!VALID_DIR.has(payload.dir)) return res.status(400).json({ error: "bad_direction" });
 
   const job = (db.jobs || []).find((j) => j.id === payload.j);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
+
+  // Break direction requires breakEnabled = true
+  const breakEnabled = getBreakEnabled(job);
+  if (isBreakDir(payload.dir) && !breakEnabled) return res.status(400).json({ error: "break_disabled" });
 
   const sLat = Number(scannerLat),
     sLng = Number(scannerLng);
@@ -2646,23 +2668,49 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     });
   }
 
-  const userAttendance = job.attendance?.[payload.u];
-  if (userAttendance?.in && payload.dir === "in") return res.status(400).json({ error: "already_checked_in" });
-  if (userAttendance?.out && payload.dir === "out") return res.status(400).json({ error: "already_checked_out" });
-
   job.attendance = job.attendance || {};
+  job.attendance[payload.u] =
+    job.attendance[payload.u] || { in: null, out: null, breakIn: null, breakOut: null, lateMinutes: 0, breakMinutes: 0 };
+
+  const rec = job.attendance[payload.u];
+
+  // prevent duplicates (first scan wins)
+  if (payload.dir === "in" && rec.in) return res.status(400).json({ error: "already_checked_in" });
+  if (payload.dir === "out" && rec.out) return res.status(400).json({ error: "already_checked_out" });
+  if (payload.dir === "break_in" && rec.breakIn) return res.status(400).json({ error: "already_break_in" });
+  if (payload.dir === "break_out" && rec.breakOut) return res.status(400).json({ error: "already_break_out" });
+
+  // simple rules to avoid nonsense states
+  if (payload.dir === "break_in") {
+    if (!rec.in) return res.status(400).json({ error: "must_check_in_first" });
+    if (rec.out) return res.status(400).json({ error: "already_checked_out" });
+  }
+  if (payload.dir === "break_out") {
+    if (!rec.in) return res.status(400).json({ error: "must_check_in_first" });
+    if (rec.out) return res.status(400).json({ error: "already_checked_out" });
+    if (!rec.breakIn) return res.status(400).json({ error: "break_in_missing" });
+  }
+
   const now = dayjs();
-  job.attendance[payload.u] = job.attendance[payload.u] || { in: null, out: null, lateMinutes: 0 };
 
   if (payload.dir === "in") {
-    job.attendance[payload.u].in = now.toISOString();
-    job.attendance[payload.u].lateMinutes = Math.max(0, now.diff(dayjs(job.startTime), "minute"));
-  } else {
-    job.attendance[payload.u].out = now.toISOString();
+    rec.in = now.toISOString();
+    rec.lateMinutes = Math.max(0, now.diff(dayjs(job.startTime), "minute"));
+  } else if (payload.dir === "out") {
+    rec.out = now.toISOString();
+  } else if (payload.dir === "break_in") {
+    rec.breakIn = now.toISOString();
+  } else if (payload.dir === "break_out") {
+    rec.breakOut = now.toISOString();
+    // optional: compute break minutes if breakIn exists
+    const bi = dayjs(rec.breakIn);
+    const bm = Math.max(0, now.diff(bi, "minute"));
+    rec.breakMinutes = bm;
   }
 
   await saveDB(db);
   exportJobCSV(job);
+
   addAudit("scan_" + payload.dir, { jobId: job.id, userId: payload.u, distanceMeters: Math.round(dist) }, req);
 
   res.json({
@@ -2671,9 +2719,10 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     userId: payload.u,
     direction: payload.dir,
     time: now.toISOString(),
-    record: job.attendance[payload.u],
+    record: rec,
   });
 });
+
 
 /* ---- CSV download ---- */
 app.get("/jobs/:id/csv", authMiddleware, requireRole("admin"), (req, res) => {
