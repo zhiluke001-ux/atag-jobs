@@ -23,7 +23,6 @@ app.set("trust proxy", 1);
 app.use(cors());
 app.use(express.json({ limit: "12mb" }));
 app.use(morgan("dev"));
-;
 
 /* ---- uploads (images) ---- */
 const DATA_DIR = process.env.DATA_DIR
@@ -50,7 +49,7 @@ let db = await loadDB();
    DB-backed blob store
    (Render free-safe)
 ========================= */
-db.blobs = db.blobs || {};              // { [blobId]: { mime, b64, size, createdAt, meta } }
+db.blobs = db.blobs || {}; // { [blobId]: { mime, b64, size, createdAt, meta } }
 db.blobOrder = Array.isArray(db.blobOrder) ? db.blobOrder : []; // keep insertion order
 const BLOB_CAP = Number(process.env.BLOB_CAP || 300); // keep latest 300 images only
 
@@ -274,6 +273,90 @@ function scheduledHours(job) {
   return Number(hoursBetweenISO(job?.startTime, job?.endTime).toFixed(2));
 }
 
+/* =========================
+   ✅ BREAK HELPERS (NEW)
+   - Stored at job.breaks[userId] = { segments: [{ out, in }] }
+   - Deduction hours = Math.round(rawBreakHours)  // 1.5→2, 1.3→1
+========================= */
+function ensureBreaks(job) {
+  if (!job.breaks || typeof job.breaks !== "object") job.breaks = {};
+  for (const [uid, rec] of Object.entries(job.breaks)) {
+    if (!rec || typeof rec !== "object") {
+      job.breaks[uid] = { segments: [] };
+      continue;
+    }
+    if (!Array.isArray(rec.segments)) rec.segments = [];
+    rec.segments = rec.segments
+      .filter(Boolean)
+      .map((s) => ({
+        out: s.out || s.breakOut || null,
+        in: s.in || s.breakIn || null,
+      }))
+      .filter((s) => s.out || s.in);
+  }
+  return job.breaks;
+}
+
+function findOpenBreakSegment(segments) {
+  if (!Array.isArray(segments)) return null;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const s = segments[i];
+    if (s && s.out && !s.in) return s;
+  }
+  return null;
+}
+
+function breakRawHoursFromSegments(segments) {
+  if (!Array.isArray(segments) || !segments.length) return 0;
+  let total = 0;
+  for (const s of segments) {
+    if (s?.out && s?.in) total += hoursBetweenISO(s.out, s.in);
+  }
+  return total;
+}
+
+function breakRoundedHours(rawHours) {
+  // your examples: 1.5→2, 1.3→1
+  const n = Number(rawHours || 0);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.max(0, Math.round(n));
+}
+
+function getBreakSummary(job, userId) {
+  ensureBreaks(job);
+  const rec = job.breaks?.[userId] || { segments: [] };
+  const raw = breakRawHoursFromSegments(rec.segments);
+  const rounded = breakRoundedHours(raw);
+  return {
+    rawHours: Number(raw.toFixed(2)),
+    roundedHours: rounded,
+    segments: rec.segments,
+    open: !!findOpenBreakSegment(rec.segments),
+  };
+}
+
+function applyBreakScan(job, userId, dir, atISO) {
+  ensureBreaks(job);
+  job.breaks[userId] = job.breaks[userId] || { segments: [] };
+  const segments = job.breaks[userId].segments;
+
+  const open = findOpenBreakSegment(segments);
+
+  if (dir === "break_out") {
+    if (open) return { error: "break_already_started" };
+    segments.push({ out: atISO, in: null });
+    return { ok: true };
+  }
+
+  if (dir === "break_in") {
+    if (!open) return { error: "break_not_started" };
+    open.in = atISO;
+    return { ok: true };
+  }
+
+  return { error: "bad_break_direction" };
+}
+
 /* ===== Loading/Unloading normalizer (FIXES stale closed + enabled) ===== */
 function ensureLoadingUnload(job) {
   const basePrice = Number(db.config?.rates?.loadingUnloading?.amount ?? 0);
@@ -406,6 +489,80 @@ function normalizeAdjustments(obj, actor) {
   return out;
 }
 
+/* =========================
+   ✅ PAY CALC HELPERS (NEW)
+   - Only key change: hourly paid hours deduct breakRoundedHours()
+========================= */
+function getUserGrade(userId) {
+  const u = (db.users || []).find((x) => x.id === userId);
+  return clampGrade(u?.grade || "junior");
+}
+function getRoleRateFor(job, grade) {
+  const rr = job?.roleRates?.[grade] || db.config?.roleRatesDefaults?.[grade] || null;
+  if (!rr) return { payMode: "hourly", base: 0, specificPayment: null, otMultiplier: 0 };
+  return {
+    payMode: rr.payMode ?? "hourly",
+    base: Number(rr.base ?? 0),
+    specificPayment: rr.specificPayment ?? rr.specificPayment ?? rr.specificPayment,
+    otMultiplier: Number(rr.otMultiplier ?? 0),
+  };
+}
+function computeWorkedAndPaidHours(job, userId) {
+  const att = job?.attendance?.[userId];
+  if (!att?.in || !att?.out) {
+    const b = getBreakSummary(job, userId);
+    return {
+      workedHours: 0,
+      breakRawHours: b.rawHours,
+      breakRoundedHours: b.roundedHours,
+      paidHours: 0,
+    };
+  }
+  const worked = hoursBetweenISO(att.in, att.out);
+  const b = getBreakSummary(job, userId);
+  const paid = Math.max(0, worked - b.roundedHours);
+
+  return {
+    workedHours: Number(worked.toFixed(2)),
+    breakRawHours: b.rawHours,
+    breakRoundedHours: b.roundedHours,
+    paidHours: Number(paid.toFixed(2)),
+  };
+}
+function computePayForUser(job, userId) {
+  const grade = getUserGrade(userId);
+  const rate = getRoleRateFor(job, grade);
+  const hrs = computeWorkedAndPaidHours(job, userId);
+
+  const payMode = String(rate.payMode || "hourly");
+  const hourlyRate = Number(rate.base || 0);
+  const specificPayment =
+    rate.specificPayment == null || rate.specificPayment === ""
+      ? null
+      : Number(rate.specificPayment);
+
+  let total = 0;
+
+  if (payMode === "specific") {
+    total = Number.isFinite(specificPayment) ? specificPayment : 0;
+  } else if (payMode === "specific_plus_hourly") {
+    total =
+      (Number.isFinite(specificPayment) ? specificPayment : 0) + hourlyRate * (hrs.paidHours || 0);
+  } else {
+    // hourly (default)
+    total = hourlyRate * (hrs.paidHours || 0);
+  }
+
+  return {
+    grade,
+    payMode,
+    hourlyRate,
+    specificPayment: specificPayment == null ? "" : specificPayment,
+    ...hrs,
+    totalPay: Number(total.toFixed(2)),
+  };
+}
+
 /* ------------ CSV helpers ------------- */
 function generateJobCSV(job) {
   const rows = [];
@@ -417,6 +574,7 @@ function generateJobCSV(job) {
   const evEnd = job.events?.endedAt || "";
 
   ensureLoadingUnload(job);
+  ensureBreaks(job);
 
   for (const u of job.applications) {
     const luApplied = !!(job.loadingUnload?.applicants || []).includes(u.userId);
@@ -444,6 +602,15 @@ function generateJobCSV(job) {
       eventEndedAt: evEnd,
       luApplied,
       luConfirmed,
+
+      // ✅ break/pay cols (blank for application rows)
+      breakRawHours: "",
+      breakRoundedHours: "",
+      paidHours: "",
+      payMode: "",
+      hourlyRate: "",
+      specificPayment: "",
+      totalPay: "",
     });
   }
 
@@ -452,6 +619,8 @@ function generateJobCSV(job) {
     const luApplied = !!(job.loadingUnload?.applicants || []).includes(userId);
     const luConfirmed = !!(job.loadingUnload?.participants || []).includes(userId);
     const present = !!rec.in || !!rec.out;
+
+    const pay = computePayForUser(job, userId);
 
     rows.push({
       section: "attendance",
@@ -474,6 +643,15 @@ function generateJobCSV(job) {
       eventEndedAt: evEnd,
       luApplied,
       luConfirmed,
+
+      // ✅ break/pay cols
+      breakRawHours: pay.breakRawHours,
+      breakRoundedHours: pay.breakRoundedHours,
+      paidHours: pay.paidHours,
+      payMode: pay.payMode,
+      hourlyRate: pay.hourlyRate,
+      specificPayment: pay.specificPayment,
+      totalPay: pay.totalPay,
     });
   }
 
@@ -494,6 +672,15 @@ function generateJobCSV(job) {
     "eventEndedAt",
     "luApplied",
     "luConfirmed",
+
+    // ✅ new cols
+    "breakRawHours",
+    "breakRoundedHours",
+    "paidHours",
+    "payMode",
+    "hourlyRate",
+    "specificPayment",
+    "totalPay",
   ];
   return { headers, rows };
 }
@@ -608,6 +795,16 @@ for (const j of db.jobs) {
   if (j.parkingReceipts && !Array.isArray(j.parkingReceipts)) {
     j.parkingReceipts = [];
     bootMutated = true;
+  }
+
+  // ✅ NEW: ensure breaks exists
+  if (!j.breaks || typeof j.breaks !== "object") {
+    j.breaks = {};
+    bootMutated = true;
+  } else {
+    const before = JSON.stringify(j.breaks);
+    ensureBreaks(j);
+    if (JSON.stringify(j.breaks) !== before) bootMutated = true;
   }
 }
 if (bootMutated) await saveDB(db);
@@ -1076,7 +1273,9 @@ async function handleUpdateMe(req, res) {
   }
   if (username && String(username).toLowerCase() !== String(user.username || "").toLowerCase()) {
     const takenU = (db.users || []).some(
-      (u) => u.id !== user.id && String(u.username || "").toLowerCase() === String(username).toLowerCase()
+      (u) =>
+        u.id !== user.id &&
+        String(u.username || "").toLowerCase() === String(username).toLowerCase()
     );
     if (takenU) return res.status(409).json({ error: "username_taken" });
     user.username = String(username);
@@ -1138,7 +1337,8 @@ app.post("/me/avatar", authMiddleware, async (req, res) => {
   if (!user) return res.status(404).json({ error: "user_not_found" });
 
   const dataUrl = req.body?.dataUrl;
-  if (!dataUrl || typeof dataUrl !== "string") return res.status(400).json({ error: "dataUrl_required" });
+  if (!dataUrl || typeof dataUrl !== "string")
+    return res.status(400).json({ error: "dataUrl_required" });
 
   // delete old avatar (if any)
   const old = user.avatarUrl || "";
@@ -1239,8 +1439,8 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
     if (decided && target.verificationPhotoUrl) {
       const old = target.verificationPhotoUrl;
       target.verificationPhotoUrl = "";
-      await saveDB(db);              // save first so UI immediately stops showing it
-      await deleteStoredImage(old);  // best-effort delete (blob/local)
+      await saveDB(db); // save first so UI immediately stops showing it
+      await deleteStoredImage(old); // best-effort delete (blob/local)
     } else {
       await saveDB(db);
     }
@@ -1287,14 +1487,15 @@ app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, 
   });
 });
 
-
 app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
   const uid = req.params.id;
+
+  // ✅ FIX: check existence BEFORE referencing user fields
   const user = (db.users || []).find((u) => u.id === uid);
+  if (!user) return res.status(404).json({ error: "user_not_found" });
+
   await deleteStoredImage(user.avatarUrl || "");
   await deleteStoredImage(user.verificationPhotoUrl || "");
-
-  if (!user) return res.status(404).json({ error: "user_not_found" });
 
   if (user.role === "admin") {
     const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
@@ -1308,6 +1509,9 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
     j.approved = (j.approved || []).filter((x) => x !== uid);
     j.rejected = (j.rejected || []).filter((x) => x !== uid);
     if (j.attendance && j.attendance[uid]) delete j.attendance[uid];
+
+    // ✅ also remove breaks for that user
+    if (j.breaks && j.breaks[uid]) delete j.breaks[uid];
 
     if (j.loadingUnload) {
       ensureLoadingUnload(j);
@@ -1375,15 +1579,17 @@ app.post("/config/rates", authMiddleware, requireRole("admin"), async (req, res)
     db.config.rates.earlyCall.thresholdHours = DEFAULT_RATES.earlyCall.thresholdHours;
 
   await saveDB(db);
-  addAudit("update_rates_default", { rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults }, req);
+  addAudit(
+    "update_rates_default",
+    { rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults },
+    req
+  );
   res.json({ ok: true, rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults });
 });
 
 /* -------------- jobs --------------- */
 app.get("/jobs", (_req, res) => {
-  const jobs = db.jobs
-    .map((j) => jobPublicView(j))
-    .sort((a, b) => dayjs(a.startTime) - dayjs(b.startTime));
+  const jobs = db.jobs.map((j) => jobPublicView(j)).sort((a, b) => dayjs(a.startTime) - dayjs(b.startTime));
   res.json(_req.query.limit ? jobs.slice(0, Number(_req.query.limit)) : jobs);
 });
 
@@ -1391,6 +1597,7 @@ app.get("/jobs/:id", (req, res) => {
   const job = db.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   ensureLoadingUnload(job);
+  ensureBreaks(job);
   const hydrated = hydrateJobFullTimers(job);
   res.json({ ...hydrated, status: computeStatus(hydrated) });
 });
@@ -1453,7 +1660,9 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     earlyCall: {
       enabled: !!earlyCall?.enabled,
       amount: Number(earlyCall?.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20),
-      thresholdHours: Number(earlyCall?.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3),
+      thresholdHours: Number(
+        earlyCall?.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3
+      ),
       participants: Array.isArray(earlyCall?.participants) ? earlyCall.participants : [],
     },
     loadingUnload: {
@@ -1468,6 +1677,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     approved: [],
     rejected: [],
     attendance: {},
+    breaks: {}, // ✅ NEW
     events: { startedAt: null, endedAt: null, scanner: null },
     adjustments: {},
     fullTimers: [],
@@ -1476,6 +1686,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   };
 
   ensureLoadingUnload(job);
+  ensureBreaks(job);
 
   db.jobs.push(job);
   await saveDB(db);
@@ -1541,7 +1752,10 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
       earlyCall.amount ?? ec.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20
     );
     ec.thresholdHours = Number(
-      earlyCall.thresholdHours ?? ec.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3
+      earlyCall.thresholdHours ??
+        ec.thresholdHours ??
+        db.config.rates.earlyCall?.thresholdHours ??
+        3
     );
     if (Array.isArray(earlyCall.participants)) {
       ec.participants = Array.from(new Set(earlyCall.participants.filter(Boolean)));
@@ -1597,6 +1811,8 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
     job.adjustments = normalizeAdjustments(req.body.adjustments, req.user);
   }
 
+  ensureBreaks(job);
+
   await saveDB(db);
   addAudit("edit_job", { jobId: job.id }, req);
   res.json(job);
@@ -1641,7 +1857,8 @@ app.post("/jobs/:id/rate", authMiddleware, requireRole("pm", "admin"), async (re
     participants: [],
   };
   if (earlyCallAmount !== undefined) job.earlyCall.amount = Number(earlyCallAmount);
-  if (earlyCallThresholdHours !== undefined) job.earlyCall.thresholdHours = Number(earlyCallThresholdHours);
+  if (earlyCallThresholdHours !== undefined)
+    job.earlyCall.thresholdHours = Number(earlyCallThresholdHours);
 
   if (roleRates && typeof roleRates === "object") {
     job.roleRates = job.roleRates || {};
@@ -1867,10 +2084,6 @@ app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (re
   res.json({ ok: true });
 });
 
-/* ✅✅✅ NEW: Parking receipt upload (fixes your 404) ✅✅✅
-   POST /jobs/:id/parking-receipt
-   Body: { dataUrl, amount?, note? }
-*/
 /* ✅✅✅ Parking receipt APIs ✅✅✅
    - Submit: POST /jobs/:id/parking-receipt
    - My receipts: GET /jobs/:id/parking-receipt/me
@@ -2025,20 +2238,25 @@ app.get(
 );
 
 /** User fetch own receipts for a job */
-app.get("/jobs/:id/parking-receipt/me", authMiddleware, requireRole("part-timer", "pm", "admin"), async (req, res) => {
-  const job = db.jobs.find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
+app.get(
+  "/jobs/:id/parking-receipt/me",
+  authMiddleware,
+  requireRole("part-timer", "pm", "admin"),
+  async (req, res) => {
+    const job = db.jobs.find((j) => j.id === req.params.id);
+    if (!job) return res.status(404).json({ error: "job_not_found" });
 
-  const uid = req.user.id;
-  const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-  const mine = receipts.filter((r) => r.userId === uid).map((r) => enrichReceipt(req, r));
+    const uid = req.user.id;
+    const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
+    const mine = receipts.filter((r) => r.userId === uid).map((r) => enrichReceipt(req, r));
 
-  return res.json({
-    ok: true,
-    receipt: mine[0] || null,   // ✅ latest
-    receipts: mine
-  });
-});
+    return res.json({
+      ok: true,
+      receipt: mine[0] || null, // ✅ latest
+      receipts: mine,
+    });
+  }
+);
 
 /** ✅ Remove my latest receipt record (even if file missing) */
 app.post(
@@ -2292,7 +2510,13 @@ app.get("/jobs/:id/earlycall", authMiddleware, requireRole("pm", "admin"), async
     .map((uid) => {
       const u = db.users.find((x) => x.id === uid);
       if (!u) return null;
-      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
+      return {
+        userId: u.id,
+        email: u.email,
+        name: u.name || "",
+        phone: u.phone || "",
+        discord: u.discord || "",
+      };
     })
     .filter(Boolean);
 
@@ -2328,7 +2552,13 @@ app.post("/jobs/:id/earlycall/mark", authMiddleware, requireRole("pm", "admin"),
     .map((uid) => {
       const u = db.users.find((x) => x.id === uid);
       if (!u) return null;
-      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
+      return {
+        userId: u.id,
+        email: u.email,
+        name: u.name || "",
+        phone: u.phone || "",
+        discord: u.discord || "",
+      };
     })
     .filter(Boolean);
 
@@ -2451,9 +2681,11 @@ app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin")
   if (!userId) return res.status(400).json({ error: "userId_required" });
 
   job.attendance = job.attendance || {};
+  ensureBreaks(job);
 
   if (clear === true) {
     delete job.attendance[userId];
+    if (job.breaks && job.breaks[userId]) delete job.breaks[userId]; // ✅ also clear breaks
     await saveDB(db);
     exportJobCSV(job);
     addAudit("attendance_clear", { jobId: job.id, userId }, req);
@@ -2470,6 +2702,10 @@ app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin")
   }
 
   if (outAt !== undefined && outAt !== null) {
+    // ✅ prevent checkout if break is still open
+    const b = getBreakSummary(job, userId);
+    if (b.open) return res.status(400).json({ error: "break_still_open" });
+
     const d2 = dayjs(outAt);
     if (!d2.isValid()) return res.status(400).json({ error: "invalid_outAt" });
     rec.out = d2.toISOString();
@@ -2481,6 +2717,49 @@ app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin")
   addAudit("attendance_mark", { jobId: job.id, userId, inAt, outAt }, req);
 
   return res.json({ ok: true, record: rec, jobId: job.id, status: computeStatus(job) });
+});
+
+/* =========================
+   ✅ BREAK MANUAL MARK (OPTIONAL)
+   POST /jobs/:id/break/mark
+   Body:
+     { userId, direction: "break_out"|"break_in", atISO? , clear? }
+========================= */
+app.post("/jobs/:id/break/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
+  const job = db.jobs.find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  const { userId, direction, atISO, clear } = req.body || {};
+  if (!userId) return res.status(400).json({ error: "userId_required" });
+
+  ensureBreaks(job);
+
+  if (clear === true) {
+    if (job.breaks && job.breaks[userId]) delete job.breaks[userId];
+    await saveDB(db);
+    exportJobCSV(job);
+    addAudit("break_clear", { jobId: job.id, userId }, req);
+    return res.json({ ok: true, breaks: getBreakSummary(job, userId) });
+  }
+
+  const dir = String(direction || "");
+  if (!["break_out", "break_in"].includes(dir)) return res.status(400).json({ error: "bad_direction" });
+
+  const att = job.attendance?.[userId];
+  if (!att?.in) return res.status(400).json({ error: "not_checked_in" });
+  if (att?.out) return res.status(400).json({ error: "already_checked_out" });
+
+  const t = atISO ? dayjs(atISO) : dayjs();
+  if (!t.isValid()) return res.status(400).json({ error: "invalid_time" });
+
+  const r = applyBreakScan(job, userId, dir, t.toISOString());
+  if (!r.ok) return res.status(400).json({ error: r.error });
+
+  await saveDB(db);
+  exportJobCSV(job);
+  addAudit("break_mark", { jobId: job.id, userId, direction: dir }, req);
+
+  return res.json({ ok: true, breaks: getBreakSummary(job, userId) });
 });
 
 /* ---- Start / End / Reset ---- */
@@ -2512,7 +2791,10 @@ async function handleReset(req, res) {
 
   const keepAttendance = !!req.body?.keepAttendance;
   job.events = { startedAt: null, endedAt: null, scanner: null };
-  if (!keepAttendance) job.attendance = {};
+  if (!keepAttendance) {
+    job.attendance = {};
+    job.breaks = {}; // ✅ reset breaks too
+  }
 
   await saveDB(db);
   exportJobCSV(job);
@@ -2542,7 +2824,11 @@ app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) =
   const { direction, lat, lng } = req.body || {};
   const latN = Number(lat),
     lngN = Number(lng);
-  if (!["in", "out"].includes(direction)) return res.status(400).json({ error: "bad_direction" });
+
+  // ✅ allow break directions too
+  if (!["in", "out", "break_out", "break_in"].includes(direction))
+    return res.status(400).json({ error: "bad_direction" });
+
   if (!isValidCoord(latN, lngN)) return res.status(400).json({ error: "location_required" });
 
   const encLat = Math.round(latN * 1e5) / 1e5;
@@ -2596,12 +2882,48 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     });
   }
 
+  job.attendance = job.attendance || {};
+  ensureBreaks(job);
+
+  const now = dayjs();
+
   const userAttendance = job.attendance[payload.u];
+
+  // ✅ break scans
+  if (payload.dir === "break_out" || payload.dir === "break_in") {
+    if (!userAttendance?.in) return res.status(400).json({ error: "not_checked_in" });
+    if (userAttendance?.out) return res.status(400).json({ error: "already_checked_out" });
+
+    const r = applyBreakScan(job, payload.u, payload.dir, now.toISOString());
+    if (!r.ok) {
+      addAudit("scan_break_error", { jobId: job.id, userId: payload.u, dir: payload.dir, reason: r.error }, req);
+      return res.status(400).json({ error: r.error });
+    }
+
+    await saveDB(db);
+    exportJobCSV(job);
+    addAudit("scan_" + payload.dir, { jobId: job.id, userId: payload.u, distanceMeters: Math.round(dist) }, req);
+
+    return res.json({
+      ok: true,
+      jobId: job.id,
+      userId: payload.u,
+      direction: payload.dir,
+      time: now.toISOString(),
+      breaks: getBreakSummary(job, payload.u),
+    });
+  }
+
+  // ✅ attendance scans
   if (userAttendance?.in && payload.dir === "in") return res.status(400).json({ error: "already_checked_in" });
   if (userAttendance?.out && payload.dir === "out") return res.status(400).json({ error: "already_checked_out" });
 
-  job.attendance = job.attendance || {};
-  const now = dayjs();
+  // ✅ prevent checkout while break still open
+  if (payload.dir === "out") {
+    const b = getBreakSummary(job, payload.u);
+    if (b.open) return res.status(400).json({ error: "break_still_open" });
+  }
+
   job.attendance[payload.u] = job.attendance[payload.u] || { in: null, out: null, lateMinutes: 0 };
 
   if (payload.dir === "in") {
@@ -2622,6 +2944,7 @@ app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     direction: payload.dir,
     time: now.toISOString(),
     record: job.attendance[payload.u],
+    breaks: getBreakSummary(job, payload.u),
   });
 });
 
