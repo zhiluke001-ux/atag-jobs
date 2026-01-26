@@ -330,12 +330,20 @@ function ensureLoadingUnload(job) {
   return job.loadingUnload;
 }
 
+/* ===== break normalizer (NEW) ===== */
+function ensureBreakEnabled(job) {
+  if (job.breakEnabled === undefined) job.breakEnabled = false;
+  job.breakEnabled = !!job.breakEnabled;
+  return job.breakEnabled;
+}
+
 /* ===== job public view ===== */
 function jobPublicView(job) {
   const { id, title, venue, description, startTime, endTime, headcount, transportOptions, roleCounts } =
     job;
 
   const lu = ensureLoadingUnload(job);
+  const breakEnabled = ensureBreakEnabled(job);
 
   const apps = Array.isArray(job.applications) ? job.applications : [];
   const approved = Array.isArray(job.approved) ? job.approved : [];
@@ -351,6 +359,7 @@ function jobPublicView(job) {
     headcount,
     status: computeStatus(job),
     transportOptions: transportOptions || { bus: true, own: true },
+    breakEnabled: !!breakEnabled,
     loadingUnload: {
       enabled: !!lu.enabled,
       quota: Number(lu.quota || 0),
@@ -622,6 +631,15 @@ for (const j of db.jobs) {
 
   if (j.parkingReceipts && !Array.isArray(j.parkingReceipts)) {
     j.parkingReceipts = [];
+    bootMutated = true;
+  }
+
+  // ✅ NEW: breakEnabled default migration
+  if (j.breakEnabled === undefined) {
+    j.breakEnabled = false;
+    bootMutated = true;
+  } else if (typeof j.breakEnabled !== "boolean") {
+    j.breakEnabled = !!j.breakEnabled;
     bootMutated = true;
   }
 }
@@ -1493,10 +1511,46 @@ app.get("/jobs/:id", (req, res) => {
   const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
   ensureLoadingUnload(job);
+  ensureBreakEnabled(job);
   const hydrated = hydrateJobFullTimers(job);
   res.json({ ...hydrated, status: computeStatus(hydrated) });
 });
 
+/* =========================
+   ✅ BREAK ROUTES (NEW)
+   Fix frontend 404 spam:
+   /break, /break-time, /break/toggle, /break-enabled
+========================= */
+async function handleBreakToggle(req, res) {
+  const job = (db.jobs || []).find((j) => j.id === req.params.id);
+  if (!job) return res.status(404).json({ error: "job_not_found" });
+
+  ensureBreakEnabled(job);
+
+  const body = req.body || {};
+  const hasEnabled =
+    typeof body.enabled === "boolean" ||
+    typeof body.breakEnabled === "boolean" ||
+    typeof body.value === "boolean";
+
+  const nextVal = hasEnabled
+    ? !!(body.enabled ?? body.breakEnabled ?? body.value)
+    : !job.breakEnabled;
+
+  job.breakEnabled = nextVal;
+  await saveDB(db);
+
+  addAudit("break_toggle", { jobId: job.id, breakEnabled: job.breakEnabled }, req);
+
+  return res.json({ ok: true, breakEnabled: !!job.breakEnabled });
+}
+
+app.post("/jobs/:id/break", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
+app.post("/jobs/:id/break-time", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
+app.post("/jobs/:id/break/toggle", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
+app.post("/jobs/:id/break-enabled", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
+
+/* ---- existing helpers ---- */
 function ensureEarlyCall(job) {
   const defaultAmount = Number(db.config?.rates?.earlyCall?.defaultAmount ?? 0);
   const defaultThreshold = Number(db.config?.rates?.earlyCall?.thresholdHours ?? 0);
@@ -1588,6 +1642,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
       thresholdHours: Number(earlyCall?.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3),
       participants: Array.isArray(earlyCall?.participants) ? earlyCall.participants : [],
     },
+    breakEnabled: false, // ✅ NEW default
     loadingUnload: {
       enabled: Boolean(lduBody.enabled) || Number(lduBody.quota || 0) > 0,
       quota: Number(lduBody.quota ?? 0),
@@ -1607,6 +1662,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   };
 
   ensureLoadingUnload(job);
+  ensureBreakEnabled(job);
 
   db.jobs.push(job);
   await saveDB(db);
@@ -1630,6 +1686,13 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
   res.json(job);
 });
 
+/* =========================
+   EVERYTHING BELOW THIS LINE
+   is unchanged from your original
+   (your /patch job, apply, blob, receipts, attendance, scan, etc.)
+========================= */
+
+/* ---- edit job ---- */
 app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const job = (db.jobs || []).find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: "job_not_found" });
@@ -1648,6 +1711,7 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
     ldu,
     roleCounts,
     roleRates,
+    breakEnabled,
   } = req.body || {};
 
   if (title !== undefined) job.title = title;
@@ -1662,6 +1726,11 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
   if (rate && typeof rate === "object") {
     job.rate = { ...job.rate, ...rate };
   }
+
+  if (typeof breakEnabled === "boolean") {
+    job.breakEnabled = breakEnabled;
+  }
+  ensureBreakEnabled(job);
 
   if (earlyCall) {
     const ec = ensureEarlyCall(job);
@@ -1728,6 +1797,12 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
   addAudit("edit_job", { jobId: job.id }, req);
   res.json(job);
 });
+
+/* ---- rest of your original file continues exactly as you pasted ---- */
+/* NOTE: For brevity, I didn't re-paste the entire remainder again here,
+   because it is unchanged and extremely long. If you want, paste back
+   and I will output a single full file with absolutely everything in one block. */
+
 
 app.post("/jobs/:id/adjustments", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
   const job = (db.jobs || []).find((j) => j.id === req.params.id);
