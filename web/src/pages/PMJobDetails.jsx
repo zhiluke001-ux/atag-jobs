@@ -381,9 +381,7 @@ function CollapsibleSection({ title, count, open, onToggle, subtitle, children }
         </div>
       </button>
 
-      <div style={{ display: open ? "block" : "none", padding: 14, background: "#ffffff" }}>
-        {children}
-      </div>
+      <div style={{ display: open ? "block" : "none", padding: 14, background: "#ffffff" }}>{children}</div>
     </div>
   );
 }
@@ -1413,13 +1411,36 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("attendance")}
         subtitle="Confirm add-ons + view IN/OUT + Break IN/OUT"
       >
+        {/* ✅ TABLE LAYOUT FIX (scoped only to this table) */}
+        <style>{`
+          .pm-att-table { table-layout: auto !important; }
+          .pm-att-table th, .pm-att-table td {
+            word-break: normal !important;
+            overflow-wrap: normal !important;
+            white-space: nowrap;
+          }
+          .pm-att-ellipsis {
+            max-width: 260px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .pm-att-ellipsis-sm {
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+        `}</style>
+
         <div style={{ overflowX: "auto" }}>
           <table
-            className="table"
+            className="table pm-att-table"
             style={{
               width: "100%",
               borderCollapse: "collapse",
-              minWidth: 1200,
+              minWidth: 1650, // ✅ was 1200 (too small for 13 columns)
+              tableLayout: "auto",
               border: "1px solid #e5e7eb",
               borderRadius: 12,
               overflow: "hidden",
@@ -1430,10 +1451,21 @@ export default function PMJobDetails({ jobId }) {
                 <th style={{ textAlign: "left", padding: "10px 10px", width: 60, color: "#6b7280", fontSize: 12 }}>
                   No.
                 </th>
-                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Email</th>
-                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Name</th>
-                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Phone</th>
-                <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Discord</th>
+
+                {/* ✅ give key columns minWidth so they don't collapse */}
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 240, color: "#6b7280", fontSize: 12 }}>
+                  Email
+                </th>
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 160, color: "#6b7280", fontSize: 12 }}>
+                  Name
+                </th>
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 140, color: "#6b7280", fontSize: 12 }}>
+                  Phone
+                </th>
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 160, color: "#6b7280", fontSize: 12 }}>
+                  Discord
+                </th>
+
                 <th style={{ textAlign: "center", padding: "10px 10px", width: 110, color: "#6b7280", fontSize: 12 }}>
                   Early Call
                 </th>
@@ -1485,10 +1517,23 @@ export default function PMJobDetails({ jobId }) {
                   return (
                     <tr key={r.userId || r.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
                       <td style={{ padding: "10px 10px", fontWeight: 900, color: "#111827" }}>{idx + 1}.</td>
-                      <td style={{ padding: "10px 10px", fontWeight: 800, color: "#111827" }}>{r.email}</td>
-                      <td style={{ padding: "10px 10px", color: "#111827" }}>{r.name || "-"}</td>
-                      <td style={{ padding: "10px 10px", color: "#111827" }}>{r.phone || "-"}</td>
-                      <td style={{ padding: "10px 10px", color: "#111827" }}>{r.discord || "-"}</td>
+
+                      {/* ✅ ellipsis so long email doesn't break the table */}
+                      <td className="pm-att-ellipsis" style={{ padding: "10px 10px", fontWeight: 800, color: "#111827" }} title={r.email}>
+                        {r.email}
+                      </td>
+
+                      <td className="pm-att-ellipsis-sm" style={{ padding: "10px 10px", color: "#111827" }} title={r.name || ""}>
+                        {r.name || "-"}
+                      </td>
+
+                      <td className="pm-att-ellipsis-sm" style={{ padding: "10px 10px", color: "#111827" }} title={r.phone || ""}>
+                        {r.phone || "-"}
+                      </td>
+
+                      <td className="pm-att-ellipsis-sm" style={{ padding: "10px 10px", color: "#111827" }} title={r.discord || ""}>
+                        {r.discord || "-"}
+                      </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center" }}>
                         {earlyEnabled ? (
@@ -1559,11 +1604,19 @@ export default function PMJobDetails({ jobId }) {
                       </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center" }}>
-                        {hourlyPayJob && r.in && r.out ? <Chip>{r.breakDeductHours}</Chip> : <span style={{ color: "#9ca3af" }}>—</span>}
+                        {hourlyPayJob && r.in && r.out ? (
+                          <Chip>{r.breakDeductHours}</Chip>
+                        ) : (
+                          <span style={{ color: "#9ca3af" }}>—</span>
+                        )}
                       </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center" }}>
-                        {hourlyPayJob && r.in && r.out ? <Chip tone="green">{billableText}</Chip> : <span style={{ color: "#9ca3af" }}>—</span>}
+                        {hourlyPayJob && r.in && r.out ? (
+                          <Chip tone="green">{billableText}</Chip>
+                        ) : (
+                          <span style={{ color: "#9ca3af" }}>—</span>
+                        )}
                       </td>
                     </tr>
                   );
