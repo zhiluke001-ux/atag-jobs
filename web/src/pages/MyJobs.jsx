@@ -291,6 +291,122 @@ function isBreakEnabled(job) {
   return !!v;
 }
 
+/* ---------- addon selection (per-user) helpers ---------- */
+function truthy(v) {
+  if (v === true) return true;
+  if (v === false || v == null) return false;
+  if (typeof v === "number") return v === 1;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    return ["1", "true", "yes", "y", "on"].includes(s);
+  }
+  return false;
+}
+
+function userKeySet(user) {
+  const s = new Set();
+  const push = (x) => {
+    if (x == null) return;
+    const v = String(x).trim();
+    if (v) s.add(v);
+  };
+  push(user?.userId);
+  push(user?.id);
+  push(user?.uid);
+  push(user?.sub);
+  push(user?.email);
+  push(user?.username);
+  return s;
+}
+
+function findMyApplication(job, user) {
+  const keys = userKeySet(user);
+  if (!keys.size) return null;
+
+  const pools = [];
+
+  // common shapes
+  if (Array.isArray(job?.applications)) pools.push(job.applications);
+  if (Array.isArray(job?.applicants)) pools.push(job.applicants);
+  if (Array.isArray(job?.participants)) pools.push(job.participants);
+
+  // sometimes API merges a "me" record
+  if (job?.myApplication && typeof job.myApplication === "object") pools.push([job.myApplication]);
+  if (job?.myApplicant && typeof job.myApplicant === "object") pools.push([job.myApplicant]);
+  if (job?.me && typeof job.me === "object") pools.push([job.me]);
+  if (job?.my && typeof job.my === "object") pools.push([job.my]);
+
+  for (const arr of pools) {
+    const hit = (arr || []).find((a) => {
+      const k1 = a?.userId != null ? String(a.userId) : null;
+      const k2 = a?.id != null ? String(a.id) : null;
+      const k3 = a?.uid != null ? String(a.uid) : null;
+      const k4 = a?.email != null ? String(a.email) : null;
+      return (k1 && keys.has(k1)) || (k2 && keys.has(k2)) || (k3 && keys.has(k3)) || (k4 && keys.has(k4));
+    });
+    if (hit) return hit;
+  }
+
+  return null;
+}
+
+function myEarlySelected(job, user) {
+  const me = findMyApplication(job, user);
+
+  // only return YES if we have positive evidence
+  const candidates = [
+    me?.earlyCallApplied,
+    me?.early_call_applied,
+    me?.earlyApplied,
+    me?.early_applied,
+    me?.earlyCallSelected,
+    me?.early_call_selected,
+    me?.earlySelected,
+
+    // sometimes stored flat on merged job object from /me/jobs
+    job?.myEarlyCallApplied,
+    job?.my_early_call_applied,
+    job?.earlyCallApplied, // (if backend uses it as per-user flag)
+    job?.early_call_applied,
+    job?.earlyApplied,
+    job?.early_applied,
+  ];
+
+  return candidates.some(truthy);
+}
+
+function myLUSelected(job, user) {
+  const me = findMyApplication(job, user);
+
+  const candidates = [
+    me?.luApplied,
+    me?.lu_applied,
+    me?.loadingUnloadApplied,
+    me?.loading_unload_applied,
+    me?.loadingApplied,
+    me?.loading_applied,
+    me?.unloadingApplied,
+    me?.unloading_applied,
+    me?.loadingUnloadSelected,
+    me?.loading_unload_selected,
+
+    job?.myLUApplied,
+    job?.my_lu_applied,
+    job?.myLoadingUnloadApplied,
+    job?.my_loading_unload_applied,
+    job?.loadingUnloadApplied, // (if backend uses it as per-user flag)
+    job?.loading_unload_applied,
+  ];
+
+  return candidates.some(truthy);
+}
+
+function amtOnlyText(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return `RM${n % 1 === 0 ? n : n.toFixed(2)}`;
+}
+
 /* ========================== Page ========================== */
 export default function MyJobs({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
@@ -937,6 +1053,16 @@ export default function MyJobs({ navigate, user }) {
 
             const statusTone = j.status === "ongoing" ? "green" : j.status === "upcoming" ? "amber" : "gray";
 
+            // ✅ FIX: Show per-user selection for Early/LU (not job enabled flag)
+            const earlySelected = myEarlySelected(j, user);
+            const luSelected = myLUSelected(j, user);
+
+            const earlyAmt = amtOnlyText(ec?.amount);
+            const luAmt = amtOnlyText(lu?.price);
+
+            const earlyText = ec?.enabled && earlySelected ? `Yes${earlyAmt ? ` (${earlyAmt})` : ""}` : "No";
+            const luText = lu?.enabled && luSelected ? `Yes${luAmt ? ` (${luAmt})` : ""}` : "No";
+
             return (
               <div key={j.id} className="myjob-card">
                 <div className="myjob-head">
@@ -1016,14 +1142,10 @@ export default function MyJobs({ navigate, user }) {
                       <div className="mj-panel-title">Allowances</div>
                       <div style={{ display: "grid", gap: 6 }}>
                         <div style={{ fontSize: 13, color: "#374151" }}>
-                          <b>Early Call:</b>{" "}
-                          {ec?.enabled
-                            ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)`
-                            : "No"}
+                          <b>Early Call:</b> {earlyText}
                         </div>
                         <div style={{ fontSize: 13, color: "#374151" }}>
-                          <b>Loading & Unloading:</b>{" "}
-                          {lu?.enabled ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})` : "No"}
+                          <b>Loading & Unloading:</b> {luText}
                         </div>
                       </div>
 
@@ -1203,9 +1325,7 @@ export default function MyJobs({ navigate, user }) {
                             {draft.error ? <div className="mj-alert mj-alert-danger">{draft.error}</div> : null}
                             {draft.okMsg ? <div className="mj-alert mj-alert-ok">{draft.okMsg}</div> : null}
 
-                            <div className="mj-note">
-                              Tip: screenshot/crop the receipt first so it stays under 2MB.
-                            </div>
+                            <div className="mj-note">Tip: screenshot/crop the receipt first so it stays under 2MB.</div>
                           </div>
                         </div>
                       </div>
@@ -1248,9 +1368,7 @@ export default function MyJobs({ navigate, user }) {
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 950, fontSize: 16 }}>
-                  Parking Receipt — {receiptViewMeta.jobTitle}
-                </div>
+                <div style={{ fontWeight: 950, fontSize: 16 }}>Parking Receipt — {receiptViewMeta.jobTitle}</div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
                   {receiptViewMeta.updatedAt
                     ? `Uploaded: ${dayjs(receiptViewMeta.updatedAt).format("YYYY/MM/DD HH:mm")}`
@@ -1334,9 +1452,7 @@ export default function MyJobs({ navigate, user }) {
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-              <div style={{ fontWeight: 950, fontSize: 16 }}>
-                {qrJob ? `${qrJob.title}` : "QR"}
-              </div>
+              <div style={{ fontWeight: 950, fontSize: 16 }}>{qrJob ? `${qrJob.title}` : "QR"}</div>
               <button className="btn" onClick={closeQR}>
                 Close
               </button>
