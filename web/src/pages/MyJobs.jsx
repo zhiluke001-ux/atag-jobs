@@ -62,7 +62,11 @@ function deriveKind(job) {
     job?.session?.physicalType ||
     (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
+  const mode =
+    job?.session?.mode ||
+    job?.sessionMode ||
+    job?.mode ||
+    (kind === "virtual" ? "virtual" : "physical");
   const isVirtual = mode === "virtual" || kind === "virtual";
 
   const resolvedKind = isVirtual
@@ -137,7 +141,8 @@ function buildPayForViewer(job, user) {
   };
 
   const sessionRM = money(pick(kind));
-  const hasAddon = job?.session?.hourlyEnabled || job?.physicalHourlyEnabled || tier?.payMode === "specific_plus_hourly";
+  const hasAddon =
+    job?.session?.hourlyEnabled || job?.physicalHourlyEnabled || tier?.payMode === "specific_plus_hourly";
   const base = money(tier.base);
   const ot = money(tier.otRatePerHour);
 
@@ -319,6 +324,49 @@ function userKeySet(user) {
   return s;
 }
 
+/**
+ * ✅ NEW: check if current user appears inside an array like:
+ * ["uunxb42pc", "u1"] OR [{userId:"..."}, {email:"..."}]
+ */
+function listHasUser(list, user) {
+  if (!Array.isArray(list) || !list.length) return false;
+  const keys = userKeySet(user);
+  if (!keys.size) return false;
+
+  for (const it of list) {
+    if (it == null) continue;
+
+    // id string/number
+    if (typeof it === "string" || typeof it === "number") {
+      if (keys.has(String(it))) return true;
+      continue;
+    }
+
+    // object forms
+    if (typeof it === "object") {
+      const k1 = it?.userId ?? it?.id ?? it?.uid ?? it?.sub ?? null;
+      const k2 = it?.email ?? null;
+      const k3 = it?.username ?? it?.name ?? null;
+
+      if (k1 && keys.has(String(k1))) return true;
+      if (k2 && keys.has(String(k2))) return true;
+      if (k3 && keys.has(String(k3))) return true;
+
+      // nested like { user: {id/...} }
+      const u = it?.user || it?.applicant || it?.profile || null;
+      if (u) {
+        const u1 = u?.userId ?? u?.id ?? u?.uid ?? u?.sub ?? null;
+        const u2 = u?.email ?? null;
+        const u3 = u?.username ?? null;
+        if (u1 && keys.has(String(u1))) return true;
+        if (u2 && keys.has(String(u2))) return true;
+        if (u3 && keys.has(String(u3))) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function findMyApplication(job, user) {
   const keys = userKeySet(user);
   if (!keys.size) return null;
@@ -353,6 +401,11 @@ function findMyApplication(job, user) {
 function myEarlySelected(job, user) {
   const me = findMyApplication(job, user);
 
+  // ✅ IMPORTANT: your backend uses earlyCall.participants sometimes (like loadingUnload.participants)
+  if (listHasUser(job?.earlyCall?.participants, user)) return true;
+  if (listHasUser(job?.earlyCallParticipants, user)) return true;
+  if (listHasUser(job?.early_call_participants, user)) return true;
+
   // only return YES if we have positive evidence
   const candidates = [
     me?.earlyCallApplied,
@@ -377,6 +430,12 @@ function myEarlySelected(job, user) {
 
 function myLUSelected(job, user) {
   const me = findMyApplication(job, user);
+
+  // ✅ FIX: your backend uses loadingUnload.participants (IDs) — support it
+  if (listHasUser(job?.loadingUnload?.participants, user)) return true;
+  if (listHasUser(job?.loadingUnloading?.participants, user)) return true;
+  if (listHasUser(job?.loadingUnloadParticipants, user)) return true;
+  if (listHasUser(job?.loading_unload_participants, user)) return true;
 
   const candidates = [
     me?.luApplied,
@@ -1035,7 +1094,9 @@ export default function MyJobs({ navigate, user }) {
             const { isVirtual, label } = deriveKind(j);
 
             const yourLocLine = loc
-              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""} · ${dayjs(loc.ts).format("HH:mm:ss")}`
+              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${
+                  loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""
+                } · ${dayjs(loc.ts).format("HH:mm:ss")}`
               : locMsg || "Getting your location…";
 
             const pa = parkingRM(j);
@@ -1053,7 +1114,7 @@ export default function MyJobs({ navigate, user }) {
 
             const statusTone = j.status === "ongoing" ? "green" : j.status === "upcoming" ? "amber" : "gray";
 
-            // ✅ FIX: Show per-user selection for Early/LU (not job enabled flag)
+            // ✅ FIXED: now checks loadingUnload.participants / earlyCall.participants too
             const earlySelected = myEarlySelected(j, user);
             const luSelected = myLUSelected(j, user);
 
@@ -1164,21 +1225,14 @@ export default function MyJobs({ navigate, user }) {
                       <div className="mj-panel-title">Attendance</div>
 
                       <div className="mj-chip-row" style={{ marginBottom: 8 }}>
-                        {loc ? (
-                          <Chip tone="green">GPS OK</Chip>
-                        ) : (
-                          <Chip tone="red" title="Please allow location permission">
-                            GPS required
-                          </Chip>
-                        )}
-
+                        {loc ? <Chip tone="green">GPS OK</Chip> : <Chip tone="red" title="Please allow location permission">GPS required</Chip>}
                         {isVirtual ? <Chip tone="indigo">PM will mark</Chip> : <Chip tone="gray">Scan at venue</Chip>}
-
                         {!isVirtual && j.status !== "ongoing" ? <Chip tone="amber">Opens when ongoing</Chip> : null}
                       </div>
 
                       <div className="mj-note" style={{ marginBottom: 10 }}>
-                        <b>Your location:</b> <span style={{ color: loc ? "#374151" : "#b91c1c" }}>{yourLocLine}</span>
+                        <b>Your location:</b>{" "}
+                        <span style={{ color: loc ? "#374151" : "#b91c1c" }}>{yourLocLine}</span>
                       </div>
 
                       {!isVirtual ? (
@@ -1218,11 +1272,7 @@ export default function MyJobs({ navigate, user }) {
                                 <button className="btn" onClick={() => refreshMyReceipt(j.id)} disabled={!!draft.uploading}>
                                   Refresh
                                 </button>
-                                <button
-                                  className="btn"
-                                  onClick={() => openReceiptViewer(j, receipt)}
-                                  disabled={!!draft.uploading}
-                                >
+                                <button className="btn" onClick={() => openReceiptViewer(j, receipt)} disabled={!!draft.uploading}>
                                   View
                                 </button>
                                 <button className="btn" onClick={() => removeMyReceipt(j.id)} disabled={!!draft.uploading}>
