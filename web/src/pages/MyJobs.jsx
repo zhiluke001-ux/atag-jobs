@@ -23,9 +23,7 @@ function fmtRange(start, end) {
     const d = S.format("YYYY/MM/DD");
     const t1 = S.format("hA");
     const t2 = E.format("hA");
-    return sameDay
-      ? `${d}  ${t1} — ${t2}`
-      : `${S.format("YYYY/MM/DD hA")} — ${E.format("YYYY/MM/DD hA")}`;
+    return sameDay ? `${d}  ${t1} — ${t2}` : `${S.format("YYYY/MM/DD hA")} — ${E.format("YYYY/MM/DD hA")}`;
   } catch {
     return "";
   }
@@ -61,11 +59,7 @@ function deriveKind(job) {
     job?.session?.physicalType ||
     (job?.session?.mode === "virtual" ? "virtual" : null);
 
-  const mode =
-    job?.session?.mode ||
-    job?.sessionMode ||
-    job?.mode ||
-    (kind === "virtual" ? "virtual" : "physical");
+  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : "physical");
   const isVirtual = mode === "virtual" || kind === "virtual";
 
   const resolvedKind = isVirtual
@@ -136,16 +130,12 @@ function buildPayForViewer(job, user) {
     return null;
   };
   const sessionRM = money(pick(kind));
-  const hasAddon =
-    job?.session?.hourlyEnabled ||
-    job?.physicalHourlyEnabled ||
-    tier?.payMode === "specific_plus_hourly";
+  const hasAddon = job?.session?.hourlyEnabled || job?.physicalHourlyEnabled || tier?.payMode === "specific_plus_hourly";
   const base = money(tier.base);
   const ot = money(tier.otRatePerHour);
 
   if (sessionRM) {
-    if (hasAddon && (base || ot))
-      return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
+    if (hasAddon && (base || ot)) return `${sessionRM}  +  ${base ? `${base}/hr` : ""}${otSuffix(base, ot)}`;
     return sessionRM;
   }
 
@@ -160,8 +150,7 @@ function TransportBadges({ job }) {
     ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
     ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
   ];
-  if (!items.length)
-    return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
+  if (!items.length) return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
   return (
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {items.map((it, i) => (
@@ -260,12 +249,7 @@ function normalizeReceiptResponse(resp) {
     if (!r0) return null;
 
     // if url missing in receipt, allow outer fallback
-    const outer =
-      resp?.photoUrlAbs ||
-      resp?.photoUrl ||
-      resp?.data?.photoUrlAbs ||
-      resp?.data?.photoUrl ||
-      "";
+    const outer = resp?.photoUrlAbs || resp?.photoUrl || resp?.data?.photoUrlAbs || resp?.data?.photoUrl || "";
 
     if (!pickReceiptUrl(r0) && outer) r0.photoUrlAbs = outer;
     return r0;
@@ -276,12 +260,7 @@ function normalizeReceiptResponse(resp) {
   if (!receipt || typeof receipt !== "object") return null;
 
   const inner = pickReceiptUrl(receipt);
-  const outer =
-    resp?.photoUrlAbs ||
-    resp?.photoUrl ||
-    resp?.data?.photoUrlAbs ||
-    resp?.data?.photoUrl ||
-    "";
+  const outer = resp?.photoUrlAbs || resp?.photoUrl || resp?.data?.photoUrlAbs || resp?.data?.photoUrl || "";
 
   if (!inner && outer) receipt.photoUrlAbs = outer;
   return receipt;
@@ -298,12 +277,14 @@ export default function MyJobs({ navigate, user }) {
   // last-known scanner info per job
   const [scannerInfo, setScannerInfo] = useState({}); // { [jobId]: {lat,lng,updatedAt,dist} }
 
-  // QR modal state
+  // ✅ QR modal state (combined Work + Break)
   const [qrOpen, setQrOpen] = useState(false);
   const [qrToken, setQrToken] = useState("");
   const [qrDir, setQrDir] = useState("in"); // "in" | "out"
+  const [qrMode, setQrMode] = useState("work"); // "work" | "break"
   const [qrJob, setQrJob] = useState(null);
   const [qrError, setQrError] = useState("");
+  const [qrBusy, setQrBusy] = useState(false);
 
   // Parking receipt states (per job)
   const [myReceipts, setMyReceipts] = useState({}); // { [jobId]: receiptObj }
@@ -506,14 +487,11 @@ export default function MyJobs({ navigate, user }) {
     // data urls can be shown directly
     if (/^data:/i.test(absUrl)) return absUrl;
 
-    // Try to fetch as blob for protected / cookie-auth endpoints (best UX like payroll preview)
+    // Try to fetch as blob for protected / cookie-auth endpoints
     try {
       const u = new URL(absUrl, window.location.origin);
-
-      // If it's same-origin, we can blob it
       const sameOrigin = u.origin === window.location.origin;
 
-      // If it's API base origin, we can blob it (apiGetBlob will include auth headers/cookies)
       let apiOrigin = null;
       try {
         if (API_BASE_CLEAN) apiOrigin = new URL(API_BASE_CLEAN, window.location.origin).origin;
@@ -521,7 +499,6 @@ export default function MyJobs({ navigate, user }) {
       const isApiOrigin = apiOrigin && u.origin === apiOrigin;
 
       if (sameOrigin || isApiOrigin) {
-        // derive path for apiGetBlob
         let path = u.pathname + u.search;
         if (API_BASE_CLEAN && absUrl.startsWith(API_BASE_CLEAN)) {
           path = absUrl.slice(API_BASE_CLEAN.length) || "/";
@@ -529,11 +506,7 @@ export default function MyJobs({ navigate, user }) {
 
         const maybeBlob = await apiGetBlob(path);
         const blob =
-          maybeBlob instanceof Blob
-            ? maybeBlob
-            : maybeBlob?.data instanceof Blob
-            ? maybeBlob.data
-            : null;
+          maybeBlob instanceof Blob ? maybeBlob : maybeBlob?.data instanceof Blob ? maybeBlob.data : null;
 
         if (blob) {
           const objUrl = URL.createObjectURL(blob);
@@ -541,9 +514,7 @@ export default function MyJobs({ navigate, user }) {
           return objUrl;
         }
       }
-    } catch {
-      // ignore and fall back to direct URL
-    }
+    } catch {}
 
     // fallback: show direct URL (signed/public)
     return absUrl;
@@ -561,8 +532,7 @@ export default function MyJobs({ navigate, user }) {
     setReceiptViewSrc("");
     setReceiptViewRawUrl(abs);
 
-    const updatedAt =
-      receipt?.updatedAt || receipt?.createdAt || receipt?.uploadedAt || receipt?.uploadAt || null;
+    const updatedAt = receipt?.updatedAt || receipt?.createdAt || receipt?.uploadedAt || receipt?.uploadAt || null;
 
     setReceiptViewMeta({
       jobTitle: job?.title || "Job",
@@ -713,17 +683,28 @@ export default function MyJobs({ navigate, user }) {
     return () => clearInterval(timer);
   }, [jobs, loc]);
 
-  /* ---------- QR generation ---------- */
-  async function openQR(job, direction) {
+  /* ---------- QR generation (combined Work + Break) ---------- */
+  function mapDirection(mode, dir) {
+    if (mode === "work") return dir; // "in" | "out"
+    return dir === "in" ? "break_in" : "break_out";
+  }
+
+  async function generateQR(job, mode, dir) {
     setQrError("");
     setQrToken("");
-    setQrJob(job);
-    setQrDir(direction);
+    setQrBusy(true);
 
     const { isVirtual } = deriveKind(job);
     if (isVirtual) {
       setQrError("Virtual job — no scan required. PM/Admin will mark attendance.");
-      setQrOpen(true);
+      setQrBusy(false);
+      return;
+    }
+
+    // Break mode only if enabled on job
+    if (mode === "break" && !job?.breakEnabled) {
+      setQrError("Break QR is not enabled for this job (PM disabled it).");
+      setQrBusy(false);
       return;
     }
 
@@ -747,19 +728,19 @@ export default function MyJobs({ navigate, user }) {
         setLoc(p);
       } catch {
         setQrError("Location permission is required to generate QR.");
-        setQrOpen(true);
+        setQrBusy(false);
         return;
       }
     }
 
     try {
+      const direction = mapDirection(mode, dir);
       const r = await apiPost(`/jobs/${job.id}/qr`, {
         direction,
         lat: here.lat,
         lng: here.lng,
       });
       setQrToken(r.token);
-      setQrOpen(true);
     } catch (e) {
       let msg = "Failed to generate QR.";
       try {
@@ -770,8 +751,19 @@ export default function MyJobs({ navigate, user }) {
         else msg = j.error || msg;
       } catch {}
       setQrError(msg);
-      setQrOpen(true);
+    } finally {
+      setQrBusy(false);
     }
+  }
+
+  async function openQRModal(job) {
+    setQrJob(job);
+    setQrOpen(true);
+
+    // default: Work IN
+    setQrMode("work");
+    setQrDir("in");
+    await generateQR(job, "work", "in");
   }
 
   function closeQR() {
@@ -779,6 +771,9 @@ export default function MyJobs({ navigate, user }) {
     setQrToken("");
     setQrError("");
     setQrJob(null);
+    setQrMode("work");
+    setQrDir("in");
+    setQrBusy(false);
   }
 
   const qrImgSrc = useMemo(() => {
@@ -800,9 +795,7 @@ export default function MyJobs({ navigate, user }) {
             const { isVirtual, label } = deriveKind(j);
 
             const yourLocLine = loc
-              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${
-                  loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""
-                } · ${dayjs(loc.ts).format("HH:mm:ss")}`
+              ? `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}${loc.acc ? ` (±${Math.round(loc.acc)} m)` : ""} · ${dayjs(loc.ts).format("HH:mm:ss")}`
               : locMsg || "Getting your location…";
 
             const pa = parkingRM(j);
@@ -854,16 +847,14 @@ export default function MyJobs({ navigate, user }) {
                           <strong>Allowances</strong>
                         </div>
                         <div style={{ fontSize: 14, color: "#374151" }}>
-                          Early Call:{" "}
-                          {ec?.enabled
-                            ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)`
-                            : "No"}
+                          Early Call: {ec?.enabled ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
                         </div>
                         <div style={{ fontSize: 14, color: "#374151" }}>
                           Loading & Unloading:{" "}
-                          {lu?.enabled
-                            ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})`
-                            : "No"}
+                          {lu?.enabled ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})` : "No"}
+                        </div>
+                        <div style={{ fontSize: 14, color: "#374151" }}>
+                          Break QR: {j.breakEnabled ? "Enabled" : "Disabled"}
                         </div>
                       </div>
 
@@ -899,10 +890,7 @@ export default function MyJobs({ navigate, user }) {
                       }}
                     >
                       {j.status === "ongoing" && !isVirtual && (
-                        <span
-                          className="status"
-                          title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}
-                        >
+                        <span className="status" title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}>
                           Scanner distance: {dist == null ? "—" : `${dist} m`}
                         </span>
                       )}
@@ -926,13 +914,11 @@ export default function MyJobs({ navigate, user }) {
                   </div>
                 </div>
 
+                {/* ✅ COMBINED ONE BUTTON */}
                 {!isVirtual && (
                   <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                    <button className="btn primary" onClick={() => openQR(j, "in")}>
-                      Get Check-in QR
-                    </button>
-                    <button className="btn" onClick={() => openQR(j, "out")}>
-                      Get Check-out QR
+                    <button className="btn primary" onClick={() => openQRModal(j)}>
+                      Check In/Out
                     </button>
                   </div>
                 )}
@@ -965,10 +951,7 @@ export default function MyJobs({ navigate, user }) {
                           <div style={{ fontSize: 13, color: "#374151" }}>
                             <strong>Status:</strong> Uploaded
                             {receiptUpdatedAt ? (
-                              <span style={{ color: "#6b7280" }}>
-                                {" "}
-                                · {dayjs(receiptUpdatedAt).format("YYYY/MM/DD HH:mm")}
-                              </span>
+                              <span style={{ color: "#6b7280" }}> · {dayjs(receiptUpdatedAt).format("YYYY/MM/DD HH:mm")}</span>
                             ) : null}
                           </div>
 
@@ -977,13 +960,7 @@ export default function MyJobs({ navigate, user }) {
                               Refresh
                             </button>
 
-                            {/* ✅ CHANGED: View opens a modal (like Payroll) */}
-                            <button
-                              className="btn"
-                              onClick={() => openReceiptViewer(j, receipt)}
-                              disabled={!!draft.uploading}
-                              title="View receipt in modal"
-                            >
+                            <button className="btn" onClick={() => openReceiptViewer(j, receipt)} disabled={!!draft.uploading}>
                               View
                             </button>
 
@@ -1044,8 +1021,7 @@ export default function MyJobs({ navigate, user }) {
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                         <div style={{ fontSize: 13, color: "#374151" }}>
-                          <strong>Upload / Replace</strong>{" "}
-                          <span style={{ color: "#6b7280" }}>(max 2MB)</span>
+                          <strong>Upload / Replace</strong> <span style={{ color: "#6b7280" }}>(max 2MB)</span>
                         </div>
 
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1085,7 +1061,6 @@ export default function MyJobs({ navigate, user }) {
                           </div>
                         ) : null}
 
-
                         {draft.dataUrl ? (
                           <img
                             src={draft.dataUrl}
@@ -1104,14 +1079,7 @@ export default function MyJobs({ navigate, user }) {
                         ) : null}
 
                         {draft.error ? (
-                          <div
-                            style={{
-                              padding: 10,
-                              border: "1px solid var(--red)",
-                              borderRadius: 8,
-                              color: "var(--red)",
-                            }}
-                          >
+                          <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
                             {draft.error}
                           </div>
                         ) : null}
@@ -1143,7 +1111,7 @@ export default function MyJobs({ navigate, user }) {
         )}
       </div>
 
-      {/* ---------- RECEIPT VIEWER MODAL (NEW) ---------- */}
+      {/* ---------- RECEIPT VIEWER MODAL ---------- */}
       {receiptViewOpen && (
         <div
           className="modal-overlay"
@@ -1174,9 +1142,7 @@ export default function MyJobs({ navigate, user }) {
               <div>
                 <div style={{ fontWeight: 900, fontSize: 16 }}>Parking Receipt — {receiptViewMeta.jobTitle}</div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                  {receiptViewMeta.updatedAt
-                    ? `Uploaded: ${dayjs(receiptViewMeta.updatedAt).format("YYYY/MM/DD HH:mm")}`
-                    : "Uploaded: —"}
+                  {receiptViewMeta.updatedAt ? `Uploaded: ${dayjs(receiptViewMeta.updatedAt).format("YYYY/MM/DD HH:mm")}` : "Uploaded: —"}
                   {receiptViewMeta.amount != null ? ` · Amount: RM${Number(receiptViewMeta.amount)}` : ""}
                   {receiptViewMeta.note ? ` · Note: ${receiptViewMeta.note}` : ""}
                 </div>
@@ -1187,14 +1153,12 @@ export default function MyJobs({ navigate, user }) {
                   Close
                 </button>
 
-                {/* Optional: keep “Open in new tab” inside modal */}
                 <button
                   className="btn"
                   onClick={() => {
                     if (receiptViewRawUrl) window.open(receiptViewRawUrl, "_blank");
                   }}
                   disabled={!receiptViewRawUrl}
-                  title={!receiptViewRawUrl ? "URL not available" : "Open in new tab"}
                 >
                   Open
                 </button>
@@ -1230,7 +1194,7 @@ export default function MyJobs({ navigate, user }) {
         </div>
       )}
 
-      {/* ---------- QR MODAL ---------- */}
+      {/* ---------- QR MODAL (UPDATED) ---------- */}
       {qrOpen && (
         <div
           className="modal-overlay"
@@ -1257,9 +1221,72 @@ export default function MyJobs({ navigate, user }) {
               boxShadow: "0 10px 30px rgba(0,0,0,.25)",
             }}
           >
-            <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 8 }}>
-              {qrJob ? `${qrDir === "in" ? "Check-in" : "Check-out"} QR — ${qrJob.title}` : "QR"}
+            <div style={{ fontWeight: 900, fontSize: 16, marginBottom: 8 }}>
+              {qrJob
+                ? `${qrMode === "work" ? "Work" : "Break"} ${qrDir === "in" ? "In" : "Out"} QR — ${qrJob.title}`
+                : "QR"}
             </div>
+
+            {/* Mode Switch: Work / Break (Break only if enabled) */}
+            {qrJob && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                <button
+                  className="btn"
+                  style={qrMode === "work" ? { background: "#111827", color: "#fff", borderColor: "#111827" } : undefined}
+                  onClick={async () => {
+                    setQrMode("work");
+                    setQrDir("in");
+                    await generateQR(qrJob, "work", "in");
+                  }}
+                  disabled={qrBusy}
+                >
+                  Work
+                </button>
+
+                {qrJob.breakEnabled && (
+                  <button
+                    className="btn"
+                    style={qrMode === "break" ? { background: "#111827", color: "#fff", borderColor: "#111827" } : undefined}
+                    onClick={async () => {
+                      setQrMode("break");
+                      setQrDir("in");
+                      await generateQR(qrJob, "break", "in");
+                    }}
+                    disabled={qrBusy}
+                  >
+                    Break
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Dir Switch: In / Out */}
+            {qrJob && !qrError && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                <button
+                  className="btn"
+                  style={qrDir === "in" ? { background: "#22c55e", color: "#fff", borderColor: "#22c55e" } : undefined}
+                  onClick={async () => {
+                    setQrDir("in");
+                    await generateQR(qrJob, qrMode, "in");
+                  }}
+                  disabled={qrBusy}
+                >
+                  {qrMode === "work" ? "Check In" : "Break In"}
+                </button>
+                <button
+                  className="btn"
+                  style={qrDir === "out" ? { background: "#ef4444", color: "#fff", borderColor: "#ef4444" } : undefined}
+                  onClick={async () => {
+                    setQrDir("out");
+                    await generateQR(qrJob, qrMode, "out");
+                  }}
+                  disabled={qrBusy}
+                >
+                  {qrMode === "work" ? "Check Out" : "Break Out"}
+                </button>
+              </div>
+            )}
 
             {qrError ? (
               <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
@@ -1268,14 +1295,16 @@ export default function MyJobs({ navigate, user }) {
             ) : (
               <>
                 <div style={{ display: "flex", justifyContent: "center", margin: "6px 0 10px" }}>
-                  {qrToken ? (
+                  {qrBusy ? (
+                    <div style={{ color: "#6b7280" }}>Generating QR…</div>
+                  ) : qrToken ? (
                     <img
                       src={qrImgSrc}
                       alt="QR code"
                       style={{ width: 260, height: 260, borderRadius: 8, border: "1px solid var(--border)" }}
                     />
                   ) : (
-                    <div style={{ color: "#6b7280" }}>Generating QR…</div>
+                    <div style={{ color: "#6b7280" }}>No token.</div>
                   )}
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
@@ -1292,9 +1321,10 @@ export default function MyJobs({ navigate, user }) {
               <button className="btn" onClick={closeQR}>
                 Close
               </button>
+
               {!qrError && qrJob && (
-                <button className="btn primary" onClick={() => openQR(qrJob, qrDir)}>
-                  Regenerate
+                <button className="btn primary" onClick={() => generateQR(qrJob, qrMode, qrDir)} disabled={qrBusy}>
+                  {qrBusy ? "…" : "Regenerate"}
                 </button>
               )}
             </div>
