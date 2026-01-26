@@ -15,6 +15,7 @@ function haversineMeters(a, b) {
     Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
   return Math.round(2 * R * Math.asin(Math.sqrt(aa)));
 }
+
 function fmtRange(start, end) {
   try {
     const S = dayjs(start),
@@ -35,6 +36,7 @@ const money = (v) => {
   const n = num(v);
   return Number.isFinite(n) && n > 0 ? `RM${n % 1 === 0 ? n : n.toFixed(2)}` : null;
 };
+
 function deriveViewerRank(user) {
   const raw = (
     user?.ptRole ||
@@ -51,6 +53,7 @@ function deriveViewerRank(user) {
   if (["senior", "sr"].includes(raw)) return "senior";
   return "junior";
 }
+
 function deriveKind(job) {
   const kind =
     job?.rate?.sessionKind ||
@@ -85,6 +88,7 @@ function deriveKind(job) {
 
   return { isVirtual, kind: resolvedKind, label };
 }
+
 function parkingRM(job) {
   const r = job?.rate || {};
   const v = Number.isFinite(r.parkingAllowance)
@@ -96,11 +100,13 @@ function parkingRM(job) {
     : null;
   return v == null ? null : Math.round(Number(v));
 }
+
 function otSuffix(hourlyRM, otRM) {
   if (otRM && otRM !== hourlyRM) return ` (OT ${otRM}/hr after end)`;
   if (hourlyRM) return ` (OT billed hourly after end)`;
   return "";
 }
+
 function buildPayForViewer(job, user) {
   const { kind } = deriveKind(job);
   const rank = deriveViewerRank(user);
@@ -129,6 +135,7 @@ function buildPayForViewer(job, user) {
     if (k === "3d2n") return tier?.threeD2N ?? tier?.specificPayment ?? null;
     return null;
   };
+
   const sessionRM = money(pick(kind));
   const hasAddon = job?.session?.hourlyEnabled || job?.physicalHourlyEnabled || tier?.payMode === "specific_plus_hourly";
   const base = money(tier.base);
@@ -147,27 +154,34 @@ function buildPayForViewer(job, user) {
 function TransportBadges({ job }) {
   const t = job?.transportOptions || {};
   const items = [
-    ...(t.bus ? [{ text: "ATAG Bus", bg: "#eef2ff", color: "#3730a3" }] : []),
-    ...(t.own ? [{ text: "Own Transport", bg: "#ecfeff", color: "#155e75" }] : []),
+    ...(t.bus ? [{ text: "ATAG Bus", tone: "indigo" }] : []),
+    ...(t.own ? [{ text: "Own Transport", tone: "cyan" }] : []),
   ];
-  if (!items.length) return <span style={{ fontSize: 12, color: "#6b7280" }}>No transport option</span>;
+  if (!items.length) return <span className="mj-muted">No transport option</span>;
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+    <div className="mj-chip-row">
       {items.map((it, i) => (
-        <span
-          key={i}
-          style={{
-            background: it.bg,
-            color: it.color,
-            padding: "2px 8px",
-            borderRadius: 999,
-            fontSize: 12,
-            fontWeight: 700,
-          }}
-        >
+        <span key={i} className={`mj-chip mj-chip-${it.tone}`}>
           {it.text}
         </span>
       ))}
+    </div>
+  );
+}
+
+function Chip({ tone = "gray", children, title }) {
+  return (
+    <span className={`mj-chip mj-chip-${tone}`} title={title || ""}>
+      {children}
+    </span>
+  );
+}
+
+function KeyVal({ k, v }) {
+  return (
+    <div className="mj-kv">
+      <div className="mj-k">{k}</div>
+      <div className="mj-v">{v || "-"}</div>
     </div>
   );
 }
@@ -242,33 +256,45 @@ function toAbsUrl(u) {
 function normalizeReceiptResponse(resp) {
   if (!resp) return null;
 
-  // ✅ Handle list shape: { ok:true, receipts:[...] }
+  // list shape: { ok:true, receipts:[...] }
   const receipts = resp?.receipts ?? resp?.data?.receipts;
   if (Array.isArray(receipts)) {
-    const r0 = receipts[0] || null; // pick latest (you unshift on submit)
+    const r0 = receipts[0] || null;
     if (!r0) return null;
 
-    // if url missing in receipt, allow outer fallback
     const outer = resp?.photoUrlAbs || resp?.photoUrl || resp?.data?.photoUrlAbs || resp?.data?.photoUrl || "";
-
     if (!pickReceiptUrl(r0) && outer) r0.photoUrlAbs = outer;
     return r0;
   }
 
-  // existing single shape: { receipt:{...} } or direct receipt
+  // single shape
   const receipt = resp?.receipt ?? resp?.data?.receipt ?? resp?.data ?? resp;
   if (!receipt || typeof receipt !== "object") return null;
 
   const inner = pickReceiptUrl(receipt);
   const outer = resp?.photoUrlAbs || resp?.photoUrl || resp?.data?.photoUrlAbs || resp?.data?.photoUrl || "";
-
   if (!inner && outer) receipt.photoUrlAbs = outer;
   return receipt;
+}
+
+/* ---------- break enabled (robust) ---------- */
+function isBreakEnabled(job) {
+  const v =
+    job?.breakEnabled ??
+    job?.breakQR ??
+    job?.breakQrEnabled ??
+    job?.break_qr_enabled ??
+    job?.session?.breakEnabled ??
+    job?.rate?.breakEnabled ??
+    job?.rate?.breakQrEnabled ??
+    false;
+  return !!v;
 }
 
 /* ========================== Page ========================== */
 export default function MyJobs({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(true);
 
   // live user location
   const [loc, setLoc] = useState(null); // { lat, lng, acc, ts }
@@ -285,6 +311,7 @@ export default function MyJobs({ navigate, user }) {
   const [qrJob, setQrJob] = useState(null);
   const [qrError, setQrError] = useState("");
   const [qrBusy, setQrBusy] = useState(false);
+  const qrReqRef = useRef(0); // prevent stale token overwrites
 
   // Parking receipt states (per job)
   const [myReceipts, setMyReceipts] = useState({}); // { [jobId]: receiptObj }
@@ -296,15 +323,16 @@ export default function MyJobs({ navigate, user }) {
   const [receiptViewOpen, setReceiptViewOpen] = useState(false);
   const [receiptViewLoading, setReceiptViewLoading] = useState(false);
   const [receiptViewErr, setReceiptViewErr] = useState("");
-  const [receiptViewSrc, setReceiptViewSrc] = useState(""); // can be blob: or https/data
-  const [receiptViewRawUrl, setReceiptViewRawUrl] = useState(""); // original url
+  const [receiptViewSrc, setReceiptViewSrc] = useState(""); // blob:/https/data
+  const [receiptViewRawUrl, setReceiptViewRawUrl] = useState("");
   const [receiptViewMeta, setReceiptViewMeta] = useState({
     jobTitle: "",
     updatedAt: null,
     amount: null,
     note: "",
   });
-  const receiptViewObjUrlRef = useRef(""); // for cleanup
+  const receiptViewObjUrlRef = useRef("");
+  const receiptViewReqRef = useRef(0);
 
   const isPT = isPartTimerUser(user);
 
@@ -400,11 +428,9 @@ export default function MyJobs({ navigate, user }) {
 
       const res = await apiPost(`/jobs/${jobId}/parking-receipt`, payload);
 
-      // optimistic store if url exists in response
       const maybe = normalizeReceiptResponse(res);
       if (maybe) setMyReceipts((prev) => ({ ...prev, [jobId]: maybe }));
 
-      // IMPORTANT: re-fetch so we get the final url shape
       const fresh = await refreshMyReceipt(jobId);
 
       // If backend still returns no url, keep local preview so user sees something
@@ -445,7 +471,6 @@ export default function MyJobs({ navigate, user }) {
 
     setDraft(jobId, { uploading: true, error: "", okMsg: "" });
     try {
-      // Backend should delete DB record + file if exists.
       await apiPost(`/jobs/${jobId}/parking-receipt/me/remove`, {});
       setMyReceipts((prev) => {
         const n = { ...prev };
@@ -471,6 +496,10 @@ export default function MyJobs({ navigate, user }) {
     }
   };
 
+  useEffect(() => {
+    return () => cleanupReceiptViewerBlob();
+  }, []);
+
   const closeReceiptViewer = () => {
     setReceiptViewOpen(false);
     setReceiptViewLoading(false);
@@ -484,7 +513,6 @@ export default function MyJobs({ navigate, user }) {
   async function resolveReceiptViewSrc(absUrl) {
     if (!absUrl) return "";
 
-    // data urls can be shown directly
     if (/^data:/i.test(absUrl)) return absUrl;
 
     // Try to fetch as blob for protected / cookie-auth endpoints
@@ -516,11 +544,11 @@ export default function MyJobs({ navigate, user }) {
       }
     } catch {}
 
-    // fallback: show direct URL (signed/public)
     return absUrl;
   }
 
   async function openReceiptViewer(job, receipt) {
+    const reqId = ++receiptViewReqRef.current;
     cleanupReceiptViewerBlob();
 
     const raw = pickReceiptUrl(receipt) || "";
@@ -549,9 +577,11 @@ export default function MyJobs({ navigate, user }) {
 
     try {
       const src = await resolveReceiptViewSrc(abs);
+      if (reqId !== receiptViewReqRef.current) return;
       setReceiptViewSrc(src || abs);
       setReceiptViewLoading(false);
     } catch {
+      if (reqId !== receiptViewReqRef.current) return;
       setReceiptViewSrc(abs);
       setReceiptViewLoading(false);
     }
@@ -561,6 +591,7 @@ export default function MyJobs({ navigate, user }) {
   useEffect(() => {
     let mounted = true;
     (async () => {
+      setLoadingJobs(true);
       try {
         const mine = await apiGet("/me/jobs");
         const onlyApproved = (mine || []).filter((j) => j.myStatus === "approved");
@@ -577,6 +608,8 @@ export default function MyJobs({ navigate, user }) {
         if (mounted) setJobs(full || []);
       } catch {
         if (mounted) setJobs([]);
+      } finally {
+        if (mounted) setLoadingJobs(false);
       }
     })();
     return () => {
@@ -664,7 +697,9 @@ export default function MyJobs({ navigate, user }) {
   /* ---------- fetch scanner location for ongoing jobs ---------- */
   useEffect(() => {
     let timer;
+
     const fetchAll = async () => {
+      if (!jobs?.length) return;
       const map = {};
       for (const j of jobs) {
         if (j.status !== "ongoing") continue;
@@ -678,6 +713,7 @@ export default function MyJobs({ navigate, user }) {
       }
       if (Object.keys(map).length) setScannerInfo((prev) => ({ ...prev, ...map }));
     };
+
     fetchAll();
     timer = setInterval(fetchAll, 15000);
     return () => clearInterval(timer);
@@ -690,6 +726,8 @@ export default function MyJobs({ navigate, user }) {
   }
 
   async function generateQR(job, mode, dir) {
+    const reqId = ++qrReqRef.current;
+
     setQrError("");
     setQrToken("");
     setQrBusy(true);
@@ -701,8 +739,8 @@ export default function MyJobs({ navigate, user }) {
       return;
     }
 
-    // Break mode only if enabled on job
-    if (mode === "break" && !job?.breakEnabled) {
+    const breakEnabled = isBreakEnabled(job);
+    if (mode === "break" && !breakEnabled) {
       setQrError("Break QR is not enabled for this job (PM disabled it).");
       setQrBusy(false);
       return;
@@ -740,8 +778,10 @@ export default function MyJobs({ navigate, user }) {
         lat: here.lat,
         lng: here.lng,
       });
+      if (reqId !== qrReqRef.current) return; // ignore stale
       setQrToken(r.token);
     } catch (e) {
+      if (reqId !== qrReqRef.current) return;
       let msg = "Failed to generate QR.";
       try {
         const j = JSON.parse(String(e));
@@ -752,7 +792,7 @@ export default function MyJobs({ navigate, user }) {
       } catch {}
       setQrError(msg);
     } finally {
-      setQrBusy(false);
+      if (reqId === qrReqRef.current) setQrBusy(false);
     }
   }
 
@@ -774,6 +814,7 @@ export default function MyJobs({ navigate, user }) {
     setQrMode("work");
     setQrDir("in");
     setQrBusy(false);
+    qrReqRef.current++;
   }
 
   const qrImgSrc = useMemo(() => {
@@ -782,12 +823,95 @@ export default function MyJobs({ navigate, user }) {
   }, [qrToken]);
 
   return (
-    <div className="container" style={{ paddingTop: 16 }}>
-      <div className="card">
-        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>My Jobs</div>
+    <div className="myjobs-page">
+      {/* Page-local CSS (keeps UI consistent without touching global files) */}
+      <style>{`
+        .myjobs-page{max-width:1040px;margin:0 auto;padding:16px 12px 28px;}
+        .myjobs-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px;}
+        .myjobs-title{font-size:22px;font-weight:900;letter-spacing:-.02em;}
+        .myjobs-sub{margin-top:4px;font-size:13px;color:#6b7280}
+        .myjobs-list{display:grid;gap:12px;}
+        .myjob-card{border:1px solid var(--border,#e5e7eb);background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.06)}
+        .myjob-head{padding:14px 14px 10px;border-bottom:1px solid var(--border,#e5e7eb);background:linear-gradient(180deg,#fbfbfc, #ffffff)}
+        .myjob-head-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+        .myjob-title{font-size:16px;font-weight:900;letter-spacing:-.01em}
+        .myjob-meta{margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+        .mj-muted{font-size:12px;color:#6b7280}
+        .mj-chip-row{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+        .mj-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid rgba(0,0,0,.06);background:#f3f4f6;color:#374151;white-space:nowrap}
+        .mj-chip-gray{background:#f3f4f6;color:#374151}
+        .mj-chip-green{background:#ecfdf5;color:#047857;border-color:#a7f3d0}
+        .mj-chip-red{background:#fef2f2;color:#b91c1c;border-color:#fecaca}
+        .mj-chip-indigo{background:#eef2ff;color:#3730a3;border-color:#c7d2fe}
+        .mj-chip-cyan{background:#ecfeff;color:#155e75;border-color:#a5f3fc}
+        .mj-chip-amber{background:#fffbeb;color:#92400e;border-color:#fde68a}
+        .mj-chip-black{background:#111827;color:#fff;border-color:#111827}
+        .myjob-body{padding:14px;display:grid;grid-template-columns:1fr 360px;gap:14px}
+        .mj-panel{border:1px solid var(--border,#e5e7eb);background:#fafafa;border-radius:14px;padding:12px}
+        .mj-panel-white{background:#fff}
+        .mj-panel-title{font-weight:900;font-size:13px;margin-bottom:8px;color:#111827}
+        .mj-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+        .mj-kv{display:grid;gap:4px}
+        .mj-k{font-size:12px;color:#6b7280;font-weight:700}
+        .mj-v{font-size:13px;color:#111827;font-weight:800}
+        .mj-desc{white-space:pre-wrap;color:#374151;font-size:13px;line-height:1.5}
+        .mj-actions{display:flex;gap:8px;flex-wrap:wrap}
+        .mj-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace}
+        .mj-divider{height:1px;background:var(--border,#e5e7eb);margin:10px 0}
+        .mj-thumb{width:100%;max-height:180px;object-fit:cover;border-radius:12px;border:1px solid var(--border,#e5e7eb);background:#fff}
+        .mj-thumb-contain{object-fit:contain}
+        .mj-file-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+        .mj-filebtn{display:inline-flex;align-items:center;gap:8px;padding:10px 12px;border-radius:12px;border:1px dashed rgba(0,0,0,.2);background:#fff;font-weight:900;font-size:13px;cursor:pointer}
+        .mj-filebtn:hover{background:#f9fafb}
+        .mj-note{font-size:12px;color:#6b7280;line-height:1.4}
+        .mj-alert{padding:10px;border-radius:12px;border:1px solid var(--border,#e5e7eb);background:#fff;font-size:13px}
+        .mj-alert-danger{border-color:var(--red,#ef4444);color:var(--red,#ef4444);background:#fff}
+        .mj-alert-ok{border-color:#22c55e;color:#166534;background:#f0fdf4}
+        @media (max-width: 920px){
+          .myjob-body{grid-template-columns:1fr}
+        }
+      `}</style>
 
-        {jobs.length === 0 ? (
-          <div style={{ color: "#6b7280" }}>No approved jobs yet.</div>
+      <div className="myjobs-top">
+        <div>
+          <div className="myjobs-title">My Jobs</div>
+          <div className="myjobs-sub">
+            Your approved jobs list. Use <b>Check In/Out</b> when job is ongoing. Upload parking receipt if required.
+          </div>
+        </div>
+
+        <div className="mj-chip-row">
+          {loc ? (
+            <Chip tone="green" title="Your live GPS is ready">
+              GPS ready · ±{loc.acc ? Math.round(loc.acc) : "—"}m
+            </Chip>
+          ) : (
+            <Chip tone="red" title={locMsg}>
+              GPS pending
+            </Chip>
+          )}
+        </div>
+      </div>
+
+      <div className="myjobs-list">
+        {loadingJobs ? (
+          <div className="myjob-card">
+            <div className="myjob-head">
+              <div className="myjob-title">Loading…</div>
+              <div className="mj-muted" style={{ marginTop: 6 }}>
+                Fetching your approved jobs.
+              </div>
+            </div>
+          </div>
+        ) : jobs.length === 0 ? (
+          <div className="myjob-card">
+            <div className="myjob-head">
+              <div className="myjob-title">No approved jobs yet</div>
+              <div className="mj-muted" style={{ marginTop: 6 }}>
+                Once a PM approves you, the job will appear here.
+              </div>
+            </div>
+          </div>
         ) : (
           jobs.map((j) => {
             const s = scannerInfo[j.id];
@@ -803,308 +927,291 @@ export default function MyJobs({ navigate, user }) {
             const ec = j.earlyCall || {};
             const payForViewer = buildPayForViewer(j, user);
 
+            const breakEnabled = isBreakEnabled(j);
+
             const receipt = myReceipts[j.id];
             const draft = receiptDrafts[j.id] || {};
             const receiptImg = toAbsUrl(pickReceiptUrl(receipt));
             const receiptUpdatedAt = receipt?.updatedAt || receipt?.createdAt || receipt?.uploadedAt || null;
             const broken = !!receiptImgBroken[j.id];
 
+            const statusTone = j.status === "ongoing" ? "green" : j.status === "upcoming" ? "amber" : "gray";
+
             return (
-              <div key={j.id} className="card" style={{ marginBottom: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>{j.title}</div>
-                    <div className="status" style={{ marginTop: 6 }}>
-                      {j.myStatus} · {j.status}
-                    </div>
-                    <div style={{ color: "#374151", marginTop: 4 }}>{fmtRange(j.startTime, j.endTime)}</div>
-
-                    <div style={{ marginTop: 8, display: "grid", gap: 6 }}>
-                      <div>
-                        <strong>Session</strong> <span style={{ marginLeft: 8 }}>{label}</span>
-                      </div>
-                      <div>
-                        <strong>Venue</strong> <span style={{ marginLeft: 8 }}>{j.venue || "-"}</span>
-                      </div>
-                      <div>
-                        <strong>Description</strong>
-                        <div style={{ marginTop: 4, color: "#374151" }}>{j.description || "-"}</div>
-                      </div>
-                      <div>
-                        <strong>Transport</strong>
-                        <div style={{ marginTop: 6 }}>
-                          <TransportBadges job={j} />
-                        </div>
-                        {pa != null && (
-                          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                            ATAG Bus allowance: RM{pa} per person (if selected)
-                          </div>
-                        )}
-                      </div>
-
-                      <div style={{ display: "grid", gap: 4 }}>
-                        <div>
-                          <strong>Allowances</strong>
-                        </div>
-                        <div style={{ fontSize: 14, color: "#374151" }}>
-                          Early Call: {ec?.enabled ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)` : "No"}
-                        </div>
-                        <div style={{ fontSize: 14, color: "#374151" }}>
-                          Loading & Unloading:{" "}
-                          {lu?.enabled ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})` : "No"}
-                        </div>
-                        <div style={{ fontSize: 14, color: "#374151" }}>
-                          Break QR: {j.breakEnabled ? "Enabled" : "Disabled"}
-                        </div>
-                      </div>
-
-                      <div>
-                        <strong>Pay</strong>
-                        <div
-                          style={{
-                            marginTop: 6,
-                            fontFamily:
-                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                            fontSize: 13,
-                            lineHeight: 1.5,
-                          }}
-                        >
-                          {payForViewer}
-                        </div>
+              <div key={j.id} className="myjob-card">
+                <div className="myjob-head">
+                  <div className="myjob-head-row">
+                    <div>
+                      <div className="myjob-title">{j.title}</div>
+                      <div className="myjob-meta">
+                        <Chip tone="indigo">{String(j.myStatus || "unknown")}</Chip>
+                        <Chip tone={statusTone}>{String(j.status || "unknown")}</Chip>
+                        <Chip tone="gray">{fmtRange(j.startTime, j.endTime)}</Chip>
+                        {isVirtual ? <Chip tone="indigo">Virtual</Chip> : null}
+                        {!isVirtual && j.status === "ongoing" ? (
+                          <Chip
+                            tone={dist != null && dist <= 250 ? "green" : dist != null && dist > 250 ? "amber" : "gray"}
+                            title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}
+                          >
+                            Scanner: {dist == null ? "—" : `${dist} m`}
+                          </Chip>
+                        ) : null}
                       </div>
                     </div>
 
-                    <div style={{ marginTop: 10, fontSize: 14 }}>
-                      <strong>Your location:</strong>{" "}
-                      <span style={{ color: loc ? "#374151" : "#b91c1c" }}>{yourLocLine}</span>
-                    </div>
+                    <div className="mj-actions">
+                      <button className="btn" onClick={() => navigate(`#/jobs/${j.id}`)}>
+                        View details
+                      </button>
 
-                    <div
-                      style={{
-                        marginTop: 6,
-                        display: "flex",
-                        gap: 10,
-                        alignItems: "center",
-                        color: "#374151",
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      {j.status === "ongoing" && !isVirtual && (
-                        <span className="status" title={s?.updatedAt ? `updated ${dayjs(s.updatedAt).format("HH:mm:ss")}` : ""}>
-                          Scanner distance: {dist == null ? "—" : `${dist} m`}
-                        </span>
-                      )}
-                      {isVirtual && (
-                        <span className="status" style={{ background: "#eef2ff", color: "#3730a3" }}>
-                          Virtual · PM will mark
-                        </span>
+                      {j.myStatus === "approved" && (
+                        <a href={DISCORD_URL} target="_blank" rel="noreferrer" className="btn" style={BTN_BLACK_STYLE}>
+                          Join Discord
+                        </a>
                       )}
                     </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 8, alignItems: "start" }}>
-                    <button className="btn" onClick={() => navigate(`#/jobs/${j.id}`)}>
-                      View details
-                    </button>
-                    {j.myStatus === "approved" && (
-                      <a href={DISCORD_URL} target="_blank" rel="noreferrer" className="btn" style={BTN_BLACK_STYLE}>
-                        Join Discord Channel
-                      </a>
-                    )}
                   </div>
                 </div>
 
-                {/* ✅ COMBINED ONE BUTTON */}
-                {!isVirtual && (
-                  <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                    <button className="btn primary" onClick={() => openQRModal(j)}>
-                      Check In/Out
-                    </button>
-                  </div>
-                )}
-
-                {/* ================= Parking Receipt Uploader (Part-timer) ================= */}
-                {isPT && (
-                  <div
-                    style={{
-                      marginTop: 12,
-                      paddingTop: 12,
-                      borderTop: "1px solid var(--border)",
-                      display: "grid",
-                      gap: 10,
-                    }}
-                  >
-                    <div style={{ fontWeight: 800 }}>Parking Receipt</div>
-
-                    {receipt ? (
-                      <div
-                        style={{
-                          border: "1px solid var(--border)",
-                          borderRadius: 10,
-                          padding: 10,
-                          display: "grid",
-                          gap: 8,
-                          background: "#fafafa",
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                          <div style={{ fontSize: 13, color: "#374151" }}>
-                            <strong>Status:</strong> Uploaded
-                            {receiptUpdatedAt ? (
-                              <span style={{ color: "#6b7280" }}> · {dayjs(receiptUpdatedAt).format("YYYY/MM/DD HH:mm")}</span>
-                            ) : null}
-                          </div>
-
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                            <button className="btn" onClick={() => refreshMyReceipt(j.id)} disabled={!!draft.uploading}>
-                              Refresh
-                            </button>
-
-                            <button className="btn" onClick={() => openReceiptViewer(j, receipt)} disabled={!!draft.uploading}>
-                              View
-                            </button>
-
-                            <button className="btn" onClick={() => removeMyReceipt(j.id)} disabled={!!draft.uploading}>
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-
-                        {broken ? (
-                          <div
-                            style={{
-                              padding: 10,
-                              border: "1px solid var(--red)",
-                              borderRadius: 8,
-                              color: "var(--red)",
-                            }}
-                          >
-                            Receipt record exists, but the image file cannot be loaded (missing on server). You can click{" "}
-                            <strong>Remove</strong> to clean it up.
-                          </div>
-                        ) : null}
-
-                        {receiptImg ? (
-                          <img
-                            src={receiptImg}
-                            alt="Parking receipt"
-                            loading="lazy"
-                            decoding="async"
-                            onError={() => setReceiptImgBroken((p) => ({ ...p, [j.id]: true }))}
-                            style={{
-                              width: "min(520px, 100%)",
-                              maxHeight: 360,
-                              objectFit: "contain",
-                              borderRadius: 8,
-                              border: "1px solid var(--border)",
-                              background: "#fff",
-                            }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: 12, color: "#6b7280" }}>
-                            Receipt uploaded, but image URL not available yet. Tap <strong>Refresh</strong>.
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 13, color: "#6b7280" }}>No receipt uploaded yet.</div>
-                    )}
-
-                    <div
-                      style={{
-                        border: "1px solid var(--border)",
-                        borderRadius: 10,
-                        padding: 10,
-                        display: "grid",
-                        gap: 10,
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                        <div style={{ fontSize: 13, color: "#374151" }}>
-                          <strong>Upload / Replace</strong> <span style={{ color: "#6b7280" }}>(max 2MB)</span>
-                        </div>
-
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          <button
-                            className="btn"
-                            onClick={() => {
-                              setDraft(j.id, { fileName: "", dataUrl: "", error: "", okMsg: "" });
-                              clearFileInput(j.id);
-                            }}
-                            disabled={!!draft.uploading}
-                          >
-                            Clear
-                          </button>
-                          <button
-                            className="btn primary"
-                            onClick={() => uploadReceipt(j)}
-                            disabled={!!draft.uploading || !draft.dataUrl}
-                          >
-                            {draft.uploading ? "Uploading…" : "Upload"}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div style={{ display: "grid", gap: 8 }}>
-                        <input
-                          ref={(el) => {
-                            if (el) receiptFileRef.current[j.id] = el;
-                          }}
-                          type="file"
-                          accept="image/*"
-                          onChange={(e) => pickReceiptFile(j.id, e.target.files?.[0] || null)}
+                <div className="myjob-body">
+                  {/* LEFT: Job info */}
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div className="mj-panel mj-panel-white">
+                      <div className="mj-panel-title">Quick info</div>
+                      <div className="mj-grid">
+                        <KeyVal k="Session" v={label} />
+                        <KeyVal k="Venue" v={j.venue || "-"} />
+                        <KeyVal
+                          k="Pay"
+                          v={
+                            <span className="mj-mono" style={{ fontWeight: 900 }}>
+                              {payForViewer}
+                            </span>
+                          }
                         />
+                        <KeyVal
+                          k="Break QR"
+                          v={
+                            <span style={{ fontWeight: 900, color: breakEnabled ? "#047857" : "#6b7280" }}>
+                              {breakEnabled ? "Enabled" : "Disabled"}
+                            </span>
+                          }
+                        />
+                      </div>
 
-                        {draft.fileName ? (
-                          <div style={{ fontSize: 12, color: "#6b7280" }}>
-                            Selected: <strong>{draft.fileName}</strong>
-                          </div>
-                        ) : null}
+                      <div className="mj-divider" />
 
-                        {draft.dataUrl ? (
-                          <img
-                            src={draft.dataUrl}
-                            alt="Receipt preview"
-                            loading="lazy"
-                            decoding="async"
-                            style={{
-                              width: "min(520px, 100%)",
-                              maxHeight: 360,
-                              objectFit: "contain",
-                              borderRadius: 8,
-                              border: "1px solid var(--border)",
-                              background: "#fff",
-                            }}
-                          />
-                        ) : null}
+                      <div className="mj-panel-title" style={{ marginBottom: 6 }}>
+                        Transport
+                      </div>
+                      <TransportBadges job={j} />
+                      {pa != null ? (
+                        <div className="mj-note" style={{ marginTop: 6 }}>
+                          Transport allowance: RM{pa} per person (if selected)
+                        </div>
+                      ) : null}
+                    </div>
 
-                        {draft.error ? (
-                          <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
-                            {draft.error}
-                          </div>
-                        ) : null}
-
-                        {draft.okMsg ? (
-                          <div
-                            style={{
-                              padding: 10,
-                              border: "1px solid #22c55e",
-                              borderRadius: 8,
-                              color: "#166534",
-                              background: "#f0fdf4",
-                            }}
-                          >
-                            {draft.okMsg}
-                          </div>
-                        ) : null}
-
-                        <div style={{ fontSize: 12, color: "#6b7280" }}>
-                          Tip: screenshot/crop the receipt first so it stays under 2MB.
+                    <div className="mj-panel mj-panel-white">
+                      <div className="mj-panel-title">Allowances</div>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        <div style={{ fontSize: 13, color: "#374151" }}>
+                          <b>Early Call:</b>{" "}
+                          {ec?.enabled
+                            ? `Yes (RM${Number(ec.amount || 0)}, ≥ ${Number(ec.thresholdHours || 0)}h)`
+                            : "No"}
+                        </div>
+                        <div style={{ fontSize: 13, color: "#374151" }}>
+                          <b>Loading & Unloading:</b>{" "}
+                          {lu?.enabled ? `Yes (RM${Number(lu.price || 0)} / helper, quota ${Number(lu.quota || 0)})` : "No"}
                         </div>
                       </div>
+
+                      <div className="mj-divider" />
+
+                      <div className="mj-panel-title" style={{ marginBottom: 6 }}>
+                        Description
+                      </div>
+                      <div className="mj-desc">{j.description || "-"}</div>
                     </div>
                   </div>
-                )}
+
+                  {/* RIGHT: Attendance + Receipt */}
+                  <div style={{ display: "grid", gap: 12 }}>
+                    <div className="mj-panel">
+                      <div className="mj-panel-title">Attendance</div>
+
+                      <div className="mj-chip-row" style={{ marginBottom: 8 }}>
+                        {loc ? (
+                          <Chip tone="green">GPS OK</Chip>
+                        ) : (
+                          <Chip tone="red" title="Please allow location permission">
+                            GPS required
+                          </Chip>
+                        )}
+
+                        {isVirtual ? <Chip tone="indigo">PM will mark</Chip> : <Chip tone="gray">Scan at venue</Chip>}
+
+                        {!isVirtual && j.status !== "ongoing" ? <Chip tone="amber">Opens when ongoing</Chip> : null}
+                      </div>
+
+                      <div className="mj-note" style={{ marginBottom: 10 }}>
+                        <b>Your location:</b> <span style={{ color: loc ? "#374151" : "#b91c1c" }}>{yourLocLine}</span>
+                      </div>
+
+                      {!isVirtual ? (
+                        <button className="btn primary" onClick={() => openQRModal(j)} style={{ width: "100%" }}>
+                          Check In/Out
+                        </button>
+                      ) : (
+                        <div className="mj-alert">
+                          This is a <b>virtual job</b>. No QR scan is required — PM/Admin will mark your attendance.
+                        </div>
+                      )}
+
+                      {!isVirtual && j.status === "ongoing" ? (
+                        <div className="mj-note" style={{ marginTop: 10 }}>
+                          Tip: if “too far”, move closer to the event scanner area and tap <b>Regenerate</b>.
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {/* ================= Parking Receipt (Part-timer) ================= */}
+                    {isPT && (
+                      <div className="mj-panel">
+                        <div className="mj-panel-title">Parking Receipt</div>
+
+                        {/* Existing receipt */}
+                        {receipt ? (
+                          <div className="mj-panel mj-panel-white" style={{ padding: 10 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                              <div className="mj-note">
+                                <b>Status:</b> Uploaded
+                                {receiptUpdatedAt ? (
+                                  <span style={{ color: "#6b7280" }}> · {dayjs(receiptUpdatedAt).format("YYYY/MM/DD HH:mm")}</span>
+                                ) : null}
+                              </div>
+
+                              <div className="mj-actions">
+                                <button className="btn" onClick={() => refreshMyReceipt(j.id)} disabled={!!draft.uploading}>
+                                  Refresh
+                                </button>
+                                <button
+                                  className="btn"
+                                  onClick={() => openReceiptViewer(j, receipt)}
+                                  disabled={!!draft.uploading}
+                                >
+                                  View
+                                </button>
+                                <button className="btn" onClick={() => removeMyReceipt(j.id)} disabled={!!draft.uploading}>
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+
+                            {broken ? (
+                              <div className="mj-alert mj-alert-danger" style={{ marginTop: 10 }}>
+                                Receipt record exists, but the image file cannot be loaded (missing on server). You can click{" "}
+                                <b>Remove</b> to clean it up.
+                              </div>
+                            ) : null}
+
+                            {receiptImg ? (
+                              <img
+                                src={receiptImg}
+                                alt="Parking receipt"
+                                loading="lazy"
+                                decoding="async"
+                                onError={() => setReceiptImgBroken((p) => ({ ...p, [j.id]: true }))}
+                                className="mj-thumb mj-thumb-contain"
+                                style={{ marginTop: 10 }}
+                              />
+                            ) : (
+                              <div className="mj-note" style={{ marginTop: 8 }}>
+                                Receipt uploaded, but image URL not available yet. Tap <b>Refresh</b>.
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="mj-note">No receipt uploaded yet.</div>
+                        )}
+
+                        {/* Upload / Replace */}
+                        <div className="mj-panel mj-panel-white" style={{ marginTop: 10 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                            <div className="mj-note">
+                              <b>Upload / Replace</b> <span style={{ color: "#6b7280" }}>(max 2MB)</span>
+                            </div>
+
+                            <div className="mj-actions">
+                              <button
+                                className="btn"
+                                onClick={() => {
+                                  setDraft(j.id, { fileName: "", dataUrl: "", error: "", okMsg: "" });
+                                  clearFileInput(j.id);
+                                }}
+                                disabled={!!draft.uploading}
+                              >
+                                Clear
+                              </button>
+                              <button
+                                className="btn primary"
+                                onClick={() => uploadReceipt(j)}
+                                disabled={!!draft.uploading || !draft.dataUrl}
+                              >
+                                {draft.uploading ? "Uploading…" : "Upload"}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                            {/* Hidden input, nicer chooser */}
+                            <input
+                              ref={(el) => {
+                                if (el) receiptFileRef.current[j.id] = el;
+                              }}
+                              type="file"
+                              accept="image/*"
+                              style={{ display: "none" }}
+                              onChange={(e) => pickReceiptFile(j.id, e.target.files?.[0] || null)}
+                            />
+
+                            <div className="mj-file-row">
+                              <button
+                                type="button"
+                                className="mj-filebtn"
+                                onClick={() => receiptFileRef.current?.[j.id]?.click?.()}
+                                disabled={!!draft.uploading}
+                                title="Choose an image (JPG/PNG/WebP)"
+                              >
+                                📎 Choose image
+                              </button>
+
+                              {draft.fileName ? <Chip tone="gray">Selected: {draft.fileName}</Chip> : <Chip tone="gray">No file</Chip>}
+                            </div>
+
+                            {draft.dataUrl ? (
+                              <img
+                                src={draft.dataUrl}
+                                alt="Receipt preview"
+                                loading="lazy"
+                                decoding="async"
+                                className="mj-thumb mj-thumb-contain"
+                              />
+                            ) : null}
+
+                            {draft.error ? <div className="mj-alert mj-alert-danger">{draft.error}</div> : null}
+                            {draft.okMsg ? <div className="mj-alert mj-alert-ok">{draft.okMsg}</div> : null}
+
+                            <div className="mj-note">
+                              Tip: screenshot/crop the receipt first so it stays under 2MB.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             );
           })
@@ -1133,16 +1240,21 @@ export default function MyJobs({ navigate, user }) {
             style={{
               width: "min(860px, 96vw)",
               background: "#fff",
-              borderRadius: 12,
+              borderRadius: 14,
               padding: 16,
               boxShadow: "0 10px 30px rgba(0,0,0,.25)",
+              border: "1px solid rgba(255,255,255,.2)",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 900, fontSize: 16 }}>Parking Receipt — {receiptViewMeta.jobTitle}</div>
+                <div style={{ fontWeight: 950, fontSize: 16 }}>
+                  Parking Receipt — {receiptViewMeta.jobTitle}
+                </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                  {receiptViewMeta.updatedAt ? `Uploaded: ${dayjs(receiptViewMeta.updatedAt).format("YYYY/MM/DD HH:mm")}` : "Uploaded: —"}
+                  {receiptViewMeta.updatedAt
+                    ? `Uploaded: ${dayjs(receiptViewMeta.updatedAt).format("YYYY/MM/DD HH:mm")}`
+                    : "Uploaded: —"}
                   {receiptViewMeta.amount != null ? ` · Amount: RM${Number(receiptViewMeta.amount)}` : ""}
                   {receiptViewMeta.note ? ` · Note: ${receiptViewMeta.note}` : ""}
                 </div>
@@ -1167,7 +1279,7 @@ export default function MyJobs({ navigate, user }) {
 
             <div style={{ marginTop: 12 }}>
               {receiptViewErr ? (
-                <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
+                <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 12, color: "var(--red)" }}>
                   {receiptViewErr}
                 </div>
               ) : receiptViewLoading ? (
@@ -1181,7 +1293,7 @@ export default function MyJobs({ navigate, user }) {
                     width: "100%",
                     maxHeight: "72vh",
                     objectFit: "contain",
-                    borderRadius: 10,
+                    borderRadius: 12,
                     border: "1px solid var(--border)",
                     background: "#fff",
                   }}
@@ -1194,7 +1306,7 @@ export default function MyJobs({ navigate, user }) {
         </div>
       )}
 
-      {/* ---------- QR MODAL (UPDATED) ---------- */}
+      {/* ---------- QR MODAL ---------- */}
       {qrOpen && (
         <div
           className="modal-overlay"
@@ -1216,20 +1328,27 @@ export default function MyJobs({ navigate, user }) {
             style={{
               width: "min(560px, 92vw)",
               background: "#fff",
-              borderRadius: 12,
+              borderRadius: 14,
               padding: 16,
               boxShadow: "0 10px 30px rgba(0,0,0,.25)",
             }}
           >
-            <div style={{ fontWeight: 900, fontSize: 16, marginBottom: 8 }}>
-              {qrJob
-                ? `${qrMode === "work" ? "Work" : "Break"} ${qrDir === "in" ? "In" : "Out"} QR — ${qrJob.title}`
-                : "QR"}
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 950, fontSize: 16 }}>
+                {qrJob ? `${qrJob.title}` : "QR"}
+              </div>
+              <button className="btn" onClick={closeQR}>
+                Close
+              </button>
             </div>
 
-            {/* Mode Switch: Work / Break (Break only if enabled) */}
+            <div className="mj-note" style={{ marginTop: 6 }}>
+              Choose <b>Work</b> or <b>Break</b> (only appears if enabled), then show the QR to PM scanner.
+            </div>
+
+            {/* Mode Switch */}
             {qrJob && (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
                 <button
                   className="btn"
                   style={qrMode === "work" ? { background: "#111827", color: "#fff", borderColor: "#111827" } : undefined}
@@ -1243,7 +1362,7 @@ export default function MyJobs({ navigate, user }) {
                   Work
                 </button>
 
-                {qrJob.breakEnabled && (
+                {isBreakEnabled(qrJob) && (
                   <button
                     className="btn"
                     style={qrMode === "break" ? { background: "#111827", color: "#fff", borderColor: "#111827" } : undefined}
@@ -1260,9 +1379,9 @@ export default function MyJobs({ navigate, user }) {
               </div>
             )}
 
-            {/* Dir Switch: In / Out */}
+            {/* Dir Switch */}
             {qrJob && !qrError && (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
                 <button
                   className="btn"
                   style={qrDir === "in" ? { background: "#22c55e", color: "#fff", borderColor: "#22c55e" } : undefined}
@@ -1288,34 +1407,38 @@ export default function MyJobs({ navigate, user }) {
               </div>
             )}
 
-            {qrError ? (
-              <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 8, color: "var(--red)" }}>
-                {qrError}
-              </div>
-            ) : (
-              <>
-                <div style={{ display: "flex", justifyContent: "center", margin: "6px 0 10px" }}>
-                  {qrBusy ? (
-                    <div style={{ color: "#6b7280" }}>Generating QR…</div>
-                  ) : qrToken ? (
-                    <img
-                      src={qrImgSrc}
-                      alt="QR code"
-                      style={{ width: 260, height: 260, borderRadius: 8, border: "1px solid var(--border)" }}
-                    />
-                  ) : (
-                    <div style={{ color: "#6b7280" }}>No token.</div>
-                  )}
+            <div style={{ marginTop: 12 }}>
+              {qrError ? (
+                <div style={{ padding: 10, border: "1px solid var(--red)", borderRadius: 12, color: "var(--red)" }}>
+                  {qrError}
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                  Show this QR to the PM scanner. Token is valid for about 60 seconds.
-                </div>
-                <div style={{ marginTop: 10 }}>
-                  <label style={{ fontWeight: 700 }}>Token (fallback)</label>
-                  <input readOnly value={qrToken} />
-                </div>
-              </>
-            )}
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "center", margin: "10px 0 10px" }}>
+                    {qrBusy ? (
+                      <div style={{ color: "#6b7280" }}>Generating QR…</div>
+                    ) : qrToken ? (
+                      <img
+                        src={qrImgSrc}
+                        alt="QR code"
+                        style={{ width: 260, height: 260, borderRadius: 12, border: "1px solid var(--border)" }}
+                      />
+                    ) : (
+                      <div style={{ color: "#6b7280" }}>No token.</div>
+                    )}
+                  </div>
+
+                  <div className="mj-note">
+                    Token validity: about <b>60 seconds</b>. If it expires, tap <b>Regenerate</b>.
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <label style={{ fontWeight: 900, fontSize: 13 }}>Token (fallback)</label>
+                    <input readOnly value={qrToken} className="mj-mono" />
+                  </div>
+                </>
+              )}
+            </div>
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
               <button className="btn" onClick={closeQR}>
