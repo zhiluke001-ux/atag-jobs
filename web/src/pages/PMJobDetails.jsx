@@ -86,7 +86,8 @@ function extractDirFromToken(token) {
   try {
     if (!token || !token.includes(".")) return null;
     const payload = JSON.parse(b64urlDecode(token.split(".")[1]));
-    return payload?.dir ?? null; // "in" | "out" | "break_in" | "break_out" ...
+    // supports: "in" | "out" | "break_in" | "break_out"
+    return payload?.dir ?? null;
   } catch {
     return null;
   }
@@ -139,6 +140,27 @@ function isVirtualJob(j) {
   if (isVirtualStr(j.physicalSubtype)) return true;
   if (isVirtualStr(j.physicalType)) return true;
   if (isVirtualStr(j.session?.physicalType)) return true;
+  return false;
+}
+
+/* hourly detector (for break deduction display) */
+function isHourlyJob(job) {
+  if (!job) return false;
+  const kind =
+    job?.rate?.sessionKind ||
+    job?.sessionKind ||
+    job?.physicalSubtype ||
+    job?.session?.physicalType ||
+    null;
+
+  const mode =
+    job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : null);
+
+  if (mode === "virtual" || kind === "virtual") return true;
+  if (kind === "hourly_by_role" || kind === "hourly_flat") return true;
+
+  if (job?.session?.hourlyEnabled || job?.physicalHourlyEnabled) return true;
+
   return false;
 }
 
@@ -210,150 +232,34 @@ async function apiGetFallback(urls, fallbackValue) {
   return fallbackValue;
 }
 
-/* ---------------- Break helpers ---------------- */
-function normDirValue(dir) {
-  if (!dir) return null;
-  const d = String(dir).trim().toLowerCase().replace(/\s+/g, "_").replace(/-/g, "_");
-  if (d === "in") return "in";
-  if (d === "out") return "out";
-
-  // break variants
-  if (d === "break_in" || d === "breakstart" || d === "break_start" || d === "breakin") return "break_in";
-  if (d === "break_out" || d === "breakend" || d === "break_end" || d === "breakout") return "break_out";
-
-  return d; // allow future dirs (but we only special-handle the above)
+/* break rounding: 1.5 -> 2, 1.3 -> 1 (nearest integer hour) */
+function roundHoursNearest(minutes) {
+  if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  return Math.round(minutes / 60);
 }
 
-function pickMapValue(mapObj, keys) {
-  if (!mapObj || !keys?.length) return null;
-  for (const k of keys) {
-    if (k && mapObj[k]) return mapObj[k];
-  }
-  return null;
-}
+function extractBreakTimes(rec) {
+  if (!rec || typeof rec !== "object") return { breakIn: null, breakOut: null };
 
-function coerceIso(t) {
-  if (!t) return null;
-  try {
-    const d = dayjs(t);
-    if (!d.isValid()) return null;
-    return d.toISOString();
-  } catch {
-    return null;
-  }
-}
+  const breakIn =
+    rec.breakIn ||
+    rec.break_in ||
+    rec.breakStart ||
+    rec.break_start ||
+    rec.break?.in ||
+    rec.break?.start ||
+    null;
 
-/**
- * Extract breaks from a record. Supports:
- * - rec.breaks: [{ start/end } or { in/out } ...]
- * - rec.break: { start/end } or { in/out }
- * - rec.breakIn/breakOut or breakStart/breakEnd
- * - rec.breakInAt/breakOutAt
- *
- * Returns:
- * { segments: [{startIso,endIso}], activeStartIso, totalMinutes, lastStartIso, lastEndIso, onBreak }
- */
-function extractBreakInfo(rec, nowIso) {
-  const out = {
-    segments: [],
-    activeStartIso: null,
-    totalMinutes: 0,
-    lastStartIso: null,
-    lastEndIso: null,
-    onBreak: false,
-  };
-  if (!rec) return out;
+  const breakOut =
+    rec.breakOut ||
+    rec.break_out ||
+    rec.breakEnd ||
+    rec.break_end ||
+    rec.break?.out ||
+    rec.break?.end ||
+    null;
 
-  const addSeg = (s, e) => {
-    const startIso = coerceIso(s);
-    const endIso = coerceIso(e);
-    if (startIso && endIso) out.segments.push({ startIso, endIso });
-    else if (startIso && !endIso) out.activeStartIso = startIso; // one active break at a time
-  };
-
-  // A) array style
-  if (Array.isArray(rec.breaks)) {
-    for (const b of rec.breaks) {
-      if (!b) continue;
-      addSeg(b.start ?? b.in ?? b.breakIn ?? b.breakStart ?? b.begin ?? b.from, b.end ?? b.out ?? b.breakOut ?? b.breakEnd ?? b.to);
-    }
-  }
-
-  // B) object style
-  const bObj = rec.break || rec.breakTime || rec.break_session || null;
-  if (bObj && typeof bObj === "object") {
-    // could be a single segment or active
-    addSeg(
-      bObj.start ?? bObj.in ?? bObj.breakIn ?? bObj.breakStart ?? bObj.begin ?? bObj.from,
-      bObj.end ?? bObj.out ?? bObj.breakOut ?? bObj.breakEnd ?? bObj.to
-    );
-  }
-
-  // C) flat fields
-  addSeg(
-    rec.breakIn ?? rec.breakStart ?? rec.breakInAt ?? rec.break_start,
-    rec.breakOut ?? rec.breakEnd ?? rec.breakOutAt ?? rec.break_end
-  );
-
-  // Compute totals
-  const now = dayjs(nowIso || new Date().toISOString());
-  let totalMin = 0;
-
-  for (const seg of out.segments) {
-    const s = dayjs(seg.startIso);
-    const e = dayjs(seg.endIso);
-    const m = e.diff(s, "minute");
-    if (Number.isFinite(m) && m > 0) totalMin += m;
-  }
-
-  if (out.activeStartIso) {
-    out.onBreak = true;
-    const s = dayjs(out.activeStartIso);
-    const m = now.diff(s, "minute");
-    if (Number.isFinite(m) && m > 0) totalMin += m; // include active break duration (for visibility)
-  }
-
-  out.totalMinutes = totalMin;
-
-  // last segment info
-  const allSegs = [...out.segments];
-  if (out.activeStartIso) allSegs.push({ startIso: out.activeStartIso, endIso: null });
-  if (allSegs.length) {
-    const last = allSegs[allSegs.length - 1];
-    out.lastStartIso = last.startIso || null;
-    out.lastEndIso = last.endIso || null;
-  }
-
-  return out;
-}
-
-/* hourly helpers (best effort) */
-function isHourlyJob(job) {
-  const t = String(
-    job?.rateType ??
-      job?.payType ??
-      job?.paymentType ??
-      job?.wageType ??
-      job?.salaryType ??
-      job?.rate?.type ??
-      job?.rate?.kind ??
-      ""
-  )
-    .toLowerCase()
-    .trim();
-  return t.includes("hour");
-}
-function getHourlyRate(job) {
-  const candidates = [
-    job?.hourlyRate,
-    job?.ratePerHour,
-    job?.rate?.perHour,
-    job?.rate?.hourly,
-    job?.rate?.amount,
-    job?.rateAmount,
-  ];
-  const v = candidates.find((x) => x != null && x !== "" && Number.isFinite(Number(x)));
-  return v == null ? null : Number(v);
+  return { breakIn, breakOut };
 }
 
 /* ---------------- UI helpers ---------------- */
@@ -364,7 +270,6 @@ function Chip({ children, tone = "gray" }) {
     violet: { bg: "#ede9fe", fg: "#5b21b6", bd: "#ddd6fe" },
     green: { bg: "#dcfce7", fg: "#065f46", bd: "#bbf7d0" },
     red: { bg: "#fee2e2", fg: "#991b1b", bd: "#fecaca" },
-    amber: { bg: "#ffedd5", fg: "#9a3412", bd: "#fed7aa" },
   };
   const t = tones[tone] || tones.gray;
   return (
@@ -476,7 +381,9 @@ function CollapsibleSection({ title, count, open, onToggle, subtitle, children }
         </div>
       </button>
 
-      <div style={{ display: open ? "block" : "none", padding: 14, background: "#ffffff" }}>{children}</div>
+      <div style={{ display: open ? "block" : "none", padding: 14, background: "#ffffff" }}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -613,6 +520,9 @@ export default function PMJobDetails({ jobId }) {
   // addon toggles busy
   const [addonBusy, setAddonBusy] = useState({}); // { "<userId>:<kind>": boolean }
 
+  // break toggle busy
+  const [breakBusy, setBreakBusy] = useState(false);
+
   // ✅ Collapsible sections (black toggles)
   const SECTIONS_KEY = (id) => `atag.jobs.${id}.pmjobdetails.sections`;
   const [sections, setSections] = useState({
@@ -620,16 +530,18 @@ export default function PMJobDetails({ jobId }) {
     approved: true,
     rejected: false,
     attendance: true,
+    break: true,
   });
 
   useEffect(() => {
     try {
+      if (typeof window === "undefined") return;
       const raw = localStorage.getItem(SECTIONS_KEY(jobId));
       if (raw) {
         const parsed = JSON.parse(raw);
         setSections((prev) => ({ ...prev, ...parsed }));
       } else {
-        setSections({ applied: true, approved: true, rejected: false, attendance: true });
+        setSections({ applied: true, approved: true, rejected: false, attendance: true, break: true });
       }
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -637,6 +549,7 @@ export default function PMJobDetails({ jobId }) {
 
   useEffect(() => {
     try {
+      if (typeof window === "undefined") return;
       localStorage.setItem(SECTIONS_KEY(jobId), JSON.stringify(sections));
     } catch {}
   }, [sections, jobId]);
@@ -655,11 +568,8 @@ export default function PMJobDetails({ jobId }) {
   const scanLockRef = useRef({
     in: new Set(),
     out: new Set(),
-  });
-
-  // ✅ Break quick guard (prevents accidental double break scans before reload)
-  const breakLocalStateRef = useRef({
-    onBreak: new Set(), // userKey set if currently on break (best-effort)
+    break_in: new Set(),
+    break_out: new Set(),
   });
 
   // geo
@@ -719,19 +629,6 @@ export default function PMJobDetails({ jobId }) {
         { applicants: [], participants: [] }
       );
       setEarly(ec);
-
-      // Best-effort: refresh local break onBreak set from server state (if server returns it)
-      try {
-        const attendanceMap = merged?.attendance || {};
-        const keys = Object.keys(attendanceMap || {});
-        const s = new Set();
-        const nowIso = new Date().toISOString();
-        for (const k of keys) {
-          const info = extractBreakInfo(attendanceMap[k], nowIso);
-          if (info.onBreak) s.add(k);
-        }
-        breakLocalStateRef.current.onBreak = s;
-      } catch {}
     } catch (e) {
       if (e && e.status === 401) {
         window.location.replace("#/login");
@@ -748,6 +645,7 @@ export default function PMJobDetails({ jobId }) {
   }, [jobId]);
 
   const isVirtual = useMemo(() => isVirtualJob(job), [job]);
+  const hourlyPayJob = useMemo(() => isHourlyJob(job), [job]);
 
   /* lock scroll when scanner open */
   useEffect(() => {
@@ -812,7 +710,15 @@ export default function PMJobDetails({ jobId }) {
     setToken("");
     lastDecodedRef.current = "";
     pendingTokenRef.current = null;
-    scanLockRef.current = { in: new Set(), out: new Set() };
+
+    // reset local scan locks each time scanner opens
+    scanLockRef.current = {
+      in: new Set(),
+      out: new Set(),
+      break_in: new Set(),
+      break_out: new Set(),
+    };
+
     setScannerOpen(true);
   }
   function closeScanner() {
@@ -938,34 +844,6 @@ export default function PMJobDetails({ jobId }) {
     }, 600);
   }
 
-  function getCandidateKeysFromToken(useToken) {
-    const tokenUserKey = extractUserKeyFromToken(useToken);
-    const candidateKeys = [];
-    if (tokenUserKey) candidateKeys.push(tokenUserKey);
-
-    if (tokenUserKey) {
-      const app =
-        (applicants || []).find((a) => a.userId === tokenUserKey || a.email === tokenUserKey) || null;
-      if (app?.userId && app.userId !== tokenUserKey) candidateKeys.push(app.userId);
-      if (app?.email && app.email !== tokenUserKey) candidateKeys.push(app.email);
-    }
-    return candidateKeys.filter(Boolean);
-  }
-
-  function getAttendanceRecordForKeys(candidateKeys) {
-    const attendanceMap = job?.attendance || {};
-    let rec = null;
-    let matchedKey = null;
-    for (const k of candidateKeys) {
-      if (attendanceMap?.[k]) {
-        rec = attendanceMap[k];
-        matchedKey = k;
-        break;
-      }
-    }
-    return { rec, matchedKey };
-  }
-
   async function doScan(manualToken) {
     const useToken = manualToken || token;
     if (!useToken) {
@@ -992,13 +870,23 @@ export default function PMJobDetails({ jobId }) {
       }
     }
 
-    const rawDir = extractDirFromToken(useToken);
-    const tokenDir = normDirValue(rawDir); // in/out/break_in/break_out
+    // ✅ First-scan-wins guard: prevent overwriting IN/OUT / BREAK IN/OUT once already recorded
+    const tokenDir = extractDirFromToken(useToken); // "in" | "out" | "break_in" | "break_out" | null
+    const tokenUserKey = extractUserKeyFromToken(useToken); // userId/email/sub (best effort)
 
-    const candidateKeys = getCandidateKeysFromToken(useToken);
+    // Build candidate keys to match attendance map (userId/email)
+    const candidateKeys = [];
+    if (tokenUserKey) candidateKeys.push(tokenUserKey);
 
-    // local lock for in/out only (first scan wins)
-    if ((tokenDir === "in" || tokenDir === "out") && candidateKeys.length) {
+    if (tokenUserKey) {
+      const app =
+        (applicants || []).find((a) => a.userId === tokenUserKey || a.email === tokenUserKey) || null;
+      if (app?.userId && app.userId !== tokenUserKey) candidateKeys.push(app.userId);
+      if (app?.email && app.email !== tokenUserKey) candidateKeys.push(app.email);
+    }
+
+    // local lock (fast repeated scans before reload)
+    if (tokenDir && candidateKeys.length) {
       const lockSet = scanLockRef.current?.[tokenDir];
       if (lockSet) {
         const hit = candidateKeys.find((k) => lockSet.has(k));
@@ -1006,18 +894,30 @@ export default function PMJobDetails({ jobId }) {
           const when =
             tokenDir === "in"
               ? "Already checked-in (locked). Please scan OUT QR."
-              : "Already checked-out (locked).";
+              : tokenDir === "out"
+              ? "Already checked-out (locked)."
+              : tokenDir === "break_in"
+              ? "Already BREAK-IN (locked). Please scan BREAK-OUT QR."
+              : "Already BREAK-OUT (locked).";
           popupError(when);
           return;
         }
       }
     }
 
-    // server-known guard (prevents overwrite across reloads)
+    // server-known attendance check (prevents overwrite across reloads)
     if (tokenDir && candidateKeys.length) {
-      const { rec } = getAttendanceRecordForKeys(candidateKeys);
+      const attendanceMap = job?.attendance || {};
+      let rec = null;
+      for (const k of candidateKeys) {
+        if (attendanceMap?.[k]) {
+          rec = attendanceMap[k];
+          break;
+        }
+      }
 
-      // Attendance overwrite guard
+      const { breakIn, breakOut } = extractBreakTimes(rec || {});
+
       if (tokenDir === "in" && rec?.in) {
         popupError(`Already checked-in at ${fmtTime(rec.in)}. Please scan OUT QR.`);
         return;
@@ -1026,25 +926,13 @@ export default function PMJobDetails({ jobId }) {
         popupError(`Already checked-out at ${fmtTime(rec.out)}.`);
         return;
       }
-
-      // Break guard (supports multiple breaks, but prevents invalid sequences)
-      if (tokenDir === "break_in" || tokenDir === "break_out") {
-        const nowIso = new Date().toISOString();
-        const bInfo = extractBreakInfo(rec, nowIso);
-
-        // Also fallback to local state (in case server doesn't return break info quickly)
-        const anyKeyOnBreak =
-          candidateKeys.some((k) => breakLocalStateRef.current.onBreak.has(k)) || false;
-        const onBreak = bInfo.onBreak || anyKeyOnBreak;
-
-        if (tokenDir === "break_in" && onBreak) {
-          popupError("Already on break. Please scan BREAK OUT QR.");
-          return;
-        }
-        if (tokenDir === "break_out" && !onBreak) {
-          popupError("No active break found. Please scan BREAK IN QR first.");
-          return;
-        }
+      if (tokenDir === "break_in" && breakIn) {
+        popupError(`Already BREAK-IN at ${fmtTime(breakIn)}. Please scan BREAK-OUT QR.`);
+        return;
+      }
+      if (tokenDir === "break_out" && breakOut) {
+        popupError(`Already BREAK-OUT at ${fmtTime(breakOut)}.`);
+        return;
       }
     }
 
@@ -1057,29 +945,16 @@ export default function PMJobDetails({ jobId }) {
         scannerLng: loc.lng,
       });
 
-      const timeStr = r?.time ? dayjs(r.time).format("HH:mm:ss") : dayjs().format("HH:mm:ss");
-      let msg = `Scan OK at ${timeStr}`;
-
-      if (tokenDir === "break_in") msg = `Break START recorded at ${timeStr}`;
-      if (tokenDir === "break_out") msg = `Break END recorded at ${timeStr}`;
-
+      const msg = `Scan OK at ${dayjs(r.time).format("HH:mm:ss")}`;
       setScanMsg("✅ " + msg);
       setScanPopup({ kind: "success", text: msg });
       vibrateOk();
       setTimeout(() => setScanPopup(null), 1500);
 
-      // lock after success (in/out only)
-      if ((tokenDir === "in" || tokenDir === "out") && candidateKeys.length) {
+      // ✅ lock after success
+      if (tokenDir && candidateKeys.length) {
         const lockSet = scanLockRef.current?.[tokenDir];
         if (lockSet) candidateKeys.forEach((k) => lockSet.add(k));
-      }
-
-      // update local break state best-effort
-      if ((tokenDir === "break_in" || tokenDir === "break_out") && candidateKeys.length) {
-        candidateKeys.forEach((k) => {
-          if (tokenDir === "break_in") breakLocalStateRef.current.onBreak.add(k);
-          if (tokenDir === "break_out") breakLocalStateRef.current.onBreak.delete(k);
-        });
       }
 
       setToken("");
@@ -1210,6 +1085,33 @@ export default function PMJobDetails({ jobId }) {
     }
   }
 
+  async function updateBreakEnabled(enabled) {
+    if (!job) return;
+    setBreakBusy(true);
+
+    // optimistic UI
+    setJob((prev) => (prev ? { ...prev, breakEnabled: enabled } : prev));
+
+    try {
+      await apiPostFallback(
+        [
+          `/jobs/${jobId}/break`,
+          `/jobs/${jobId}/break-time`,
+          `/jobs/${jobId}/break/toggle`,
+          `/jobs/${jobId}/break-enabled`,
+        ],
+        { enabled }
+      );
+      await load(true);
+    } catch (e) {
+      console.error("break toggle failed", e);
+      alert("Failed to update break setting (backend route not found yet).");
+      await load(true);
+    } finally {
+      setBreakBusy(false);
+    }
+  }
+
   /* OT calc (hooks must stay ABOVE any early return) */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
   const actualEndIso =
@@ -1240,45 +1142,28 @@ export default function PMJobDetails({ jobId }) {
   const luSet = toKeySet(lu?.participants || []);
   const earlySet = toKeySet(early?.participants || []);
 
-  const attendanceMap = job.attendance || {};
-  const nowIsoForBreak = new Date().toISOString();
-
   // display rows
   const approvedRows = (job.approved || []).map((uid) => {
     const app = findApplicant(uid) || {};
+    const attendanceMap = job.attendance || {};
+    const rec = attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
+
     const keys = [uid, app.userId, app.email].filter(Boolean);
-
-    const rec =
-      attendanceMap[uid] || attendanceMap[app.userId] || attendanceMap[app.email] || {};
-
     const hasLU = keys.some((k) => luSet.has(k)) || !!app.luConfirmed;
     const hasEarly = keys.some((k) => earlySet.has(k)) || !!app.earlyCallConfirmed;
 
-    // Break info (stored inside attendance record)
-    const bInfo = extractBreakInfo(rec, nowIsoForBreak);
-    const breakMinutes = bInfo.totalMinutes;
-    const breakHoursRaw = breakMinutes / 60;
+    const { breakIn, breakOut } = extractBreakTimes(rec);
 
-    // Deduction rule: round to nearest hour (.5 up). Examples: 1.5->2, 1.3->1
-    const breakDeductHours = Math.round(breakHoursRaw);
+    // work duration
+    const workMin = rec?.in && rec?.out ? dayjs(rec.out).diff(dayjs(rec.in), "minute") : 0;
 
-    // Work duration
-    let workedMinutes = 0;
-    if (rec?.in && rec?.out) {
-      try {
-        workedMinutes = dayjs(rec.out).diff(dayjs(rec.in), "minute");
-        if (!Number.isFinite(workedMinutes) || workedMinutes < 0) workedMinutes = 0;
-      } catch {
-        workedMinutes = 0;
-      }
-    }
-    const workedHoursRaw = workedMinutes / 60;
+    // break duration
+    const breakMin = breakIn && breakOut ? dayjs(breakOut).diff(dayjs(breakIn), "minute") : 0;
+    const breakDeductHours = roundHoursNearest(breakMin);
 
-    // Hourly net hours / pay (best-effort display)
-    const hourly = isHourlyJob(job);
-    const hourlyRate = getHourlyRate(job);
-    const netHours = hourly ? Math.max(0, workedHoursRaw - breakDeductHours) : null;
-    const netPay = hourly && hourlyRate != null && netHours != null ? netHours * hourlyRate : null;
+    // billable minutes/hours (deduct rounded break hours)
+    const billableMin = Math.max(0, workMin - breakDeductHours * 60);
+    const billableHours = billableMin > 0 ? billableMin / 60 : 0;
 
     return {
       userId: uid,
@@ -1288,25 +1173,16 @@ export default function PMJobDetails({ jobId }) {
       discord: app.discord || app.discordHandle || app.username || "",
       in: rec.in,
       out: rec.out,
+
+      breakIn,
+      breakOut,
+      breakDeductHours,
+      billableHours,
+
       hasLU,
       hasEarly,
       luApplied: !!app.luApplied,
       earlyApplied: !!app.earlyCallApplied,
-
-      // break fields
-      breakOn: bInfo.onBreak,
-      breakLastStart: bInfo.lastStartIso,
-      breakLastEnd: bInfo.lastEndIso,
-      breakMinutes,
-      breakHoursRaw,
-      breakDeductHours,
-
-      // hourly preview
-      hourly,
-      hourlyRate,
-      workedHoursRaw,
-      netHours,
-      netPay,
     };
   });
 
@@ -1353,11 +1229,7 @@ export default function PMJobDetails({ jobId }) {
   const earlyCount = approvedRows.filter((r) => !!r.hasEarly).length;
   const luCount = approvedRows.filter((r) => !!r.hasLU).length;
 
-  const breakOnCount = approvedRows.filter((r) => r.breakOn).length;
-  const totalBreakDeductHours = approvedRows.reduce((sum, r) => sum + (r.breakDeductHours || 0), 0);
-
-  const hourly = isHourlyJob(job);
-  const hourlyRate = getHourlyRate(job);
+  const breakEnabled = !!job.breakEnabled;
 
   return (
     <div className="container" style={{ paddingTop: 16, maxWidth: 1180 }}>
@@ -1378,13 +1250,7 @@ export default function PMJobDetails({ jobId }) {
                 <div style={{ fontSize: 22, fontWeight: 950, color: "#111827" }}>{job.title}</div>
                 {pill}
                 {isVirtual ? <Chip tone="violet">Virtual (no scanning)</Chip> : <Chip tone="black">Physical</Chip>}
-                {hourly ? (
-                  <Chip tone="amber">
-                    Hourly{hourlyRate != null ? `: RM ${hourlyRate}/hr` : ""}
-                  </Chip>
-                ) : (
-                  <Chip>Non-hourly</Chip>
-                )}
+                {breakEnabled ? <Chip tone="green">Break Enabled</Chip> : <Chip>Break Disabled</Chip>}
               </div>
 
               {job.description ? (
@@ -1398,7 +1264,7 @@ export default function PMJobDetails({ jobId }) {
                 <Chip tone={earlyEnabled ? "green" : "gray"}>
                   Early call: {earlyEnabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
                 </Chip>
-                <Chip tone={breakOnCount > 0 ? "amber" : "gray"}>On Break: {breakOnCount}</Chip>
+                <Chip tone={hourlyPayJob ? "violet" : "gray"}>{hourlyPayJob ? "Hourly Pay" : "Non-hourly"}</Chip>
               </div>
             </div>
 
@@ -1447,7 +1313,6 @@ export default function PMJobDetails({ jobId }) {
             <StatCard label="Approved" value={approvedCount} sub={`Headcount: ${job.headcount ?? "-"}`} />
             <StatCard label="Checked-in" value={checkedInCount} sub="Has IN time" />
             <StatCard label="Checked-out" value={checkedOutCount} sub="Has OUT time" />
-            <StatCard label="Break Deduct (hrs)" value={totalBreakDeductHours} sub="Rounded (Math.round)" />
             <StatCard label="Early Call" value={earlyCount} sub={earlyEnabled ? "Enabled" : "Disabled"} />
             <StatCard label="Loading/Unloading" value={luCount} sub="Confirmed" />
           </div>
@@ -1480,12 +1345,8 @@ export default function PMJobDetails({ jobId }) {
                 </div>
               </div>
             </div>
-
             <div style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>
               OT rule: whole hours only — ≤30 min rounds down, &gt;30 min rounds up.
-              <br />
-              Break deduction rule (hourly): total break hours rounded to nearest integer (e.g. 1.5→2, 1.3→1), then
-              deducted from worked hours.
             </div>
 
             {/* reset area */}
@@ -1550,7 +1411,7 @@ export default function PMJobDetails({ jobId }) {
         count={approvedRows.length}
         open={sections.attendance}
         onToggle={() => toggleSection("attendance")}
-        subtitle="Confirm add-ons + view IN/OUT + Break time (scan BREAK IN / BREAK OUT QR)"
+        subtitle="Confirm add-ons + view IN/OUT + Break IN/OUT"
       >
         <div style={{ overflowX: "auto" }}>
           <table
@@ -1558,7 +1419,7 @@ export default function PMJobDetails({ jobId }) {
             style={{
               width: "100%",
               borderCollapse: "collapse",
-              minWidth: 1180,
+              minWidth: 1200,
               border: "1px solid #e5e7eb",
               borderRadius: 12,
               overflow: "hidden",
@@ -1573,34 +1434,36 @@ export default function PMJobDetails({ jobId }) {
                 <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Name</th>
                 <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Phone</th>
                 <th style={{ textAlign: "left", padding: "10px 10px", color: "#6b7280", fontSize: 12 }}>Discord</th>
-
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 110, color: "#6b7280", fontSize: 12 }}>
                   Early Call
                 </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 170, color: "#6b7280", fontSize: 12 }}>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 160, color: "#6b7280", fontSize: 12 }}>
                   Loading/Unloading
                 </th>
-
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 110, color: "#6b7280", fontSize: 12 }}>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
                   In
                 </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 110, color: "#6b7280", fontSize: 12 }}>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
                   Out
                 </th>
-
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 220, color: "#6b7280", fontSize: 12 }}>
-                  Break Time (Deduct)
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
+                  Break In
                 </th>
-
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 200, color: "#6b7280", fontSize: 12 }}>
-                  Hourly Net (Preview)
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
+                  Break Out
+                </th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
+                  Break Deduct (hr)
+                </th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 140, color: "#6b7280", fontSize: 12 }}>
+                  Billable (hr)
                 </th>
               </tr>
             </thead>
             <tbody>
               {approvedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} style={{ color: "#6b7280", padding: 12 }}>
+                  <td colSpan={13} style={{ color: "#6b7280", padding: 12 }}>
                     No approved users yet.
                   </td>
                 </tr>
@@ -1614,31 +1477,10 @@ export default function PMJobDetails({ jobId }) {
 
                   const inTone = r.in ? "green" : "gray";
                   const outTone = r.out ? "green" : "gray";
+                  const bInTone = r.breakIn ? "violet" : "gray";
+                  const bOutTone = r.breakOut ? "violet" : "gray";
 
-                  const breakTone = r.breakOn ? "amber" : r.breakMinutes > 0 ? "violet" : "gray";
-
-                  const breakLabel = (() => {
-                    if (r.breakOn) {
-                      return `On break since ${r.breakLastStart ? dayjs(r.breakLastStart).format("HH:mm") : "—"}`;
-                    }
-                    if (!r.breakMinutes) return "—";
-                    const mins = Math.round(r.breakMinutes);
-                    const raw = r.breakHoursRaw.toFixed(2);
-                    return `${mins}m (${raw}h → ${r.breakDeductHours}h)`;
-                  })();
-
-                  const hourlyPreview = (() => {
-                    if (!r.hourly) return <span style={{ color: "#9ca3af" }}>—</span>;
-                    if (!r.in || !r.out) return <span style={{ color: "#9ca3af" }}>Need IN &amp; OUT</span>;
-                    const netH = r.netHours != null ? r.netHours.toFixed(2) : "—";
-                    const pay = r.netPay != null ? `RM ${r.netPay.toFixed(2)}` : null;
-                    return (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-                        <Chip tone="black">{netH} hr</Chip>
-                        {pay ? <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 800 }}>{pay}</span> : null}
-                      </div>
-                    );
-                  })();
+                  const billableText = hourlyPayJob && r.in && r.out ? r.billableHours.toFixed(2) : "—";
 
                   return (
                     <tr key={r.userId || r.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
@@ -1694,26 +1536,100 @@ export default function PMJobDetails({ jobId }) {
                         <Chip tone={outTone}>{fmtTime(r.out) || "—"}</Chip>
                       </td>
 
-                      <td style={{ padding: "10px 10px", textAlign: "center" }}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
-                          <Chip tone={breakTone}>{breakLabel}</Chip>
-                          {r.breakMinutes > 0 || r.breakOn ? (
-                            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 800 }}>
-                              Scan BREAK IN / BREAK OUT QR
-                            </span>
-                          ) : (
-                            <span style={{ fontSize: 11, color: "#9ca3af" }}>No break recorded</span>
-                          )}
-                        </div>
+                      <td
+                        style={{
+                          padding: "10px 10px",
+                          textAlign: "center",
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        <Chip tone={bInTone}>{fmtTime(r.breakIn) || "—"}</Chip>
                       </td>
 
-                      <td style={{ padding: "10px 10px", textAlign: "center" }}>{hourlyPreview}</td>
+                      <td
+                        style={{
+                          padding: "10px 10px",
+                          textAlign: "center",
+                          fontFamily:
+                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                        }}
+                      >
+                        <Chip tone={bOutTone}>{fmtTime(r.breakOut) || "—"}</Chip>
+                      </td>
+
+                      <td style={{ padding: "10px 10px", textAlign: "center" }}>
+                        {hourlyPayJob && r.in && r.out ? <Chip>{r.breakDeductHours}</Chip> : <span style={{ color: "#9ca3af" }}>—</span>}
+                      </td>
+
+                      <td style={{ padding: "10px 10px", textAlign: "center" }}>
+                        {hourlyPayJob && r.in && r.out ? <Chip tone="green">{billableText}</Chip> : <span style={{ color: "#9ca3af" }}>—</span>}
+                      </td>
                     </tr>
                   );
                 })
               )}
             </tbody>
           </table>
+
+          <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
+            Break rounding rule: <strong>nearest hour</strong> (1.5 → 2, 1.3 → 1). Billable = (Out−In) − (BreakRoundedHours).
+          </div>
+
+          {isVirtual ? (
+            <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
+              Virtual mode: no QR scan required.
+            </div>
+          ) : null}
+        </div>
+      </CollapsibleSection>
+
+      {/* ✅ Break toggle at bottom */}
+      <CollapsibleSection
+        title="Break Time Setting"
+        count={breakEnabled ? 1 : 0}
+        open={sections.break}
+        onToggle={() => toggleSection("break")}
+        subtitle="Enable Break In/Out QR for part-timers (only visible in My Jobs when enabled)"
+      >
+        <div
+          style={{
+            border: "1px solid #e5e7eb",
+            borderRadius: 12,
+            padding: 12,
+            background: "#fff",
+            display: "grid",
+            gap: 10,
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 900, color: "#111827" }}>Enable Break QR</div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                When ON, part-timers can generate <strong>Break In/Out</strong> QR in My Jobs. Admin/PM scans it using the same scanner.
+              </div>
+            </div>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 10, fontWeight: 900 }}>
+              <input
+                type="checkbox"
+                checked={!!job.breakEnabled}
+                disabled={breakBusy}
+                onChange={(e) => updateBreakEnabled(!!e.target.checked)}
+              />
+              {breakBusy ? "Saving…" : job.breakEnabled ? "ON" : "OFF"}
+            </label>
+          </div>
+
+          {!isVirtual ? (
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              Note: “First scan wins” is enforced for Break In/Out to prevent overwriting records.
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              Virtual jobs: break QR is not used unless you implement manual attendance logic.
+            </div>
+          )}
         </div>
       </CollapsibleSection>
 
@@ -1807,6 +1723,9 @@ export default function PMJobDetails({ jobId }) {
               <span style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 800 }}>
                 {camReady ? "Camera ready" : "Opening camera…"}
               </span>
+              <span style={{ color: "rgba(255,255,255,0.7)", fontSize: 12, fontWeight: 800 }}>
+                {breakEnabled ? "Break QR enabled" : "Break QR disabled"}
+              </span>
             </div>
           </div>
 
@@ -1876,11 +1795,6 @@ export default function PMJobDetails({ jobId }) {
             <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 700 }}>
               {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
             </div>
-
-            <div style={{ color: "rgba(255,255,255,0.78)", fontSize: 12, fontWeight: 700 }}>
-              Tip: For break time, scan QRs with dir = <b>break_in</b> (start break) and <b>break_out</b> (end break).
-            </div>
-
             {scanMsg ? <div style={{ color: "white", fontSize: 12, fontWeight: 800 }}>{scanMsg}</div> : null}
           </div>
 
