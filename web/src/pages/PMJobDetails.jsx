@@ -116,8 +116,7 @@ function extractUserKeyFromToken(token) {
   try {
     const qs = token.includes("?") ? token.split("?")[1] : token;
     const sp = new URLSearchParams(qs);
-    const key =
-      sp.get("userId") || sp.get("uid") || sp.get("sub") || sp.get("email") || sp.get("id");
+    const key = sp.get("userId") || sp.get("uid") || sp.get("sub") || sp.get("email") || sp.get("id");
     if (key) return String(key);
   } catch {}
 
@@ -147,14 +146,9 @@ function isVirtualJob(j) {
 function isHourlyJob(job) {
   if (!job) return false;
   const kind =
-    job?.rate?.sessionKind ||
-    job?.sessionKind ||
-    job?.physicalSubtype ||
-    job?.session?.physicalType ||
-    null;
+    job?.rate?.sessionKind || job?.sessionKind || job?.physicalSubtype || job?.session?.physicalType || null;
 
-  const mode =
-    job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : null);
+  const mode = job?.session?.mode || job?.sessionMode || job?.mode || (kind === "virtual" ? "virtual" : null);
 
   if (mode === "virtual" || kind === "virtual") return true;
   if (kind === "hourly_by_role" || kind === "hourly_flat") return true;
@@ -443,13 +437,9 @@ function ApplicantsTable({ rows, onApprove, onReject }) {
                   >
                     {a.email}
                   </td>
-                  <td style={{ padding: "10px 10px", color: "#111827" }}>
-                    {a.name || a.fullName || a.displayName || "-"}
-                  </td>
+                  <td style={{ padding: "10px 10px", color: "#111827" }}>{a.name || a.fullName || a.displayName || "-"}</td>
                   <td style={{ padding: "10px 10px", color: "#111827" }}>{a.phone || a.phoneNumber || "-"}</td>
-                  <td style={{ padding: "10px 10px", color: "#111827" }}>
-                    {a.discord || a.discordHandle || a.username || "-"}
-                  </td>
+                  <td style={{ padding: "10px 10px", color: "#111827" }}>{a.discord || a.discordHandle || a.username || "-"}</td>
                   <td style={{ padding: "10px 10px", color: "#111827" }}>{a.transport || "-"}</td>
                   <td style={{ padding: "10px 10px", textTransform: "capitalize" }}>
                     {st === "approved" ? <Chip tone="green">Approved</Chip> : null}
@@ -562,6 +552,12 @@ export default function PMJobDetails({ jobId }) {
   const lastDecodedRef = useRef("");
   const [camReady, setCamReady] = useState(false);
 
+  // keep latest scannerOpen in a ref (so scan loop can stop cleanly)
+  const scannerOpenRef = useRef(false);
+  useEffect(() => {
+    scannerOpenRef.current = scannerOpen;
+  }, [scannerOpen]);
+
   // ✅ local lock to prevent overwrite within the same open session (fast double scans etc.)
   const scanLockRef = useRef({
     in: new Set(),
@@ -593,10 +589,13 @@ export default function PMJobDetails({ jobId }) {
       const j = await apiGet(`/jobs/${jobId}${bust}`);
       let merged = statusForce ? { ...j, status: statusForce } : j;
 
-      const serverAltEnd =
-        merged.actualEndAt || merged.endedAt || merged.finishedAt || merged.closedAt || null;
+      const serverAltEnd = merged.actualEndAt || merged.endedAt || merged.finishedAt || merged.closedAt || null;
 
-      const cachedEnd = LOCAL_KEY(jobId) ? localStorage.getItem(LOCAL_KEY(jobId)) : null;
+      let cachedEnd = null;
+      try {
+        cachedEnd = localStorage.getItem(LOCAL_KEY(jobId));
+      } catch {}
+
       if (statusForce === "ended" || merged.status === "ended") {
         if (!serverAltEnd) {
           const actual = endedAtRef.current || cachedEnd;
@@ -619,11 +618,7 @@ export default function PMJobDetails({ jobId }) {
 
       // Early Call participants (fallback to avoid crash if route not ready)
       const ec = await apiGetFallback(
-        [
-          `/jobs/${jobId}/early-call${bust}`,
-          `/jobs/${jobId}/earlycall${bust}`,
-          `/jobs/${jobId}/earlyCall${bust}`,
-        ],
+        [`/jobs/${jobId}/early-call${bust}`, `/jobs/${jobId}/earlycall${bust}`, `/jobs/${jobId}/earlyCall${bust}`],
         { applicants: [], participants: [] }
       );
       setEarly(ec);
@@ -662,9 +657,27 @@ export default function PMJobDetails({ jobId }) {
   function ensureJsQR() {
     return new Promise((resolve, reject) => {
       if (window.jsQR) return resolve(true);
+
+      // avoid duplicating the script tag if opened multiple times
+      const existing = document.querySelector('script[data-jsqr="1"]');
+      if (existing) {
+        const t = setInterval(() => {
+          if (window.jsQR) {
+            clearInterval(t);
+            resolve(true);
+          }
+        }, 50);
+        setTimeout(() => {
+          clearInterval(t);
+          if (!window.jsQR) reject(new Error("jsQR not available"));
+        }, 4000);
+        return;
+      }
+
       const s = document.createElement("script");
       s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
       s.async = true;
+      s.dataset.jsqr = "1";
       s.onload = () => (window.jsQR ? resolve(true) : reject(new Error("jsQR not available")));
       s.onerror = reject;
       document.head.appendChild(s);
@@ -680,7 +693,10 @@ export default function PMJobDetails({ jobId }) {
         audio: false,
       });
       streamRef.current = stream;
+
       const video = videoRef.current;
+      if (!video) return;
+
       video.srcObject = stream;
       await video.play();
       setCamReady(true);
@@ -690,16 +706,19 @@ export default function PMJobDetails({ jobId }) {
       setScanMsg("Camera not available or permission denied.");
     }
   }
+
   function stopCamera() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
     setCamReady(false);
+
     if (streamRef.current) {
       try {
         streamRef.current.getTracks().forEach((t) => t.stop());
       } catch {}
       streamRef.current = null;
     }
+
     if (videoRef.current) videoRef.current.srcObject = null;
   }
 
@@ -719,6 +738,7 @@ export default function PMJobDetails({ jobId }) {
 
     setScannerOpen(true);
   }
+
   function closeScanner() {
     setScannerOpen(false);
     stopCamera();
@@ -730,13 +750,26 @@ export default function PMJobDetails({ jobId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scannerOpen, isVirtual]);
 
+  // cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopCamera();
+      stopHeartbeat();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* scan loop */
   function startScanLoop() {
     const loop = () => {
+      // stop loop if scanner closed
+      if (!scannerOpenRef.current) return;
+
       if (!videoRef.current || !canvasRef.current || !window.jsQR) {
         rafRef.current = requestAnimationFrame(loop);
         return;
       }
+
       const video = videoRef.current;
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -746,9 +779,8 @@ export default function PMJobDetails({ jobId }) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const qr = window.jsQR(imgData.data, imgData.width, imgData.height, {
-        inversionAttempts: "attemptBoth",
-      });
+      const qr = window.jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
+
       if (qr && qr.data) {
         const decoded = qr.data.trim();
         if (decoded && decoded !== lastDecodedRef.current) {
@@ -756,8 +788,10 @@ export default function PMJobDetails({ jobId }) {
           handleDecoded(decoded);
         }
       }
+
       rafRef.current = requestAnimationFrame(loop);
     };
+
     rafRef.current = requestAnimationFrame(loop);
   }
 
@@ -868,7 +902,7 @@ export default function PMJobDetails({ jobId }) {
       }
     }
 
-    // ✅ First-scan-wins guard: prevent overwriting IN/OUT / BREAK IN/OUT once already recorded
+    // ✅ First-scan-wins guard
     const tokenDir = extractDirFromToken(useToken); // "in" | "out" | "break_in" | "break_out" | null
     const tokenUserKey = extractUserKeyFromToken(useToken); // userId/email/sub (best effort)
 
@@ -877,8 +911,7 @@ export default function PMJobDetails({ jobId }) {
     if (tokenUserKey) candidateKeys.push(tokenUserKey);
 
     if (tokenUserKey) {
-      const app =
-        (applicants || []).find((a) => a.userId === tokenUserKey || a.email === tokenUserKey) || null;
+      const app = (applicants || []).find((a) => a.userId === tokenUserKey || a.email === tokenUserKey) || null;
       if (app?.userId && app.userId !== tokenUserKey) candidateKeys.push(app.userId);
       if (app?.email && app.email !== tokenUserKey) candidateKeys.push(app.email);
     }
@@ -1030,7 +1063,7 @@ export default function PMJobDetails({ jobId }) {
       setTimeout(load, 300);
     } catch (e) {
       await load();
-      alert("Reset failed: " + e);
+      alert("Reset failed: " + (e?.message || String(e)));
     }
   }
 
@@ -1049,19 +1082,11 @@ export default function PMJobDetails({ jobId }) {
   // Early call confirm (try common endpoints)
   async function toggleEarlyCall(userId, present) {
     await apiPostFallback(
-      [
-        `/jobs/${jobId}/early-call/mark`,
-        `/jobs/${jobId}/earlycall/mark`,
-        `/jobs/${jobId}/earlyCall/mark`,
-      ],
+      [`/jobs/${jobId}/early-call/mark`, `/jobs/${jobId}/earlycall/mark`, `/jobs/${jobId}/earlyCall/mark`],
       { userId, present }
     );
     const ec = await apiGetFallback(
-      [
-        `/jobs/${jobId}/early-call?_=${Date.now()}`,
-        `/jobs/${jobId}/earlycall?_=${Date.now()}`,
-        `/jobs/${jobId}/earlyCall?_=${Date.now()}`,
-      ],
+      [`/jobs/${jobId}/early-call?_=${Date.now()}`, `/jobs/${jobId}/earlycall?_=${Date.now()}`, `/jobs/${jobId}/earlyCall?_=${Date.now()}`],
       { applicants: [], participants: [] }
     );
     setEarly(ec);
@@ -1092,12 +1117,7 @@ export default function PMJobDetails({ jobId }) {
 
     try {
       await apiPostFallback(
-        [
-          `/jobs/${jobId}/break`,
-          `/jobs/${jobId}/break-time`,
-          `/jobs/${jobId}/break/toggle`,
-          `/jobs/${jobId}/break-enabled`,
-        ],
+        [`/jobs/${jobId}/break`, `/jobs/${jobId}/break-time`, `/jobs/${jobId}/break/toggle`, `/jobs/${jobId}/break-enabled`],
         { enabled }
       );
       await load(true);
@@ -1112,8 +1132,7 @@ export default function PMJobDetails({ jobId }) {
 
   /* OT calc (hooks must stay ABOVE any early return) */
   const scheduledEndDJ = useMemo(() => (job?.endTime ? dayjs(job.endTime) : null), [job?.endTime]);
-  const actualEndIso =
-    job?.actualEndAt || job?.endedAt || job?.finishedAt || job?.closedAt || endedAtRef.current || null;
+  const actualEndIso = job?.actualEndAt || job?.endedAt || job?.finishedAt || job?.closedAt || endedAtRef.current || null;
   const actualEndDJ = actualEndIso ? dayjs(actualEndIso) : null;
 
   const otRoundedHours = useMemo(() => {
@@ -1251,17 +1270,13 @@ export default function PMJobDetails({ jobId }) {
                 {breakEnabled ? <Chip tone="green">Break Enabled</Chip> : <Chip>Break Disabled</Chip>}
               </div>
 
-              {job.description ? (
-                <div style={{ color: "#374151", marginTop: 8, fontWeight: 600 }}>{job.description}</div>
-              ) : null}
+              {job.description ? <div style={{ color: "#374151", marginTop: 8, fontWeight: 600 }}>{job.description}</div> : null}
 
               <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <Chip>{job.venue || "—"}</Chip>
                 <Chip>{fmtRange(job.startTime, job.endTime) || "—"}</Chip>
                 <Chip>Headcount: {job.headcount ?? "-"}</Chip>
-                <Chip tone={earlyEnabled ? "green" : "gray"}>
-                  Early call: {earlyEnabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}
-                </Chip>
+                <Chip tone={earlyEnabled ? "green" : "gray"}>Early call: {earlyEnabled ? `Yes (RM ${job.earlyCall.amount})` : "No"}</Chip>
                 <Chip tone={hourlyPayJob ? "violet" : "gray"}>{hourlyPayJob ? "Hourly Pay" : "Non-hourly"}</Chip>
               </div>
             </div>
@@ -1299,15 +1314,7 @@ export default function PMJobDetails({ jobId }) {
           </div>
 
           {/* stats row */}
-          <div
-            style={{
-              marginTop: 14,
-              display: "flex",
-              gap: 10,
-              flexWrap: "wrap",
-              alignItems: "stretch",
-            }}
-          >
+          <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" }}>
             <StatCard label="Approved" value={approvedCount} sub={`Headcount: ${job.headcount ?? "-"}`} />
             <StatCard label="Checked-in" value={checkedInCount} sub="Has IN time" />
             <StatCard label="Checked-out" value={checkedOutCount} sub="Has OUT time" />
@@ -1316,15 +1323,7 @@ export default function PMJobDetails({ jobId }) {
           </div>
 
           {/* OT / end-time card */}
-          <div
-            style={{
-              marginTop: 14,
-              padding: 12,
-              background: "#ffffff",
-              border: "1px solid #e5e7eb",
-              borderRadius: 14,
-            }}
-          >
+          <div style={{ marginTop: 14, padding: 12, background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 14 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
               <div>
                 <div style={{ fontSize: 12, color: "#6b7280", fontWeight: 900 }}>Initial End Time</div>
@@ -1368,11 +1367,7 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("applied")}
         subtitle="New / pending applications waiting for approval"
       >
-        <ApplicantsTable
-          rows={appliedApplicants}
-          onApprove={(uid) => setApproval(uid, true)}
-          onReject={(uid) => setApproval(uid, false)}
-        />
+        <ApplicantsTable rows={appliedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} />
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -1382,11 +1377,7 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("approved")}
         subtitle="Approved applicants (can still Reject if needed)"
       >
-        <ApplicantsTable
-          rows={approvedApplicants}
-          onApprove={(uid) => setApproval(uid, true)}
-          onReject={(uid) => setApproval(uid, false)}
-        />
+        <ApplicantsTable rows={approvedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} />
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -1396,11 +1387,7 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("rejected")}
         subtitle="Rejected applicants (can still Approve back if needed)"
       >
-        <ApplicantsTable
-          rows={rejectedApplicants}
-          onApprove={(uid) => setApproval(uid, true)}
-          onReject={(uid) => setApproval(uid, false)}
-        />
+        <ApplicantsTable rows={rejectedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} />
       </CollapsibleSection>
 
       {/* Attendance (black toggle) */}
@@ -1439,7 +1426,7 @@ export default function PMJobDetails({ jobId }) {
             style={{
               width: "100%",
               borderCollapse: "collapse",
-              minWidth: 1650, // ✅ was 1200 (too small for 13 columns)
+              minWidth: 1650,
               tableLayout: "auto",
               border: "1px solid #e5e7eb",
               borderRadius: 12,
@@ -1448,50 +1435,24 @@ export default function PMJobDetails({ jobId }) {
           >
             <thead>
               <tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
-                <th style={{ textAlign: "left", padding: "10px 10px", width: 60, color: "#6b7280", fontSize: 12 }}>
-                  No.
-                </th>
+                <th style={{ textAlign: "left", padding: "10px 10px", width: 60, color: "#6b7280", fontSize: 12 }}>No.</th>
 
-                {/* ✅ give key columns minWidth so they don't collapse */}
-                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 240, color: "#6b7280", fontSize: 12 }}>
-                  Email
-                </th>
-                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 160, color: "#6b7280", fontSize: 12 }}>
-                  Name
-                </th>
-                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 140, color: "#6b7280", fontSize: 12 }}>
-                  Phone
-                </th>
-                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 160, color: "#6b7280", fontSize: 12 }}>
-                  Discord
-                </th>
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 240, color: "#6b7280", fontSize: 12 }}>Email</th>
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 160, color: "#6b7280", fontSize: 12 }}>Name</th>
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 140, color: "#6b7280", fontSize: 12 }}>Phone</th>
+                <th style={{ textAlign: "left", padding: "10px 10px", minWidth: 160, color: "#6b7280", fontSize: 12 }}>Discord</th>
 
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 110, color: "#6b7280", fontSize: 12 }}>
-                  Early Call
-                </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 160, color: "#6b7280", fontSize: 12 }}>
-                  Loading/Unloading
-                </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
-                  In
-                </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
-                  Out
-                </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
-                  Break In
-                </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
-                  Break Out
-                </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>
-                  Break Deduct (hr)
-                </th>
-                <th style={{ textAlign: "center", padding: "10px 10px", width: 140, color: "#6b7280", fontSize: 12 }}>
-                  Billable (hr)
-                </th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 110, color: "#6b7280", fontSize: 12 }}>Early Call</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 160, color: "#6b7280", fontSize: 12 }}>Loading/Unloading</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>In</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>Out</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>Break In</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>Break Out</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 120, color: "#6b7280", fontSize: 12 }}>Break Deduct (hr)</th>
+                <th style={{ textAlign: "center", padding: "10px 10px", width: 140, color: "#6b7280", fontSize: 12 }}>Billable (hr)</th>
               </tr>
             </thead>
+
             <tbody>
               {approvedRows.length === 0 ? (
                 <tr>
@@ -1518,7 +1479,6 @@ export default function PMJobDetails({ jobId }) {
                     <tr key={r.userId || r.email || idx} style={{ borderTop: "1px solid #f1f5f9" }}>
                       <td style={{ padding: "10px 10px", fontWeight: 900, color: "#111827" }}>{idx + 1}.</td>
 
-                      {/* ✅ ellipsis so long email doesn't break the table */}
                       <td className="pm-att-ellipsis" style={{ padding: "10px 10px", fontWeight: 800, color: "#111827" }} title={r.email}>
                         {r.email}
                       </td>
@@ -1559,64 +1519,28 @@ export default function PMJobDetails({ jobId }) {
                         />
                       </td>
 
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "center",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                        }}
-                      >
+                      <td style={{ padding: "10px 10px", textAlign: "center", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
                         <Chip tone={inTone}>{fmtTime(r.in) || "—"}</Chip>
                       </td>
 
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "center",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                        }}
-                      >
+                      <td style={{ padding: "10px 10px", textAlign: "center", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
                         <Chip tone={outTone}>{fmtTime(r.out) || "—"}</Chip>
                       </td>
 
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "center",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                        }}
-                      >
+                      <td style={{ padding: "10px 10px", textAlign: "center", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
                         <Chip tone={bInTone}>{fmtTime(r.breakIn) || "—"}</Chip>
                       </td>
 
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "center",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
-                        }}
-                      >
+                      <td style={{ padding: "10px 10px", textAlign: "center", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
                         <Chip tone={bOutTone}>{fmtTime(r.breakOut) || "—"}</Chip>
                       </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center" }}>
-                        {hourlyPayJob && r.in && r.out ? (
-                          <Chip>{r.breakDeductHours}</Chip>
-                        ) : (
-                          <span style={{ color: "#9ca3af" }}>—</span>
-                        )}
+                        {hourlyPayJob && r.in && r.out ? <Chip>{r.breakDeductHours}</Chip> : <span style={{ color: "#9ca3af" }}>—</span>}
                       </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center" }}>
-                        {hourlyPayJob && r.in && r.out ? (
-                          <Chip tone="green">{billableText}</Chip>
-                        ) : (
-                          <span style={{ color: "#9ca3af" }}>—</span>
-                        )}
+                        {hourlyPayJob && r.in && r.out ? <Chip tone="green">{billableText}</Chip> : <span style={{ color: "#9ca3af" }}>—</span>}
                       </td>
                     </tr>
                   );
@@ -1629,11 +1553,7 @@ export default function PMJobDetails({ jobId }) {
             Break rounding rule: <strong>nearest hour</strong> (1.5 → 2, 1.3 → 1). Billable = (Out−In) − (BreakRoundedHours).
           </div>
 
-          {isVirtual ? (
-            <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
-              Virtual mode: no QR scan required.
-            </div>
-          ) : null}
+          {isVirtual ? <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>Virtual mode: no QR scan required.</div> : null}
         </div>
       </CollapsibleSection>
 
@@ -1645,16 +1565,7 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("break")}
         subtitle="Enable Break In/Out QR for part-timers (only visible in My Jobs when enabled)"
       >
-        <div
-          style={{
-            border: "1px solid #e5e7eb",
-            borderRadius: 12,
-            padding: 12,
-            background: "#fff",
-            display: "grid",
-            gap: 10,
-          }}
-        >
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, background: "#fff", display: "grid", gap: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <div>
               <div style={{ fontWeight: 900, color: "#111827" }}>Enable Break QR</div>
@@ -1701,13 +1612,7 @@ export default function PMJobDetails({ jobId }) {
             overflow: "hidden",
           }}
         >
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
+          <video ref={videoRef} autoPlay playsInline muted style={{ width: "100%", height: "100%", objectFit: "cover" }} />
           <canvas ref={canvasRef} style={{ display: "none" }} />
 
           <div
