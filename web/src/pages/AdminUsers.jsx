@@ -1,7 +1,7 @@
 // web/src/pages/AdminUsers.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import dayjs from "dayjs";
-import { apiGet, apiPatch, apiPost } from "../api";
+import { apiDelete, apiGet, apiPatch, apiPost } from "../api";
 
 const ROLES = ["part-timer", "pm", "admin"];
 // ✅ keep in sync with backend STAFF_ROLES
@@ -168,6 +168,7 @@ export default function AdminUsers({ user }) {
   const [q, setQ] = useState("");
 
   const [savingId, setSavingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const [edits, setEdits] = useState({}); // { [userId]: { role?, grade? } }
 
   const [busyActionId, setBusyActionId] = useState(null); // verify/reject action busy
@@ -284,6 +285,55 @@ export default function AdminUsers({ user }) {
       delete nxt[u.id];
       return nxt;
     });
+  }
+
+  async function removeUser(u) {
+    if (!u?.id) return;
+
+    const label = u.email || u.username || u.name || "this user";
+    const isSelf = u.id === user?.id;
+
+    if (isSelf) {
+      alert("You cannot remove your own account while you are signed in.");
+      return;
+    }
+
+    const ok = window.confirm(
+      `Remove ${label} from the platform?\n\n` +
+        "This will delete the user account, remove their job applications/approvals/attendance records, and clear their notifications. This cannot be undone."
+    );
+
+    if (!ok) return;
+
+    try {
+      setDeletingId(u.id);
+      await apiDelete(`/admin/users/${u.id}`);
+
+      setList((old) => old.filter((x) => x.id !== u.id));
+
+      setEdits((old) => {
+        const nxt = { ...old };
+        delete nxt[u.id];
+        return nxt;
+      });
+
+      alert("User removed from platform.");
+    } catch (err) {
+      const msg = err?.message || "Remove user failed";
+
+      if (String(msg).includes("last_admin")) {
+        alert("Cannot remove the last admin.");
+      } else if (String(msg).includes("self_delete")) {
+        alert("You cannot remove your own account while you are signed in.");
+      } else if (String(msg).includes("user_not_found")) {
+        alert("User not found. Refreshing the list.");
+        refresh();
+      } else {
+        alert(msg);
+      }
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   // =========================
@@ -439,6 +489,7 @@ export default function AdminUsers({ user }) {
               {filtered.map((u) => {
                 const draft = getDraft(u);
                 const dirty = isDirty(u);
+                const isSelf = u.id === user?.id;
 
                 return (
                   <tr key={u.id} style={{ borderTop: "1px solid #eee" }}>
@@ -470,15 +521,29 @@ export default function AdminUsers({ user }) {
 
                     <td style={{ padding: 8 }}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button className="btn primary" disabled={savingId === u.id || !dirty} onClick={() => save(u)}>
+                        <button
+                          className="btn primary"
+                          disabled={savingId === u.id || deletingId === u.id || !dirty}
+                          onClick={() => save(u)}
+                        >
                           {savingId === u.id ? "Saving..." : "Save"}
                         </button>
 
                         {dirty && (
-                          <button className="btn" onClick={() => resetRow(u)}>
+                          <button className="btn" disabled={savingId === u.id || deletingId === u.id} onClick={() => resetRow(u)}>
                             Reset
                           </button>
                         )}
+
+                        <button
+                          className="btn"
+                          disabled={deletingId === u.id || savingId === u.id || isSelf}
+                          title={isSelf ? "You cannot remove your own account" : "Remove user from platform"}
+                          onClick={() => removeUser(u)}
+                          style={{ borderColor: "#fecaca", color: "#991b1b" }}
+                        >
+                          {deletingId === u.id ? "Removing..." : "Remove"}
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -563,7 +628,6 @@ export default function AdminUsers({ user }) {
                           >
                             View
                           </button>
-
                         </div>
                       ) : (
                         <span style={{ color: "#666", fontSize: 12 }}>No pic</span>
