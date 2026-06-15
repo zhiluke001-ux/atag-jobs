@@ -1407,16 +1407,24 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
   const uid = req.params.id;
   const user = (db.users || []).find((u) => u.id === uid);
 
-  // ✅ FIX: check existence BEFORE dereferencing user fields
+  // check existence BEFORE dereferencing user fields
   if (!user) return res.status(404).json({ error: "user_not_found" });
+
+  // avoid deleting the active admin session by accident
+  if (uid === req.user.id) {
+    return res.status(400).json({ error: "self_delete_not_allowed" });
+  }
+
+  // validate admin safety before deleting files/data
+  if (user.role === "admin") {
+    const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
+    if (adminCount <= 1) {
+      return res.status(400).json({ error: "last_admin" });
+    }
+  }
 
   await deleteStoredImage(user.avatarUrl || "");
   await deleteStoredImage(user.verificationPhotoUrl || "");
-
-  if (user.role === "admin") {
-    const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
-    if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
-  }
 
   db.users = (db.users || []).filter((u) => u.id !== uid);
 
@@ -1424,6 +1432,7 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
     j.applications = (j.applications || []).filter((a) => a.userId !== uid);
     j.approved = (j.approved || []).filter((x) => x !== uid);
     j.rejected = (j.rejected || []).filter((x) => x !== uid);
+
     if (j.attendance && j.attendance[uid]) delete j.attendance[uid];
 
     if (j.loadingUnload) {
@@ -1437,11 +1446,11 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
       j.fullTimers = j.fullTimers.filter((ft) => ft && ft.userId !== uid);
     }
 
-    // remove any parking receipts by this user
     if (Array.isArray(j.parkingReceipts)) {
       for (const r of j.parkingReceipts) {
         if (r?.userId === uid) await deleteStoredImage(r.photoUrl);
       }
+
       j.parkingReceipts = j.parkingReceipts.filter((r) => r?.userId !== uid);
     }
   }
@@ -1451,6 +1460,7 @@ app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req,
 
   await saveDB(db);
   addAudit("admin_delete_user", { userId: uid, email: user.email }, req);
+
   res.json({ ok: true, removed: { id: user.id, email: user.email } });
 });
 
