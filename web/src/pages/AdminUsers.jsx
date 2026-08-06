@@ -4,10 +4,30 @@ import dayjs from "dayjs";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api";
 
 const ROLES = ["part-timer", "pm", "admin"];
-// ✅ keep in sync with backend STAFF_ROLES
+// Keep in sync with backend STAFF_ROLES.
 const GRADES = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"];
 
-/* ---------- UI helpers ---------- */
+function gradeLabel(value) {
+  const grade = String(value || "");
+  if (grade === "junior_emcee") return "Junior (Emcee)";
+  if (grade === "senior_emcee") return "Senior (Emcee)";
+  if (!grade) return "Junior";
+  return grade.charAt(0).toUpperCase() + grade.slice(1);
+}
+
+function roleLabel(value) {
+  if (value === "part-timer") return "Part-timer";
+  if (value === "pm") return "Project Manager";
+  if (value === "admin") return "Administrator";
+  return value || "Unknown";
+}
+
+function roleClass(value) {
+  if (value === "admin") return "is-admin";
+  if (value === "pm") return "is-pm";
+  return "is-part-timer";
+}
+
 function pillStyle(bg, border, color) {
   return {
     display: "inline-flex",
@@ -24,48 +44,38 @@ function pillStyle(bg, border, color) {
   };
 }
 
-function gradeLabel(g) {
-  const x = String(g || "");
-  if (x === "junior_emcee") return "junior (emcee)";
-  if (x === "senior_emcee") return "senior (emcee)";
-  return x || "junior";
-}
-
 /* ---------- URL helper (supports relative urls + data urls) ---------- */
 const API_BASE_CLEAN = (() => {
   try {
-    const v = import.meta?.env?.VITE_API_BASE || import.meta?.env?.VITE_API_URL || "";
-    return String(v || "").replace(/\/$/, "");
+    const value = import.meta?.env?.VITE_API_BASE || import.meta?.env?.VITE_API_URL || "";
+    return String(value || "").replace(/\/$/, "");
   } catch {
     return "";
   }
 })();
 
-function toAbsUrl(u) {
-  if (!u) return "";
-  const s = String(u);
-  if (/^data:/i.test(s) || /^https?:\/\//i.test(s)) return s;
-  if (s.startsWith("//")) return window.location.protocol + s;
-  if (API_BASE_CLEAN) return API_BASE_CLEAN + (s.startsWith("/") ? s : `/${s}`);
-  return s; // last resort: relative to current origin
+function toAbsUrl(url) {
+  if (!url) return "";
+  const value = String(url);
+  if (/^data:/i.test(value) || /^https?:\/\//i.test(value)) return value;
+  if (value.startsWith("//")) return window.location.protocol + value;
+  if (API_BASE_CLEAN) return API_BASE_CLEAN + (value.startsWith("/") ? value : `/${value}`);
+  return value;
 }
 
-/* ---------- flexible getters for backend field name differences ---------- */
 function pickFirstString(obj, keys) {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
+  for (const key of keys) {
+    const value = obj?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
 }
 
-function getVerifyPicUrl(u) {
-  // Prefer absolute if backend provides it
-  const rawAbs = pickFirstString(u, ["verificationPhotoUrlAbs", "verifyPhotoUrlAbs"]);
-  if (rawAbs) return toAbsUrl(rawAbs);
+function getVerifyPicUrl(user) {
+  const absolute = pickFirstString(user, ["verificationPhotoUrlAbs", "verifyPhotoUrlAbs"]);
+  if (absolute) return toAbsUrl(absolute);
 
-  // Fallback to relative
-  const raw = pickFirstString(u, [
+  const relative = pickFirstString(user, [
     "verificationPhotoUrl",
     "verification_photo_url",
     "verifyPhotoUrl",
@@ -74,117 +84,109 @@ function getVerifyPicUrl(u) {
     "verification_image_url",
     "verifyImageUrl",
     "verify_image_url",
-    // sometimes people store the original dataUrl (not recommended, but tolerate)
     "verificationDataUrl",
     "verification_data_url",
     "verifyImageDataUrl",
     "verify_image_data_url",
   ]);
-  return toAbsUrl(raw);
+
+  return toAbsUrl(relative);
 }
 
-/**
- * ✅ Normalize to backend values:
- * "PENDING" | "APPROVED" | "REJECTED"
- */
-function getVerifyStatus(u) {
-  const raw = pickFirstString(u, ["verificationStatus", "verifyStatus", "verification_status", "verify_status"]);
-  const s = String(raw || "").trim().toUpperCase();
+function getVerifyStatus(user) {
+  const raw = pickFirstString(user, [
+    "verificationStatus",
+    "verifyStatus",
+    "verification_status",
+    "verify_status",
+  ]);
+  const normalized = String(raw || "").trim().toUpperCase();
 
-  if (["PENDING", "APPROVED", "REJECTED"].includes(s)) return s;
+  if (["PENDING", "APPROVED", "REJECTED"].includes(normalized)) return normalized;
 
-  // tolerate old values / synonyms
-  const low = String(raw || "").trim().toLowerCase();
-  if (["verified", "verify", "approved", "approve"].includes(low)) return "APPROVED";
-  if (["rejected", "reject", "declined"].includes(low)) return "REJECTED";
-  if (["pending", "awaiting", "new"].includes(low)) return "PENDING";
+  const legacy = String(raw || "").trim().toLowerCase();
+  if (["verified", "verify", "approved", "approve"].includes(legacy)) return "APPROVED";
+  if (["rejected", "reject", "declined"].includes(legacy)) return "REJECTED";
+  if (["pending", "awaiting", "new"].includes(legacy)) return "PENDING";
 
-  // fallback to boolean
-  if (u?.verified === true) return "APPROVED";
-  if (u?.verified === false) return "PENDING";
+  if (user?.verified === true) return "APPROVED";
   return "PENDING";
 }
 
-function fmtSubmitted(u) {
-  // Your backend does not store "submittedAt" explicitly.
-  // Show best available:
-  const t =
-    u?.verificationSubmittedAt ||
-    u?.verifySubmittedAt ||
-    u?.submittedAt ||
-    u?.createdAt ||
-    u?.created_at ||
-    u?.verifiedAt ||
+function fmtSubmitted(user) {
+  const timestamp =
+    user?.verificationSubmittedAt ||
+    user?.verifySubmittedAt ||
+    user?.submittedAt ||
+    user?.createdAt ||
+    user?.created_at ||
+    user?.verifiedAt ||
     null;
 
-  if (!t) return "—";
-  try {
-    return dayjs(t).format("YYYY/MM/DD HH:mm");
-  } catch {
-    return "—";
-  }
+  if (!timestamp) return "—";
+  const date = dayjs(timestamp);
+  return date.isValid() ? date.format("YYYY/MM/DD HH:mm") : "—";
 }
 
 function TabBtn({ active, onClick, children, badge }) {
   return (
     <button
-      className="btn"
+      type="button"
+      className={`admin-users-tab${active ? " is-active" : ""}`}
       onClick={onClick}
-      style={{
-        borderRadius: 12,
-        fontWeight: 800,
-        background: active ? "#ef4444" : "#fff",
-        color: active ? "#fff" : "#111827",
-        borderColor: active ? "#ef4444" : "var(--border)",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-      }}
+      aria-pressed={active}
     >
-      {children}
-      {Number.isFinite(badge) ? (
-        <span
-          style={{
-            background: active ? "rgba(255,255,255,.25)" : "#fee2e2",
-            color: active ? "#fff" : "#991b1b",
-            padding: "2px 8px",
-            borderRadius: 999,
-            fontSize: 12,
-            fontWeight: 900,
-          }}
-        >
-          {badge}
-        </span>
-      ) : null}
+      <span>{children}</span>
+      {Number.isFinite(badge) ? <span className="admin-users-tab__badge">{badge}</span> : null}
     </button>
   );
 }
 
-export default function AdminUsers({ user }) {
-  const [tab, setTab] = useState("manage"); // "manage" | "verify"
+function ContactDetails({ user }) {
+  const phone = user.phone ? `Phone: ${user.phone}` : "No phone";
+  const discord = user.discord ? `Discord: ${user.discord}` : "No Discord";
 
+  return (
+    <div className="admin-users-contact">
+      <div className="admin-users-contact__email">{user.email || "—"}</div>
+      <div className="admin-users-contact__meta">
+        <span>{phone}</span>
+        <span className="admin-users-contact__dot" aria-hidden="true">
+          •
+        </span>
+        <span>{discord}</span>
+      </div>
+    </div>
+  );
+}
+
+export default function AdminUsers({ user }) {
+  const [tab, setTab] = useState("manage");
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
 
+  const [editingId, setEditingId] = useState(null);
   const [savingId, setSavingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
-  const [edits, setEdits] = useState({}); // { [userId]: { role?, grade? } }
+  const [edits, setEdits] = useState({});
 
-  const [busyActionId, setBusyActionId] = useState(null); // verify/reject action busy
-  const [busyPicId, setBusyPicId] = useState(null); // remove photo busy
-
-  // ✅ modal state now keeps user context
-  const [imgOpen, setImgOpen] = useState(null); // { userId, email, url } | null
+  const [busyActionId, setBusyActionId] = useState(null);
+  const [busyPicId, setBusyPicId] = useState(null);
+  const [imgOpen, setImgOpen] = useState(null);
   const [imgLoadErr, setImgLoadErr] = useState("");
 
-  const isAdmin = !!user && user.role === "admin";
+  const isAdmin = Boolean(user && user.role === "admin");
 
   async function refresh() {
     setLoading(true);
     try {
       const rows = await apiGet("/admin/users");
       setList(Array.isArray(rows) ? rows : []);
+      setEditingId(null);
+      setEdits({});
+    } catch (error) {
+      alert(error?.message || "Failed to load users.");
     } finally {
       setLoading(false);
     }
@@ -196,195 +198,180 @@ export default function AdminUsers({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
-  const pendingCount = useMemo(() => {
-    return (list || []).filter((u) => getVerifyStatus(u) === "PENDING").length;
-  }, [list]);
+  const pendingCount = useMemo(
+    () => list.filter((item) => getVerifyStatus(item) === "PENDING").length,
+    [list]
+  );
 
-  // ----- search filter depends on tab -----
   const filtered = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    if (!t) return list;
+    const term = q.trim().toLowerCase();
+    if (!term) return list;
 
-    return (list || []).filter((u) => {
-      const email = (u.email || "").toLowerCase();
-      const uname = (u.username || "").toLowerCase();
-      const name = (u.name || "").toLowerCase();
-      const phone = (u.phone || "").toLowerCase();
-      const discord = (u.discord || "").toLowerCase();
+    return list.filter((item) => {
+      const values = [
+        item.email,
+        item.username,
+        item.name,
+        item.phone,
+        item.discord,
+        item.role,
+        item.grade,
+        getVerifyStatus(item),
+      ];
 
-      const status = getVerifyStatus(u).toLowerCase();
-
-      return (
-        email.includes(t) ||
-        uname.includes(t) ||
-        name.includes(t) ||
-        phone.includes(t) ||
-        discord.includes(t) ||
-        status.includes(t)
-      );
+      return values.some((value) => String(value || "").toLowerCase().includes(term));
     });
   }, [q, list]);
 
-  // =========================
-  // User Management helpers
-  // =========================
-  function getDraft(u) {
-    const d = edits[u.id] || {};
+  function getDraft(item) {
+    const draft = edits[item.id] || {};
     return {
-      role: d.role ?? u.role,
-      grade: d.grade ?? (u.grade || "junior"),
+      role: draft.role ?? item.role,
+      grade: draft.grade ?? (item.grade || "junior"),
     };
   }
 
-  function setDraft(u, patch) {
-    setEdits((old) => ({
-      ...old,
-      [u.id]: { ...(old[u.id] || {}), ...patch },
+  function setDraft(item, patch) {
+    setEdits((current) => ({
+      ...current,
+      [item.id]: { ...(current[item.id] || {}), ...patch },
     }));
   }
 
-  function isDirty(u) {
-    const d = getDraft(u);
-    return d.role !== u.role || (d.grade || "junior") !== (u.grade || "junior");
+  function isDirty(item) {
+    const draft = getDraft(item);
+    return draft.role !== item.role || draft.grade !== (item.grade || "junior");
   }
 
-  async function save(u) {
-    const draft = getDraft(u);
+  function beginEdit(item) {
+    setEditingId(item.id);
+    setEdits((current) => ({
+      ...current,
+      [item.id]: {
+        role: item.role,
+        grade: item.grade || "junior",
+      },
+    }));
+  }
+
+  function cancelEdit(item) {
+    setEditingId(null);
+    setEdits((current) => {
+      const next = { ...current };
+      delete next[item.id];
+      return next;
+    });
+  }
+
+  async function save(item) {
+    const draft = getDraft(item);
     const body = {};
-    if (draft.role !== u.role) body.role = draft.role;
-    if ((draft.grade || "junior") !== (u.grade || "junior")) body.grade = draft.grade;
+
+    if (draft.role !== item.role) body.role = draft.role;
+    if (draft.grade !== (item.grade || "junior")) body.grade = draft.grade;
 
     if (!Object.keys(body).length) {
-      alert("No changes to save.");
+      cancelEdit(item);
       return;
     }
 
     try {
-      setSavingId(u.id);
-      const res = await apiPatch(`/admin/users/${u.id}`, body);
-      const updated = res?.user || { ...u, ...body };
-      setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
-      setEdits((old) => {
-        const nxt = { ...old };
-        delete nxt[u.id];
-        return nxt;
+      setSavingId(item.id);
+      const response = await apiPatch(`/admin/users/${item.id}`, body);
+      const updated = response?.user || { ...item, ...body };
+
+      setList((current) => current.map((entry) => (entry.id === item.id ? updated : entry)));
+      setEditingId(null);
+      setEdits((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
       });
-      alert("Saved.");
-    } catch (err) {
-      const msg = err?.message || "Save failed";
-      if (String(msg).includes("last_admin")) alert("Cannot remove the last admin.");
-      else alert(msg);
+    } catch (error) {
+      const message = error?.message || "Save failed";
+      if (String(message).includes("last_admin")) alert("Cannot remove the last administrator.");
+      else alert(message);
     } finally {
       setSavingId(null);
     }
   }
 
-  function resetRow(u) {
-    setEdits((old) => {
-      const nxt = { ...old };
-      delete nxt[u.id];
-      return nxt;
-    });
-  }
+  async function removeUser(item) {
+    if (!item?.id) return;
 
-  async function removeUser(u) {
-    if (!u?.id) return;
-
-    const label = u.email || u.username || u.name || "this user";
-    const isSelf = u.id === user?.id;
+    const label = item.email || item.username || item.name || "this user";
+    const isSelf = item.id === user?.id;
 
     if (isSelf) {
       alert("You cannot remove your own account while you are signed in.");
       return;
     }
 
-    const ok = window.confirm(
+    const confirmed = window.confirm(
       `Remove ${label} from the platform?\n\n` +
-        "This will delete the user account, remove their job applications/approvals/attendance records, and clear their notifications. This cannot be undone."
+        "This deletes the account, job applications, approvals, attendance records and notifications. This cannot be undone."
     );
 
-    if (!ok) return;
+    if (!confirmed) return;
 
     try {
-      setDeletingId(u.id);
-      await apiDelete(`/admin/users/${u.id}`);
-
-      setList((old) => old.filter((x) => x.id !== u.id));
-
-      setEdits((old) => {
-        const nxt = { ...old };
-        delete nxt[u.id];
-        return nxt;
+      setDeletingId(item.id);
+      await apiDelete(`/admin/users/${item.id}`);
+      setList((current) => current.filter((entry) => entry.id !== item.id));
+      setEdits((current) => {
+        const next = { ...current };
+        delete next[item.id];
+        return next;
       });
+      if (editingId === item.id) setEditingId(null);
+    } catch (error) {
+      const message = error?.message || "Remove user failed";
 
-      alert("User removed from platform.");
-    } catch (err) {
-      const msg = err?.message || "Remove user failed";
-
-      if (String(msg).includes("last_admin")) {
-        alert("Cannot remove the last admin.");
-      } else if (String(msg).includes("self_delete")) {
+      if (String(message).includes("last_admin")) alert("Cannot remove the last administrator.");
+      else if (String(message).includes("self_delete")) {
         alert("You cannot remove your own account while you are signed in.");
-      } else if (String(msg).includes("user_not_found")) {
+      } else if (String(message).includes("user_not_found")) {
         alert("User not found. Refreshing the list.");
         refresh();
-      } else {
-        alert(msg);
-      }
+      } else alert(message);
     } finally {
       setDeletingId(null);
     }
   }
 
-  // =========================
-  // Verification actions
-  // =========================
-  async function setVerification(u, nextStatus) {
-    // nextStatus: "APPROVED" | "REJECTED" | "PENDING"
+  async function setVerification(item, nextStatus) {
     try {
-      setBusyActionId(u.id);
-
-      // ✅ match backend expected values
+      setBusyActionId(item.id);
       const body = {
         verificationStatus: nextStatus,
         verified: nextStatus === "APPROVED",
-        // optional extras for older variants (won't hurt)
         verifyStatus: nextStatus,
       };
 
-      const res = await apiPatch(`/admin/users/${u.id}`, body);
-      const updated = res?.user || res || { ...u, ...body };
-
-      setList((old) => old.map((x) => (x.id === u.id ? updated : x)));
-
-      if (nextStatus === "APPROVED") alert("User verified ✅");
-      if (nextStatus === "REJECTED") alert("User rejected.");
-      if (nextStatus === "PENDING") alert("Set back to pending.");
-    } catch (err) {
-      alert(err?.message || "Action failed");
+      const response = await apiPatch(`/admin/users/${item.id}`, body);
+      const updated = response?.user || response || { ...item, ...body };
+      setList((current) => current.map((entry) => (entry.id === item.id ? updated : entry)));
+    } catch (error) {
+      alert(error?.message || "Action failed");
     } finally {
       setBusyActionId(null);
     }
   }
 
-  // =========================
-  // Remove verification picture
-  // =========================
-  async function removeVerifyPic(u) {
-    if (!u?.id) return;
-    const email = u.email || u.name || "this user";
-    if (!window.confirm(`Remove verification picture for ${email}?`)) return;
+  async function removeVerifyPic(item) {
+    if (!item?.id) return;
+    const label = item.email || item.name || "this user";
+    if (!window.confirm(`Remove verification picture for ${label}?`)) return;
 
     try {
-      setBusyPicId(u.id);
-      await apiPost(`/admin/users/${u.id}/verification-photo/remove`, {});
+      setBusyPicId(item.id);
+      await apiPost(`/admin/users/${item.id}/verification-photo/remove`, {});
 
-      // Optimistic update (so no need to refresh to see it removed)
-      setList((old) =>
-        old.map((x) => {
-          if (x.id !== u.id) return x;
+      setList((current) =>
+        current.map((entry) => {
+          if (entry.id !== item.id) return entry;
           return {
-            ...x,
+            ...entry,
             verificationPhotoUrl: "",
             verificationPhotoUrlAbs: "",
             verifyPhotoUrl: "",
@@ -394,12 +381,10 @@ export default function AdminUsers({ user }) {
         })
       );
 
-      // Close modal if it is this user
-      setImgOpen((cur) => (cur?.userId === u.id ? null : cur));
+      setImgOpen((current) => (current?.userId === item.id ? null : current));
       setImgLoadErr("");
-      alert("Verification picture removed.");
-    } catch (err) {
-      alert(err?.message || "Remove failed");
+    } catch (error) {
+      alert(error?.message || "Remove failed");
     } finally {
       setBusyPicId(null);
     }
@@ -410,315 +395,329 @@ export default function AdminUsers({ user }) {
   }
 
   const showManage = tab === "manage";
-  const showVerify = tab === "verify";
-
-  const verificationRows = (filtered || []).filter((u) => {
-    const st = getVerifyStatus(u);
-    // show pending + rejected (hide approved by default)
-    return st !== "APPROVED";
-  });
+  const verificationRows = filtered.filter((item) => getVerifyStatus(item) !== "APPROVED");
 
   return (
-    <div className="container" style={{ paddingTop: 16 }}>
-      {/* Header */}
-      <div
-        className="card"
-        style={{
-          display: "flex",
-          gap: 12,
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 12,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>Users</div>
-          <div style={{ color: "#666", fontSize: 12, marginTop: 4 }}>
-            Use <strong>Verification</strong> to approve/reject new registrations.
+    <div className="container admin-users-page">
+      <section className="card admin-users-toolbar" aria-labelledby="admin-users-title">
+        <div className="admin-users-toolbar__top">
+          <div className="admin-users-heading">
+            <h1 id="admin-users-title">Users</h1>
+            <p>Manage account access and review new registrations.</p>
           </div>
 
-          <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <TabBtn active={showManage} onClick={() => setTab("manage")}>
-              User Management
-            </TabBtn>
-
-            <TabBtn active={showVerify} onClick={() => setTab("verify")} badge={pendingCount}>
-              Verification
-            </TabBtn>
+          <div className="admin-users-search">
+            <input
+              type="search"
+              aria-label="Search users"
+              placeholder={
+                showManage
+                  ? "Search name, email, username, phone or Discord"
+                  : 'Search applicant or status (for example, "pending")'
+              }
+              value={q}
+              onChange={(event) => setQ(event.target.value)}
+            />
+            <button type="button" className="btn" onClick={refresh} disabled={loading}>
+              {loading ? "Refreshing…" : "Refresh"}
+            </button>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input
-            placeholder={
-              showVerify
-                ? 'Search name/email/phone/discord ("pending","rejected")'
-                : "Search email / username / name / phone / discord"
-            }
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="card"
-            style={{ padding: 8, width: 420, maxWidth: "100%" }}
-          />
-          <button className="btn" onClick={refresh} disabled={loading}>
-            {loading ? "Refreshing..." : "Refresh"}
-          </button>
+        <div className="admin-users-tabs" role="tablist" aria-label="User administration sections">
+          <TabBtn active={showManage} onClick={() => setTab("manage")} badge={list.length}>
+            User Management
+          </TabBtn>
+          <TabBtn active={!showManage} onClick={() => setTab("verify")} badge={pendingCount}>
+            Verification
+          </TabBtn>
         </div>
-      </div>
+      </section>
 
       {loading ? (
-        <div className="card">Loading...</div>
+        <div className="card admin-users-empty">Loading users…</div>
       ) : showManage ? (
-        /* ========================= User Management ========================= */
-        <div className="card table-shell" style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: "8px" }}>Name</th>
-                <th style={{ padding: "8px" }}>Email</th>
-                <th style={{ padding: "8px" }}>Username</th>
-                <th style={{ padding: "8px" }}>Phone</th>
-                <th style={{ padding: "8px" }}>Discord</th>
-                <th style={{ padding: "8px" }}>Account Role</th>
-                <th style={{ padding: "8px" }}>Staff Grade</th>
-                <th style={{ padding: "8px" }} />
-              </tr>
-            </thead>
-
-            <tbody>
-              {filtered.map((u) => {
-                const draft = getDraft(u);
-                const dirty = isDirty(u);
-                const isSelf = u.id === user?.id;
-
-                return (
-                  <tr key={u.id} style={{ borderTop: "1px solid #eee" }}>
-                    <td style={{ padding: 8 }}>{u.name || "—"}</td>
-                    <td style={{ padding: 8 }}>{u.email || "—"}</td>
-                    <td style={{ padding: 8 }}>{u.username || "—"}</td>
-                    <td style={{ padding: 8 }}>{u.phone || "—"}</td>
-                    <td style={{ padding: 8 }}>{u.discord || "—"}</td>
-
-                    <td style={{ padding: 8 }}>
-                      <select value={draft.role} onChange={(e) => setDraft(u, { role: e.target.value })}>
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-
-                    <td style={{ padding: 8 }}>
-                      <select value={draft.grade} onChange={(e) => setDraft(u, { grade: e.target.value })}>
-                        {GRADES.map((g) => (
-                          <option key={g} value={g}>
-                            {gradeLabel(g)}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-
-                    <td style={{ padding: 8 }}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button
-                          className="btn primary"
-                          disabled={savingId === u.id || deletingId === u.id || !dirty}
-                          onClick={() => save(u)}
-                        >
-                          {savingId === u.id ? "Saving..." : "Save"}
-                        </button>
-
-                        {dirty && (
-                          <button className="btn" disabled={savingId === u.id || deletingId === u.id} onClick={() => resetRow(u)}>
-                            Reset
-                          </button>
-                        )}
-
-                        <button
-                          className="btn"
-                          disabled={deletingId === u.id || savingId === u.id || isSelf}
-                          title={isSelf ? "You cannot remove your own account" : "Remove user from platform"}
-                          onClick={() => removeUser(u)}
-                          style={{ borderColor: "#fecaca", color: "#991b1b" }}
-                        >
-                          {deletingId === u.id ? "Removing..." : "Remove"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-
-              {!filtered.length && (
+        <section className="card admin-users-table-card" aria-label="User management">
+          <div className="admin-users-table-wrap">
+            <table className="admin-users-table">
+              <thead>
                 <tr>
-                  <td colSpan={8} style={{ padding: 12, color: "#666" }}>
-                    No users.
-                  </td>
+                  <th>User</th>
+                  <th>Contact</th>
+                  <th>Access</th>
+                  <th className="admin-users-actions-heading">Actions</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+
+              <tbody>
+                {filtered.map((item) => {
+                  const draft = getDraft(item);
+                  const dirty = isDirty(item);
+                  const isSelf = item.id === user?.id;
+                  const isEditing = editingId === item.id;
+                  const rowBusy = savingId === item.id || deletingId === item.id;
+
+                  return (
+                    <tr key={item.id}>
+                      <td data-label="User">
+                        <div className="admin-users-person">
+                          <div className="admin-users-person__name-row">
+                            <span className="admin-users-person__name">{item.name || "Unnamed user"}</span>
+                            {isSelf ? <span className="admin-users-you-badge">You</span> : null}
+                          </div>
+                          <span className="admin-users-person__username">
+                            {item.username ? `@${item.username}` : "No username"}
+                          </span>
+                        </div>
+                      </td>
+
+                      <td data-label="Contact">
+                        <ContactDetails user={item} />
+                      </td>
+
+                      <td data-label="Access">
+                        {isEditing ? (
+                          <div className="admin-users-access-editor">
+                            <label>
+                              <span>Account role</span>
+                              <select
+                                value={draft.role}
+                                onChange={(event) => setDraft(item, { role: event.target.value })}
+                                disabled={rowBusy}
+                              >
+                                {ROLES.map((role) => (
+                                  <option key={role} value={role}>
+                                    {roleLabel(role)}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label>
+                              <span>Staff grade</span>
+                              <select
+                                value={draft.grade}
+                                onChange={(event) => setDraft(item, { grade: event.target.value })}
+                                disabled={rowBusy}
+                              >
+                                {GRADES.map((grade) => (
+                                  <option key={grade} value={grade}>
+                                    {gradeLabel(grade)}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                        ) : (
+                          <div className="admin-users-access-badges">
+                            <span className={`admin-users-role-badge ${roleClass(item.role)}`}>
+                              {roleLabel(item.role)}
+                            </span>
+                            <span className="admin-users-grade-badge">{gradeLabel(item.grade)}</span>
+                          </div>
+                        )}
+                      </td>
+
+                      <td data-label="Actions" className="admin-users-actions-cell">
+                        {isEditing ? (
+                          <div className="admin-users-row-actions">
+                            <button
+                              type="button"
+                              className="btn primary"
+                              onClick={() => save(item)}
+                              disabled={rowBusy || !dirty}
+                            >
+                              {savingId === item.id ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              onClick={() => cancelEdit(item)}
+                              disabled={rowBusy}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="admin-users-row-actions">
+                            <button
+                              type="button"
+                              className="btn"
+                              onClick={() => beginEdit(item)}
+                              disabled={deletingId === item.id}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="btn admin-users-remove-btn"
+                              onClick={() => removeUser(item)}
+                              disabled={deletingId === item.id || isSelf}
+                              title={isSelf ? "You cannot remove your own account" : "Remove user"}
+                            >
+                              {deletingId === item.id ? "Removing…" : "Remove"}
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {!filtered.length ? (
+                  <tr className="admin-users-empty-row">
+                    <td colSpan={4}>No users match your search.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : (
-        /* ========================= Verification ========================= */
-        <div className="card table-shell" style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: "8px" }}>Name</th>
-                <th style={{ padding: "8px" }}>Email</th>
-                <th style={{ padding: "8px" }}>Phone</th>
-                <th style={{ padding: "8px" }}>Discord</th>
-                <th style={{ padding: "8px" }}>Submitted</th>
-                <th style={{ padding: "8px" }}>Verification Pic</th>
-                <th style={{ padding: "8px" }}>Status</th>
-                <th style={{ padding: "8px" }} />
-              </tr>
-            </thead>
+        <section className="card admin-users-table-card" aria-label="User verification">
+          <div className="admin-users-table-wrap">
+            <table className="admin-users-table admin-users-verification-table">
+              <thead>
+                <tr>
+                  <th>Applicant</th>
+                  <th>Submitted</th>
+                  <th>Verification</th>
+                  <th>Status</th>
+                  <th className="admin-users-actions-heading">Actions</th>
+                </tr>
+              </thead>
 
-            <tbody>
-              {verificationRows.map((u) => {
-                const status = getVerifyStatus(u); // "PENDING" | "APPROVED" | "REJECTED"
-                const picUrl = getVerifyPicUrl(u);
-                const hasPic = !!picUrl;
+              <tbody>
+                {verificationRows.map((item) => {
+                  const status = getVerifyStatus(item);
+                  const picUrl = getVerifyPicUrl(item);
+                  const hasPic = Boolean(picUrl);
+                  const isBusy = busyActionId === item.id;
 
-                return (
-                  <tr key={u.id} style={{ borderTop: "1px solid #eee" }}>
-                    <td style={{ padding: 8 }}>{u.name || "—"}</td>
-                    <td style={{ padding: 8 }}>{u.email || "—"}</td>
-                    <td style={{ padding: 8 }}>{u.phone || "—"}</td>
-                    <td style={{ padding: 8 }}>{u.discord || "—"}</td>
+                  return (
+                    <tr key={item.id}>
+                      <td data-label="Applicant">
+                        <div className="admin-users-person">
+                          <span className="admin-users-person__name">{item.name || "Unnamed user"}</span>
+                          <span className="admin-users-person__username">{item.email || "No email"}</span>
+                          <div className="admin-users-contact__meta admin-users-contact__meta--stackable">
+                            <span>{item.phone ? `Phone: ${item.phone}` : "No phone"}</span>
+                            <span className="admin-users-contact__dot" aria-hidden="true">
+                              •
+                            </span>
+                            <span>{item.discord ? `Discord: ${item.discord}` : "No Discord"}</span>
+                          </div>
+                        </div>
+                      </td>
 
-                    <td style={{ padding: 8 }}>{fmtSubmitted(u)}</td>
+                      <td data-label="Submitted">
+                        <span className="admin-users-submitted">{fmtSubmitted(item)}</span>
+                      </td>
 
-                    <td style={{ padding: 8 }}>
-                      {hasPic ? (
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                          {/* thumbnail (lazy) */}
-                          <img
-                            src={picUrl}
-                            alt="verification"
-                            loading="lazy"
-                            decoding="async"
-                            style={{
-                              width: 38,
-                              height: 38,
-                              borderRadius: 10,
-                              objectFit: "cover",
-                              border: "1px solid #eee",
-                              cursor: "pointer",
-                            }}
-                            onClick={() => {
-                              setImgLoadErr("");
-                              setImgOpen({ userId: u.id, email: u.email || "", url: picUrl });
-                            }}
-                            onError={(e) => {
-                              // hide thumb if broken, but keep actions
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
+                      <td data-label="Verification">
+                        {hasPic ? (
+                          <div className="admin-users-photo-cell">
+                            <button
+                              type="button"
+                              className="admin-users-photo-button"
+                              onClick={() => {
+                                setImgLoadErr("");
+                                setImgOpen({ userId: item.id, email: item.email || "", url: picUrl });
+                              }}
+                              aria-label={`View verification picture for ${item.email || item.name || "user"}`}
+                            >
+                              <img
+                                src={picUrl}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                onError={(event) => {
+                                  event.currentTarget.style.display = "none";
+                                }}
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn"
+                              onClick={() => {
+                                setImgLoadErr("");
+                                setImgOpen({ userId: item.id, email: item.email || "", url: picUrl });
+                              }}
+                            >
+                              View
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="admin-users-muted">No picture</span>
+                        )}
+                      </td>
 
+                      <td data-label="Status">
+                        {status === "REJECTED" ? (
+                          <span style={pillStyle("#fee2e2", "#fca5a5", "#991b1b")}>Rejected</span>
+                        ) : (
+                          <span style={pillStyle("#fff7ed", "#fdba74", "#9a3412")}>Pending</span>
+                        )}
+                      </td>
+
+                      <td data-label="Actions" className="admin-users-actions-cell">
+                        <div className="admin-users-row-actions">
                           <button
-                            className="btn"
-                            onClick={() => {
-                              setImgLoadErr("");
-                              setImgOpen({ userId: u.id, email: u.email || "", url: picUrl });
-                            }}
+                            type="button"
+                            className="btn primary"
+                            disabled={isBusy || !hasPic}
+                            title={!hasPic ? "User must upload a verification picture first" : ""}
+                            onClick={() => setVerification(item, "APPROVED")}
                           >
-                            View
+                            {isBusy ? "Working…" : "Verify"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={isBusy}
+                            onClick={() => setVerification(item, "REJECTED")}
+                          >
+                            Reject
                           </button>
                         </div>
-                      ) : (
-                        <span style={{ color: "#666", fontSize: 12 }}>No pic</span>
-                      )}
-                    </td>
+                      </td>
+                    </tr>
+                  );
+                })}
 
-                    <td style={{ padding: 8 }}>
-                      {status === "APPROVED" ? (
-                        <span style={pillStyle("#ecfdf5", "#6ee7b7", "#065f46")}>✅ Verified</span>
-                      ) : status === "REJECTED" ? (
-                        <span style={pillStyle("#fee2e2", "#fca5a5", "#991b1b")}>⛔ Rejected</span>
-                      ) : (
-                        <span style={pillStyle("#fff7ed", "#fdba74", "#9a3412")}>⏳ Pending</span>
-                      )}
-                    </td>
-
-                    <td style={{ padding: 8 }}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button
-                          className="btn primary"
-                          disabled={busyActionId === u.id || !hasPic}
-                          title={!hasPic ? "User must upload verification picture first" : ""}
-                          onClick={() => setVerification(u, "APPROVED")}
-                        >
-                          {busyActionId === u.id ? "Working..." : "Verify"}
-                        </button>
-
-                        <button
-                          className="btn"
-                          disabled={busyActionId === u.id}
-                          onClick={() => setVerification(u, "REJECTED")}
-                        >
-                          {busyActionId === u.id ? "Working..." : "Reject"}
-                        </button>
-                      </div>
-                    </td>
+                {!verificationRows.length ? (
+                  <tr className="admin-users-empty-row">
+                    <td colSpan={5}>No pending or rejected users.</td>
                   </tr>
-                );
-              })}
-
-              {!verificationRows.length && (
-                <tr>
-                  <td colSpan={8} style={{ padding: 12, color: "#666" }}>
-                    No pending/rejected users.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-
-          <div style={{ marginTop: 10, color: "#666", fontSize: 12 }}>
-            Tip: Reject keeps the account unverified. User can re-upload from <code>Profile → Status</code>.
+                ) : null}
+              </tbody>
+            </table>
           </div>
-        </div>
+
+          <p className="admin-users-tip">
+            Rejected accounts stay unverified. Users can upload a new picture from <code>Profile → Status</code>.
+          </p>
+        </section>
       )}
 
-      {/* Simple image modal */}
-      {imgOpen && (
+      {imgOpen ? (
         <div
+          className="admin-users-image-backdrop"
           onClick={() => {
             setImgOpen(null);
             setImgLoadErr("");
           }}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-            zIndex: 9999,
-          }}
         >
-          <div
-            className="card"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: 760,
-              width: "100%",
-              padding: 12,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+          <div className="card admin-users-image-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="admin-users-image-modal__header">
               <div>
-                <div style={{ fontWeight: 800 }}>Verification Picture</div>
-                <div style={{ fontSize: 12, color: "#666" }}>{imgOpen.email || ""}</div>
+                <div className="admin-users-image-modal__title">Verification Picture</div>
+                <div className="admin-users-muted">{imgOpen.email || ""}</div>
               </div>
 
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div className="admin-users-row-actions">
                 <button
+                  type="button"
                   className="btn"
                   onClick={() => {
                     setImgOpen(null);
@@ -727,51 +726,37 @@ export default function AdminUsers({ user }) {
                 >
                   Close
                 </button>
-
                 <button
-                  className="btn"
+                  type="button"
+                  className="btn admin-users-remove-btn"
                   disabled={busyPicId === imgOpen.userId}
                   onClick={() => {
-                    const u = list.find((x) => x.id === imgOpen.userId);
-                    if (u) removeVerifyPic(u);
+                    const matchingUser = list.find((entry) => entry.id === imgOpen.userId);
+                    if (matchingUser) removeVerifyPic(matchingUser);
                   }}
                 >
-                  {busyPicId === imgOpen.userId ? "Removing..." : "Remove Pic"}
+                  {busyPicId === imgOpen.userId ? "Removing…" : "Remove Picture"}
                 </button>
               </div>
             </div>
 
-            <div style={{ marginTop: 10 }}>
-              {imgLoadErr ? (
-                <div style={{ marginBottom: 8, color: "#b91c1c", fontSize: 12 }}>{imgLoadErr}</div>
-              ) : null}
+            {imgLoadErr ? <div className="admin-users-image-error">{imgLoadErr}</div> : null}
 
-              <img
-                src={imgOpen.url}
-                alt="verification-large"
-                loading="lazy"
-                decoding="async"
-                style={{
-                  width: "100%",
-                  maxHeight: "70vh",
-                  objectFit: "contain",
-                  borderRadius: 12,
-                  border: "1px solid #eee",
-                }}
-                onError={() => {
-                  setImgLoadErr(
-                    "Image failed to load (likely old /uploads file missing after Render restart)."
-                  );
-                }}
-              />
-
-              <div style={{ marginTop: 8, fontSize: 12, color: "#666", wordBreak: "break-all" }}>
-                {imgOpen.url}
-              </div>
-            </div>
+            <img
+              className="admin-users-image-preview"
+              src={imgOpen.url}
+              alt="Verification document"
+              loading="lazy"
+              decoding="async"
+              onError={() => {
+                setImgLoadErr(
+                  "Image failed to load. The uploaded file may no longer be available on the server."
+                );
+              }}
+            />
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
