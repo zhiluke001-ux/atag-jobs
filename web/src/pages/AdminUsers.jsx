@@ -508,24 +508,20 @@ export default function AdminUsers({ user }) {
           </div>
         </div>
 
-        <div className="admin-users-tabs" role="tablist" aria-label="User administration sections">
-          <TabBtn active={showManage} onClick={() => setTab("manage")} badge={list.length}>
-            User Management
-          </TabBtn>
-          <TabBtn active={!showManage} onClick={() => setTab("verify")} badge={pendingCount}>
-            Verification
-          </TabBtn>
-        </div>
-      </section>
+        <div className="admin-users-toolbar-footer">
+          <div className="admin-users-tabs" role="tablist" aria-label="User administration sections">
+            <TabBtn active={showManage} onClick={() => setTab("manage")} badge={list.length}>
+              User Management
+            </TabBtn>
+            <TabBtn active={!showManage} onClick={() => setTab("verify")} badge={pendingCount}>
+              Verification
+            </TabBtn>
+          </div>
 
-      {loading ? (
-        <div className="card admin-users-empty">Loading users…</div>
-      ) : showManage ? (
-        <section className="card admin-users-table-card" aria-label="User management">
-          <div className="admin-users-list-controls">
-            <div className="admin-users-filters" aria-label="Filter users">
-              <label className="admin-users-filter">
-                <span>Role</span>
+          {showManage ? (
+            <div className="admin-users-toolbar-filters" aria-label="Filter users">
+              <label className="admin-users-filter admin-users-filter--compact">
+                <span className="admin-users-sr-only">Filter by role</span>
                 <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
                   <option value="all">All roles</option>
                   {ROLES.map((role) => (
@@ -536,8 +532,8 @@ export default function AdminUsers({ user }) {
                 </select>
               </label>
 
-              <label className="admin-users-filter">
-                <span>Grade</span>
+              <label className="admin-users-filter admin-users-filter--compact">
+                <span className="admin-users-sr-only">Filter by grade</span>
                 <select value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)}>
                   <option value="all">All grades</option>
                   {GRADES.map((grade) => (
@@ -551,22 +547,24 @@ export default function AdminUsers({ user }) {
               {roleFilter !== "all" || gradeFilter !== "all" ? (
                 <button
                   type="button"
-                  className="btn admin-users-clear-filters"
+                  className="admin-users-clear-filter-link"
                   onClick={() => {
                     setRoleFilter("all");
                     setGradeFilter("all");
                   }}
                 >
-                  Clear filters
+                  Clear
                 </button>
               ) : null}
             </div>
+          ) : null}
+        </div>
+      </section>
 
-            <span className="admin-users-result-count">
-              {manageFiltered.length} {manageFiltered.length === 1 ? "user" : "users"}
-            </span>
-          </div>
-
+      {loading ? (
+        <div className="card admin-users-empty">Loading users…</div>
+      ) : showManage ? (
+        <section className="card admin-users-table-card" aria-label="User management">
           <div className="admin-users-table-wrap">
             <table className="admin-users-table">
               <thead>
@@ -638,11 +636,14 @@ export default function AdminUsers({ user }) {
                             </label>
                           </div>
                         ) : (
-                          <div className="admin-users-access-badges">
-                            <span className={`admin-users-role-badge ${roleClass(item.role)}`}>
+                          <div className="admin-users-access-summary">
+                            <span className={`admin-users-role-text ${roleClass(item.role)}`}>
                               {roleLabel(item.role)}
                             </span>
-                            <span className="admin-users-grade-badge">{gradeLabel(item.grade)}</span>
+                            <span className="admin-users-access-separator" aria-hidden="true">
+                              ·
+                            </span>
+                            <span className="admin-users-grade-text">{gradeLabel(item.grade)}</span>
                           </div>
                         )}
                       </td>
