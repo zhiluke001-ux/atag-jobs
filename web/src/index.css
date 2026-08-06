@@ -1518,3 +1518,361 @@ input[type="time"], input[type="date"] { min-height: var(--field-min-h); }
     flex: 1 1 auto;
   }
 }
+
+/* ==========================================================
+   Admin Users refinements
+   Filters, pagination, calmer badges and compact actions.
+========================================================== */
+.admin-users-list-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eceff3;
+  background: #fff;
+}
+
+.admin-users-filters {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.admin-users-filter {
+  display: grid;
+  gap: 5px;
+}
+
+.admin-users-filter > span,
+.admin-users-page-size > span {
+  color: var(--fg-3);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-users-filter select {
+  min-width: 150px;
+  height: 36px;
+  padding: 6px 30px 6px 10px;
+  font-size: 12px;
+}
+
+.admin-users-clear-filters {
+  min-height: 36px;
+  padding: 7px 10px;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.admin-users-result-count {
+  flex: 0 0 auto;
+  padding-bottom: 8px;
+  color: var(--fg-3);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.admin-users-table-wrap {
+  overflow: visible;
+}
+
+.admin-users-table th,
+.admin-users-table td {
+  padding: 16px;
+}
+
+.admin-users-table th {
+  position: sticky;
+  top: var(--admin-users-header-offset, 0px);
+  z-index: 4;
+  box-shadow: 0 1px 0 #eceff3;
+}
+
+.admin-users-table th:nth-child(1),
+.admin-users-table td:nth-child(1) {
+  width: 22%;
+}
+
+.admin-users-table th:nth-child(2),
+.admin-users-table td:nth-child(2) {
+  width: 35%;
+}
+
+.admin-users-table th:nth-child(3),
+.admin-users-table td:nth-child(3) {
+  width: 29%;
+}
+
+.admin-users-table th:nth-child(4),
+.admin-users-table td:nth-child(4) {
+  width: 14%;
+}
+
+.admin-users-you-badge {
+  padding: 1px 6px;
+  background: #eef7fb;
+  color: #17617f;
+  font-size: 9px;
+  letter-spacing: 0.035em;
+}
+
+.admin-users-role-badge,
+.admin-users-grade-badge {
+  min-height: 26px;
+  padding: 4px 9px;
+  box-shadow: none;
+}
+
+.admin-users-role-badge.is-admin {
+  border-color: #f2d2d2;
+  background: #fff8f8;
+  color: #913232;
+}
+
+.admin-users-role-badge.is-pm {
+  border-color: #d5e2f2;
+  background: #f7faff;
+  color: #315b91;
+}
+
+.admin-users-role-badge.is-part-timer {
+  border-color: #d2eadb;
+  background: #f7fcf9;
+  color: #2f6f49;
+}
+
+.admin-users-grade-badge {
+  border-color: #e6e8ec;
+  background: #fafbfc;
+  color: #586170;
+}
+
+.admin-users-more-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.admin-users-more-menu__trigger {
+  width: 38px;
+  min-width: 38px;
+  padding: 6px 8px !important;
+  font-size: 18px !important;
+  line-height: 1;
+}
+
+.admin-users-more-menu__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: 190px;
+  padding: 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.14);
+  text-align: left;
+}
+
+.admin-users-menu-danger {
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #a12626;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-users-menu-danger:hover:not(:disabled) {
+  background: #fff4f4;
+}
+
+.admin-users-menu-danger:disabled {
+  color: #c9a4a4;
+  cursor: not-allowed;
+}
+
+.admin-users-menu-note {
+  display: block;
+  padding: 6px 10px 4px;
+  color: var(--fg-3);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.admin-users-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid #eceff3;
+  background: #fff;
+}
+
+.admin-users-pagination__summary {
+  color: var(--fg-3);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.admin-users-pagination__controls,
+.admin-users-page-numbers {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-users-page-btn,
+.admin-users-page-number {
+  min-height: 34px !important;
+  padding: 6px 10px !important;
+  font-size: 12px !important;
+}
+
+.admin-users-page-number {
+  width: 34px;
+  min-width: 34px;
+  padding-inline: 0 !important;
+}
+
+.admin-users-page-number.is-active {
+  border-color: #111827;
+  background: #111827;
+  color: #fff;
+}
+
+.admin-users-page-ellipsis {
+  width: 22px;
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.admin-users-page-size {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 4px;
+}
+
+.admin-users-page-size select {
+  width: 70px;
+  height: 34px;
+  padding: 5px 26px 5px 8px;
+  font-size: 12px;
+}
+
+@media (max-width: 980px) {
+  .admin-users-list-controls,
+  .admin-users-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-users-result-count {
+    padding-bottom: 0;
+  }
+
+  .admin-users-pagination__controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-users-table th {
+    position: static;
+  }
+
+  .admin-users-list-controls {
+    padding: 12px;
+  }
+
+  .admin-users-filters {
+    width: 100%;
+  }
+
+  .admin-users-filter {
+    flex: 1 1 180px;
+  }
+
+  .admin-users-filter select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .admin-users-more-menu__panel {
+    right: auto;
+    left: 0;
+  }
+
+  .admin-users-pagination {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-users-filter,
+  .admin-users-clear-filters {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .admin-users-result-count {
+    width: 100%;
+  }
+
+  .admin-users-row-actions .admin-users-more-menu__trigger {
+    width: 40px;
+    min-width: 40px;
+    flex: 0 0 40px;
+  }
+
+  .admin-users-page-numbers {
+    display: none;
+  }
+
+  .admin-users-page-btn {
+    flex: 1 1 0;
+  }
+
+  .admin-users-page-size {
+    width: 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+}
+
+/* Keep the five-column verification table proportions independent. */
+.admin-users-table.admin-users-verification-table th:nth-child(1),
+.admin-users-table.admin-users-verification-table td:nth-child(1) {
+  width: 29%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(2),
+.admin-users-table.admin-users-verification-table td:nth-child(2) {
+  width: 17%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(3),
+.admin-users-table.admin-users-verification-table td:nth-child(3) {
+  width: 18%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(4),
+.admin-users-table.admin-users-verification-table td:nth-child(4) {
+  width: 15%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(5),
+.admin-users-table.admin-users-verification-table td:nth-child(5) {
+  width: 21%;
+}
