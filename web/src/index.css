@@ -1876,3 +1876,382 @@ input[type="time"], input[type="date"] { min-height: var(--field-min-h); }
 .admin-users-table.admin-users-verification-table td:nth-child(5) {
   width: 21%;
 }
+
+/* ==========================================================
+   Admin Users — final compact layout
+   Add this block at the END of web/src/index.css.
+========================================================== */
+
+/* Prevent the four-column table from stretching unnecessarily on wide screens. */
+.admin-users-page {
+  width: min(calc(100% - 32px), 1120px);
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-top: 14px;
+}
+
+/* Compact top card and use softer typography. */
+.admin-users-toolbar {
+  margin-bottom: 10px;
+  padding: 16px 18px;
+}
+
+.admin-users-heading h1 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.admin-users-heading p {
+  margin-top: 4px;
+  color: #667085;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.admin-users-search {
+  width: min(100%, 420px);
+}
+
+.admin-users-search input,
+.admin-users-search .btn {
+  min-height: 38px;
+  font-size: 13px;
+}
+
+/* Keep tabs and filters together so the separate empty filter strip disappears. */
+.admin-users-toolbar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.admin-users-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.admin-users-tab {
+  min-height: 34px;
+  padding: 6px 11px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.admin-users-tab__badge,
+.admin-users-tab.is-active .admin-users-tab__badge {
+  font-weight: 600;
+}
+
+.admin-users-toolbar-filters {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-users-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.admin-users-filter--compact {
+  display: block;
+}
+
+.admin-users-filter--compact select {
+  width: 132px;
+  min-width: 132px;
+  height: 34px;
+  padding: 5px 30px 5px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.admin-users-clear-filter-link {
+  padding: 5px 2px;
+  border: 0;
+  background: transparent;
+  color: #667085;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.admin-users-clear-filter-link:hover {
+  color: #111827;
+  text-decoration: underline;
+}
+
+/* Table density and proportions. */
+.admin-users-table-card {
+  overflow: visible;
+}
+
+.admin-users-table-wrap {
+  overflow: visible;
+}
+
+.admin-users-table {
+  table-layout: fixed;
+}
+
+.admin-users-table th,
+.admin-users-table td {
+  padding: 12px 16px;
+}
+
+.admin-users-table th {
+  position: sticky;
+  top: var(--admin-users-header-offset, 0px);
+  z-index: 4;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  color: #667085;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  box-shadow: 0 1px 0 #eceff3;
+}
+
+.admin-users-table th:nth-child(1),
+.admin-users-table td:nth-child(1) {
+  width: 24%;
+}
+
+.admin-users-table th:nth-child(2),
+.admin-users-table td:nth-child(2) {
+  width: 34%;
+}
+
+.admin-users-table th:nth-child(3),
+.admin-users-table td:nth-child(3) {
+  width: 27%;
+}
+
+.admin-users-table th:nth-child(4),
+.admin-users-table td:nth-child(4) {
+  width: 15%;
+}
+
+.admin-users-table tbody tr:hover:not(.admin-users-empty-row) {
+  background: #fafbfc;
+}
+
+/* Lighter text hierarchy. */
+.admin-users-person {
+  gap: 2px;
+}
+
+.admin-users-person__name-row {
+  gap: 6px;
+}
+
+.admin-users-person__name {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.admin-users-person__username,
+.admin-users-muted,
+.admin-users-submitted {
+  color: #7a8493;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.admin-users-contact__email {
+  font-size: 13.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.admin-users-contact__meta {
+  margin-top: 3px;
+  color: #7a8493;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.admin-users-you-badge {
+  padding: 1px 5px;
+  background: #eef7fb;
+  color: #17617f;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Replace the two visual pills with a single calm text summary. */
+.admin-users-access-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.admin-users-role-text {
+  font-weight: 500;
+}
+
+.admin-users-role-text.is-admin {
+  color: #913b3b;
+}
+
+.admin-users-role-text.is-pm {
+  color: #385f8e;
+}
+
+.admin-users-role-text.is-part-timer {
+  color: #3b6f51;
+}
+
+.admin-users-access-separator,
+.admin-users-grade-text {
+  color: #7a8493;
+  font-weight: 400;
+}
+
+/* Smaller actions that no longer dominate the row. */
+.admin-users-actions-heading,
+.admin-users-actions-cell {
+  text-align: right;
+}
+
+.admin-users-row-actions {
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.admin-users-row-actions .btn {
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.admin-users-more-menu__trigger {
+  width: 34px;
+  min-width: 34px;
+  min-height: 32px !important;
+  padding: 4px 7px !important;
+  font-size: 17px !important;
+  font-weight: 500 !important;
+}
+
+.admin-users-menu-danger {
+  font-weight: 600;
+}
+
+/* Compact pagination. */
+.admin-users-pagination {
+  padding: 10px 16px;
+}
+
+.admin-users-pagination__summary,
+.admin-users-page-btn,
+.admin-users-page-number {
+  font-weight: 500;
+}
+
+@media (max-width: 900px) {
+  .admin-users-toolbar-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-users-toolbar-filters {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .admin-users-page {
+    width: min(calc(100% - 20px), 1120px);
+  }
+
+  .admin-users-toolbar {
+    padding: 14px;
+  }
+
+  .admin-users-table th {
+    position: static;
+  }
+
+  .admin-users-table td {
+    padding: 10px 12px;
+  }
+
+  .admin-users-access-summary {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-users-search,
+  .admin-users-toolbar-filters,
+  .admin-users-filter--compact,
+  .admin-users-filter--compact select {
+    width: 100%;
+  }
+
+  .admin-users-filter--compact select {
+    min-width: 0;
+  }
+
+  .admin-users-clear-filter-link {
+    width: auto;
+  }
+
+  .admin-users-access-summary {
+    justify-content: flex-start;
+  }
+}
+
+
+/* Keep the five-column verification table proportions independent. */
+.admin-users-table.admin-users-verification-table th:nth-child(1),
+.admin-users-table.admin-users-verification-table td:nth-child(1) {
+  width: 29%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(2),
+.admin-users-table.admin-users-verification-table td:nth-child(2) {
+  width: 17%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(3),
+.admin-users-table.admin-users-verification-table td:nth-child(3) {
+  width: 18%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(4),
+.admin-users-table.admin-users-verification-table td:nth-child(4) {
+  width: 15%;
+}
+
+.admin-users-table.admin-users-verification-table th:nth-child(5),
+.admin-users-table.admin-users-verification-table td:nth-child(5) {
+  width: 21%;
+}
