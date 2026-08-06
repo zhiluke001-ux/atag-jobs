@@ -6,6 +6,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "../api";
 const ROLES = ["part-timer", "pm", "admin"];
 // Keep in sync with backend STAFF_ROLES.
 const GRADES = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"];
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
 
 function gradeLabel(value) {
   const grade = String(value || "");
@@ -143,21 +144,50 @@ function TabBtn({ active, onClick, children, badge }) {
 }
 
 function ContactDetails({ user }) {
-  const phone = user.phone ? `Phone: ${user.phone}` : "No phone";
-  const discord = user.discord ? `Discord: ${user.discord}` : "No Discord";
+  const phone = String(user.phone || "").trim();
+  const discord = String(user.discord || "").trim();
+  const hasExtraContact = Boolean(phone || discord);
 
   return (
     <div className="admin-users-contact">
       <div className="admin-users-contact__email">{user.email || "—"}</div>
-      <div className="admin-users-contact__meta">
-        <span>{phone}</span>
-        <span className="admin-users-contact__dot" aria-hidden="true">
-          •
-        </span>
-        <span>{discord}</span>
-      </div>
+      {hasExtraContact ? (
+        <div className="admin-users-contact__meta">
+          {phone ? <span>Phone: {phone}</span> : null}
+          {phone && discord ? (
+            <span className="admin-users-contact__dot" aria-hidden="true">
+              •
+            </span>
+          ) : null}
+          {discord ? <span>Discord: {discord}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function getPageNumbers(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1]);
+  if (currentPage <= 4) [2, 3, 4, 5].forEach((page) => pages.add(page));
+  if (currentPage >= totalPages - 3) {
+    [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1].forEach((page) =>
+      pages.add(page)
+    );
+  }
+
+  const sorted = [...pages].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b);
+  const result = [];
+
+  sorted.forEach((page, index) => {
+    if (index > 0 && page - sorted[index - 1] > 1) result.push("ellipsis-" + page);
+    result.push(page);
+  });
+
+  return result;
 }
 
 export default function AdminUsers({ user }) {
@@ -165,6 +195,11 @@ export default function AdminUsers({ user }) {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [gradeFilter, setGradeFilter] = useState("all");
+  const [pageSize, setPageSize] = useState(25);
+  const [managePage, setManagePage] = useState(1);
+  const [openMenuId, setOpenMenuId] = useState(null);
 
   const [editingId, setEditingId] = useState(null);
   const [savingId, setSavingId] = useState(null);
@@ -198,6 +233,31 @@ export default function AdminUsers({ user }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
+  useEffect(() => {
+    const header = document.querySelector(".site-header");
+    if (!header) return undefined;
+
+    const updateHeaderOffset = () => {
+      document.documentElement.style.setProperty(
+        "--admin-users-header-offset",
+        `${Math.ceil(header.getBoundingClientRect().height)}px`
+      );
+    };
+
+    updateHeaderOffset();
+    window.addEventListener("resize", updateHeaderOffset);
+
+    const observer =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateHeaderOffset) : null;
+    observer?.observe(header);
+
+    return () => {
+      window.removeEventListener("resize", updateHeaderOffset);
+      observer?.disconnect();
+      document.documentElement.style.removeProperty("--admin-users-header-offset");
+    };
+  }, []);
+
   const pendingCount = useMemo(
     () => list.filter((item) => getVerifyStatus(item) === "PENDING").length,
     [list]
@@ -223,6 +283,32 @@ export default function AdminUsers({ user }) {
     });
   }, [q, list]);
 
+  const manageFiltered = useMemo(
+    () =>
+      filtered.filter((item) => {
+        const matchesRole = roleFilter === "all" || item.role === roleFilter;
+        const matchesGrade = gradeFilter === "all" || (item.grade || "junior") === gradeFilter;
+        return matchesRole && matchesGrade;
+      }),
+    [filtered, gradeFilter, roleFilter]
+  );
+
+  const manageTotalPages = Math.max(1, Math.ceil(manageFiltered.length / pageSize));
+  const safeManagePage = Math.min(managePage, manageTotalPages);
+  const manageStartIndex = (safeManagePage - 1) * pageSize;
+  const manageRows = manageFiltered.slice(manageStartIndex, manageStartIndex + pageSize);
+  const managePageNumbers = getPageNumbers(safeManagePage, manageTotalPages);
+  const manageShowingStart = manageFiltered.length ? manageStartIndex + 1 : 0;
+  const manageShowingEnd = Math.min(manageStartIndex + pageSize, manageFiltered.length);
+
+  useEffect(() => {
+    setManagePage(1);
+  }, [q, roleFilter, gradeFilter, pageSize]);
+
+  useEffect(() => {
+    if (managePage > manageTotalPages) setManagePage(manageTotalPages);
+  }, [managePage, manageTotalPages]);
+
   function getDraft(item) {
     const draft = edits[item.id] || {};
     return {
@@ -244,6 +330,7 @@ export default function AdminUsers({ user }) {
   }
 
   function beginEdit(item) {
+    setOpenMenuId(null);
     setEditingId(item.id);
     setEdits((current) => ({
       ...current,
@@ -298,6 +385,7 @@ export default function AdminUsers({ user }) {
 
   async function removeUser(item) {
     if (!item?.id) return;
+    setOpenMenuId(null);
 
     const label = item.email || item.username || item.name || "this user";
     const isSelf = item.id === user?.id;
@@ -410,11 +498,7 @@ export default function AdminUsers({ user }) {
             <input
               type="search"
               aria-label="Search users"
-              placeholder={
-                showManage
-                  ? "Search name, email, username, phone or Discord"
-                  : 'Search applicant or status (for example, "pending")'
-              }
+              placeholder={showManage ? "Search users…" : "Search verification…"}
               value={q}
               onChange={(event) => setQ(event.target.value)}
             />
@@ -438,6 +522,51 @@ export default function AdminUsers({ user }) {
         <div className="card admin-users-empty">Loading users…</div>
       ) : showManage ? (
         <section className="card admin-users-table-card" aria-label="User management">
+          <div className="admin-users-list-controls">
+            <div className="admin-users-filters" aria-label="Filter users">
+              <label className="admin-users-filter">
+                <span>Role</span>
+                <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+                  <option value="all">All roles</option>
+                  {ROLES.map((role) => (
+                    <option key={role} value={role}>
+                      {roleLabel(role)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="admin-users-filter">
+                <span>Grade</span>
+                <select value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)}>
+                  <option value="all">All grades</option>
+                  {GRADES.map((grade) => (
+                    <option key={grade} value={grade}>
+                      {gradeLabel(grade)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {roleFilter !== "all" || gradeFilter !== "all" ? (
+                <button
+                  type="button"
+                  className="btn admin-users-clear-filters"
+                  onClick={() => {
+                    setRoleFilter("all");
+                    setGradeFilter("all");
+                  }}
+                >
+                  Clear filters
+                </button>
+              ) : null}
+            </div>
+
+            <span className="admin-users-result-count">
+              {manageFiltered.length} {manageFiltered.length === 1 ? "user" : "users"}
+            </span>
+          </div>
+
           <div className="admin-users-table-wrap">
             <table className="admin-users-table">
               <thead>
@@ -450,7 +579,7 @@ export default function AdminUsers({ user }) {
               </thead>
 
               <tbody>
-                {filtered.map((item) => {
+                {manageRows.map((item) => {
                   const draft = getDraft(item);
                   const dirty = isDirty(item);
                   const isSelf = item.id === user?.id;
@@ -548,15 +677,48 @@ export default function AdminUsers({ user }) {
                             >
                               Edit
                             </button>
-                            <button
-                              type="button"
-                              className="btn admin-users-remove-btn"
-                              onClick={() => removeUser(item)}
-                              disabled={deletingId === item.id || isSelf}
-                              title={isSelf ? "You cannot remove your own account" : "Remove user"}
+
+                            <div
+                              className="admin-users-more-menu"
+                              onBlur={(event) => {
+                                if (!event.currentTarget.contains(event.relatedTarget)) {
+                                  setOpenMenuId(null);
+                                }
+                              }}
                             >
-                              {deletingId === item.id ? "Removing…" : "Remove"}
-                            </button>
+                              <button
+                                type="button"
+                                className="btn admin-users-more-menu__trigger"
+                                aria-label={`More actions for ${item.name || item.email || "user"}`}
+                                aria-haspopup="menu"
+                                aria-expanded={openMenuId === item.id}
+                                onClick={() =>
+                                  setOpenMenuId((current) => (current === item.id ? null : item.id))
+                                }
+                                disabled={deletingId === item.id}
+                              >
+                                <span aria-hidden="true">⋯</span>
+                              </button>
+
+                              {openMenuId === item.id ? (
+                                <div className="admin-users-more-menu__panel" role="menu">
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="admin-users-menu-danger"
+                                    onClick={() => removeUser(item)}
+                                    disabled={deletingId === item.id || isSelf}
+                                  >
+                                    {deletingId === item.id ? "Removing…" : "Remove user"}
+                                  </button>
+                                  {isSelf ? (
+                                    <span className="admin-users-menu-note">
+                                      You cannot remove your own account.
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         )}
                       </td>
@@ -564,13 +726,77 @@ export default function AdminUsers({ user }) {
                   );
                 })}
 
-                {!filtered.length ? (
+                {!manageRows.length ? (
                   <tr className="admin-users-empty-row">
-                    <td colSpan={4}>No users match your search.</td>
+                    <td colSpan={4}>No users match the current search and filters.</td>
                   </tr>
                 ) : null}
               </tbody>
             </table>
+          </div>
+
+          <div className="admin-users-pagination">
+            <div className="admin-users-pagination__summary">
+              Showing {manageShowingStart}–{manageShowingEnd} of {manageFiltered.length}
+            </div>
+
+            <div className="admin-users-pagination__controls" aria-label="User list pagination">
+              <button
+                type="button"
+                className="btn admin-users-page-btn"
+                onClick={() => setManagePage((current) => Math.max(1, current - 1))}
+                disabled={safeManagePage === 1}
+              >
+                Previous
+              </button>
+
+              <div className="admin-users-page-numbers">
+                {managePageNumbers.map((page) =>
+                  typeof page === "string" ? (
+                    <span key={page} className="admin-users-page-ellipsis" aria-hidden="true">
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={page}
+                      type="button"
+                      className={`btn admin-users-page-number${
+                        page === safeManagePage ? " is-active" : ""
+                      }`}
+                      onClick={() => setManagePage(page)}
+                      aria-current={page === safeManagePage ? "page" : undefined}
+                    >
+                      {page}
+                    </button>
+                  )
+                )}
+              </div>
+
+              <button
+                type="button"
+                className="btn admin-users-page-btn"
+                onClick={() =>
+                  setManagePage((current) => Math.min(manageTotalPages, current + 1))
+                }
+                disabled={safeManagePage === manageTotalPages}
+              >
+                Next
+              </button>
+
+              <label className="admin-users-page-size">
+                <span>Rows</span>
+                <select
+                  value={pageSize}
+                  onChange={(event) => setPageSize(Number(event.target.value))}
+                >
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </div>
         </section>
       ) : (
@@ -600,13 +826,17 @@ export default function AdminUsers({ user }) {
                         <div className="admin-users-person">
                           <span className="admin-users-person__name">{item.name || "Unnamed user"}</span>
                           <span className="admin-users-person__username">{item.email || "No email"}</span>
-                          <div className="admin-users-contact__meta admin-users-contact__meta--stackable">
-                            <span>{item.phone ? `Phone: ${item.phone}` : "No phone"}</span>
-                            <span className="admin-users-contact__dot" aria-hidden="true">
-                              •
-                            </span>
-                            <span>{item.discord ? `Discord: ${item.discord}` : "No Discord"}</span>
-                          </div>
+                          {item.phone || item.discord ? (
+                            <div className="admin-users-contact__meta admin-users-contact__meta--stackable">
+                              {item.phone ? <span>Phone: {item.phone}</span> : null}
+                              {item.phone && item.discord ? (
+                                <span className="admin-users-contact__dot" aria-hidden="true">
+                                  •
+                                </span>
+                              ) : null}
+                              {item.discord ? <span>Discord: {item.discord}</span> : null}
+                            </div>
+                          ) : null}
                         </div>
                       </td>
 
