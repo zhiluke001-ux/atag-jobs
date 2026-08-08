@@ -2783,8 +2783,18 @@ app.post("/push/unsubscribe", authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/notifications/summary", authMiddleware, (req, res) => {
+  const items = db.notifications[req.user.id] || [];
+  let unreadCount = 0;
+  for (const item of items) {
+    if (!item.read) unreadCount += 1;
+  }
+  res.json({ unreadCount, total: items.length });
+});
+
 app.get("/notifications", authMiddleware, (req, res) => {
-  const limit = Number(req.query.limit || 100);
+  const requested = Number(req.query.limit || 30);
+  const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 30, 1), 50);
   const onlyUnread = String(req.query.unread || "") === "1";
   let items = (db.notifications[req.user.id] || []).slice(0, limit);
   if (onlyUnread) items = items.filter((n) => !n.read);
