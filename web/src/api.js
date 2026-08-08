@@ -1,81 +1,134 @@
 // web/src/api.js
 
 const TOKEN_KEY = "token";
-// Prefer new key but read legacy too
+
+// Legacy/runtime override keys are still supported,
+// but build-time VITE_API_BASE has highest priority.
 const LS_BASE_KEYS = ["atag.apiBase", "apiBase"];
 
-/* ---------- Dev fallback (:5173 -> :4000) ---------- */
-function detectDevFallbackBase() {
-  if (typeof window === "undefined") return "";
-  const { hostname, port } = window.location;
-  const isLocal =
-    hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-  if (isLocal && port === "5173") return "http://localhost:4000";
+/* -------------------------------------------------------
+   Base URL helpers
+------------------------------------------------------- */
+
+function sanitizeBase(url) {
+  if (!url) return "";
+
+  const trimmed = String(url).trim().replace(/\/+$/, "");
+
+  // Only accept absolute http(s) URLs.
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
   return "";
 }
 
-/* ---------- Read runtime global (from index.html) ---------- */
-function readGlobalBase() {
+function readEnvBase() {
   try {
-    const v = typeof window !== "undefined" && window.ATAG_API_BASE;
-    return v ? String(v).trim() : "";
+    return sanitizeBase(
+      import.meta.env.VITE_API_BASE ||
+        import.meta.env.VITE_API_URL ||
+        ""
+    );
   } catch {
     return "";
   }
 }
 
-/* ---------- Helpers ---------- */
-function readLocalBase() {
+function readGlobalBase() {
   try {
-    for (const k of LS_BASE_KEYS) {
-      const v = localStorage.getItem(k);
-      if (v && v.trim()) return v.trim();
+    if (typeof window === "undefined") return "";
+    return sanitizeBase(window.ATAG_API_BASE || "");
+  } catch {
+    return "";
+  }
+}
+
+function readLocalBase() {
+  if (typeof window === "undefined") return "";
+
+  try {
+    for (const key of LS_BASE_KEYS) {
+      const value = window.localStorage.getItem(key);
+
+      if (value && value.trim()) {
+        return sanitizeBase(value);
+      }
     }
-  } catch {}
+  } catch {
+    // localStorage may be unavailable in some browser/privacy modes.
+  }
+
   return "";
 }
 
 function writeLocalBase(url) {
+  if (typeof window === "undefined") return;
+
   try {
-    if (url) localStorage.setItem(LS_BASE_KEYS[0], String(url));
-    else localStorage.removeItem(LS_BASE_KEYS[0]);
-    // Clear legacy keys
-    for (let i = 1; i < LS_BASE_KEYS.length; i++) {
-      localStorage.removeItem(LS_BASE_KEYS[i]);
+    const clean = sanitizeBase(url);
+
+    if (clean) {
+      window.localStorage.setItem(LS_BASE_KEYS[0], clean);
+    } else {
+      window.localStorage.removeItem(LS_BASE_KEYS[0]);
     }
-  } catch {}
+
+    // Always clear the legacy key.
+    for (let i = 1; i < LS_BASE_KEYS.length; i += 1) {
+      window.localStorage.removeItem(LS_BASE_KEYS[i]);
+    }
+  } catch {
+    // Ignore localStorage failures.
+  }
 }
 
-function sanitizeBase(url) {
-  if (!url) return "";
-  const trimmed = String(url).trim().replace(/\/+$/, "");
-  // Only accept absolute http(s) URLs
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+/* ---------- Dev fallback (:5173 -> :4000) ---------- */
+
+function detectDevFallbackBase() {
+  if (typeof window === "undefined") return "";
+
+  const { hostname, port } = window.location;
+
+  const isLocal =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1";
+
+  if (isLocal && port === "5173") {
+    return "http://localhost:4000";
+  }
+
   return "";
 }
 
-/* ---------- Resolve API base (priority) ----------
-   1) window.ATAG_API_BASE (runtime, from index.html)
-   2) localStorage (atag.apiBase -> apiBase)
-   3) Env: VITE_API_BASE (preferred) or VITE_API_URL (legacy)
-   4) Dev fallback http://localhost:4000 (when on :5173)
-   5) "" => relative (dev proxy only)
--------------------------------------------------- */
-function resolveBase() {
-  const fromGlobal = sanitizeBase(readGlobalBase());
-  const fromLS = sanitizeBase(readLocalBase());
-  const fromEnv = sanitizeBase(
-    (import.meta?.env?.VITE_API_BASE ||
-      import.meta?.env?.VITE_API_URL ||
-      "").trim()
-  );
-  const dev = detectDevFallbackBase();
+/* -------------------------------------------------------
+   Resolve API base
 
-  const chosen = fromGlobal || fromLS || fromEnv || dev || "";
-  return chosen.replace(/\/+$/, "");
+   Priority:
+   1. VITE_API_BASE / VITE_API_URL
+   2. window.ATAG_API_BASE (legacy runtime override)
+   3. localStorage override
+   4. localhost:4000 during Vite development
+------------------------------------------------------- */
+
+function resolveBase() {
+  const fromEnv = readEnvBase();
+  const fromGlobal = readGlobalBase();
+  const fromLocalStorage = readLocalBase();
+  const fromDev = detectDevFallbackBase();
+
+  return (
+    fromEnv ||
+    fromGlobal ||
+    fromLocalStorage ||
+    fromDev ||
+    ""
+  );
 }
 
 let API_BASE = resolveBase();
+
 export { API_BASE };
 
 export function getApiBase() {
@@ -88,30 +141,77 @@ export function setApiBase(url) {
 }
 
 export function debugApiBase() {
-  console.log("API_BASE =", API_BASE || "(relative)");
+  console.log("ATAG API_BASE =", API_BASE || "(not configured)");
 }
 
-/* ---------- URL helpers ---------- */
+/* -------------------------------------------------------
+   URL helpers
+------------------------------------------------------- */
+
+function isLocalFrontend() {
+  if (typeof window === "undefined") return false;
+
+  const hostname = window.location.hostname;
+
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1"
+  );
+}
+
 export function fullUrl(path) {
   let p = String(path || "");
-  if (!p.startsWith("/")) p = "/" + p;
-  return API_BASE ? API_BASE + p : p; // relative only in dev/proxy
+
+  // Already absolute URL: leave it unchanged.
+  if (/^https?:\/\//i.test(p)) {
+    return p;
+  }
+
+  if (!p.startsWith("/")) {
+    p = `/${p}`;
+  }
+
+  if (API_BASE) {
+    return `${API_BASE}${p}`;
+  }
+
+  // In local development, allow relative URLs if using a Vite proxy.
+  if (isLocalFrontend()) {
+    return p;
+  }
+
+  // Do NOT silently call Cloudflare Pages in production.
+  throw new Error(
+    "ATAG API base is not configured. " +
+      "Set VITE_API_BASE to your Railway backend URL in Cloudflare Pages " +
+      "and rebuild/redeploy the frontend."
+  );
 }
 
-// ✅ IMPORTANT: for backend-returned "/uploads/xxx.jpg"
-export function assetUrl(u) {
-  const s = String(u || "");
+// For backend-returned "/uploads/xxx.jpg", "/blob/xxx", etc.
+export function assetUrl(value) {
+  const s = String(value || "").trim();
+
   if (!s) return "";
-  if (/^(data:|blob:|https?:\/\/)/i.test(s)) return s;
-  return fullUrl(s); // uses same API_BASE logic
+
+  if (/^(data:|blob:|https?:\/\/)/i.test(s)) {
+    return s;
+  }
+
+  return fullUrl(s);
 }
 
-/* ---------- Auth token helpers ---------- */
+/* -------------------------------------------------------
+   Auth token helpers
+------------------------------------------------------- */
+
 export function setToken(token) {
   try {
     localStorage.setItem(TOKEN_KEY, token);
   } catch {}
 }
+
 export function getToken() {
   try {
     return localStorage.getItem(TOKEN_KEY) || "";
@@ -119,6 +219,7 @@ export function getToken() {
     return "";
   }
 }
+
 export function clearToken() {
   try {
     localStorage.removeItem(TOKEN_KEY);
@@ -126,78 +227,175 @@ export function clearToken() {
 }
 
 function authHeaders() {
-  const t = getToken();
-  return t ? { Authorization: "Bearer " + t } : {};
+  const token = getToken();
+
+  return token
+    ? {
+        Authorization: `Bearer ${token}`,
+      }
+    : {};
 }
 
-async function doFetch(path, { method = "GET", body, headers, expectJson = true } = {}) {
+/* -------------------------------------------------------
+   Core fetch helper
+------------------------------------------------------- */
+
+async function doFetch(
+  path,
+  {
+    method = "GET",
+    body,
+    headers,
+    expectJson = true,
+  } = {}
+) {
   const url = fullUrl(path);
 
-  const res = await fetch(url, {
-    method,
-    headers: {
-      ...(body != null ? { "Content-Type": "application/json" } : {}),
-      ...authHeaders(),
-      ...(headers || {}),
-    },
-    body: body != null ? JSON.stringify(body) : undefined,
-  });
+  let res;
 
-  const raw = await res.text().catch(() => "");
+  try {
+    res = await fetch(url, {
+      method,
+      headers: {
+        ...(body != null
+          ? {
+              "Content-Type": "application/json",
+            }
+          : {}),
+        ...authHeaders(),
+        ...(headers || {}),
+      },
+      body: body != null ? JSON.stringify(body) : undefined,
+    });
+  } catch (networkError) {
+    const err = new Error(
+      `Unable to reach API at ${url}. ` +
+        "Check that the Railway backend is running and that CORS allows this website."
+    );
 
-  // Error path: try JSON payload first
-  if (!res.ok) {
-    try {
-      const json = raw ? JSON.parse(raw) : {};
-      const msg = json?.error || json?.message || `${res.status} ${res.statusText}`;
-      const err = new Error(msg);
-      err.status = res.status;
-      err.payload = json;
-      throw err;
-    } catch {
-      const err = new Error(raw || `${res.status} ${res.statusText}`);
-      err.status = res.status;
-      throw err;
-    }
+    err.cause = networkError;
+    throw err;
   }
 
-  // Some endpoints may legitimately return 204 No Content
-  if (res.status === 204 || raw === "") return {};
+  const raw = await res.text().catch(() => "");
+  const contentType = res.headers.get("content-type") || "";
 
-  if (!expectJson) return raw;
+  if (!res.ok) {
+    let payload = null;
 
-  const ct = res.headers.get("content-type") || "";
-  // Be a bit more tolerant (some servers forget to set content-type)
-  if (!ct.includes("application/json")) {
-    // Try parse anyway, else throw a helpful error
-    try {
-      return JSON.parse(raw);
-    } catch {
-      throw new Error(
-        `Expected JSON from API but got "${ct}" at ${url}. ` +
-          `Your API base may be misconfigured. ` +
-          `Set VITE_API_BASE to your backend URL during the frontend build.`
-      );
+    if (raw) {
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        payload = null;
+      }
     }
+
+    const message =
+      payload?.error ||
+      payload?.message ||
+      raw ||
+      `${res.status} ${res.statusText}`;
+
+    const err = new Error(message);
+    err.status = res.status;
+    err.payload = payload;
+    err.url = url;
+
+    throw err;
+  }
+
+  if (res.status === 204 || raw === "") {
+    return {};
+  }
+
+  if (!expectJson) {
+    return raw;
   }
 
   try {
     return JSON.parse(raw);
   } catch {
-    return {};
+    const isHtml =
+      contentType.includes("text/html") ||
+      /^\s*<!doctype html/i.test(raw) ||
+      /^\s*<html/i.test(raw);
+
+    if (isHtml) {
+      throw new Error(
+        `Expected JSON from API but received HTML at ${url}. ` +
+          "This usually means the frontend is calling Cloudflare Pages instead of the backend. " +
+          "Set VITE_API_BASE to your Railway URL and rebuild/redeploy Cloudflare Pages."
+      );
+    }
+
+    throw new Error(
+      `Expected JSON from API but got "${contentType || "unknown content-type"}" at ${url}.`
+    );
   }
 }
 
-/* ----------------------------
+/* -------------------------------------------------------
    Public API helpers
----------------------------- */
-export const apiGet = (path) => doFetch(path, { method: "GET" });
-export const apiPost = (path, body) => doFetch(path, { method: "POST", body });
-export const apiPatch = (path, body) => doFetch(path, { method: "PATCH", body });
-export const apiDelete = (path) => doFetch(path, { method: "DELETE" });
+------------------------------------------------------- */
+
+export const apiGet = (path) =>
+  doFetch(path, {
+    method: "GET",
+  });
+
+export const apiPost = (path, body) =>
+  doFetch(path, {
+    method: "POST",
+    body,
+  });
+
+export const apiPatch = (path, body) =>
+  doFetch(path, {
+    method: "PATCH",
+    body,
+  });
+
+export const apiPut = (path, body) =>
+  doFetch(path, {
+    method: "PUT",
+    body,
+  });
+
+export const apiDelete = (path) =>
+  doFetch(path, {
+    method: "DELETE",
+  });
 
 export async function apiGetBlob(path) {
-  const res = await fetch(fullUrl(path), { headers: { ...authHeaders() } });
-  if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+  const url = fullUrl(path);
+
+  let res;
+
+  try {
+    res = await fetch(url, {
+      headers: {
+        ...authHeaders(),
+      },
+    });
+  } catch (networkError) {
+    const err = new Error(`Unable to reach API at ${url}.`);
+    err.cause = networkError;
+    throw err;
+  }
+
+  if (!res.ok) {
+    const message = await res.text().catch(() => res.statusText);
+
+    const err = new Error(
+      message || `${res.status} ${res.statusText}`
+    );
+
+    err.status = res.status;
+    err.url = url;
+
+    throw err;
+  }
+
   return res.blob();
 }
