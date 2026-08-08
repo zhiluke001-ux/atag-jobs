@@ -176,7 +176,7 @@ async function doFetch(path, { method = "GET", body, headers, expectJson = true 
       throw new Error(
         `Expected JSON from API but got "${ct}" at ${url}. ` +
           `Your API base may be misconfigured. ` +
-          `Set localStorage 'atag.apiBase' to your Render URL or set VITE_API_BASE during build.`
+          `Set VITE_API_BASE to your backend URL during the frontend build.`
       );
     }
   }
