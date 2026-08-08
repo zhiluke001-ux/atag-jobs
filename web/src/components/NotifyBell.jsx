@@ -10,16 +10,12 @@ export default function NotificationsBell({ user }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState("all"); // "all" | "unread"
   const [items, setItems] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const pollRef = useRef(null);
   const wrapRef = useRef(null);
 
   const isAdminOrPM = user && (user.role === "admin" || user.role === "pm");
-
-  const unreadCount = useMemo(
-    () => items.filter((i) => !i.read).length,
-    [items]
-  );
 
   const shown = useMemo(
     () => (tab === "unread" ? items.filter((i) => !i.read) : items),
@@ -44,13 +40,25 @@ export default function NotificationsBell({ user }) {
     } catch {}
   }, [user]);
 
+  async function loadSummary() {
+    if (!user || document.visibilityState === "hidden") return;
+    try {
+      const summary = await apiGet(`/notifications/summary`);
+      setUnreadCount(Number(summary?.unreadCount || 0));
+    } catch {
+      // Keep the existing badge if the network is temporarily unavailable.
+    }
+  }
+
   async function loadAll() {
     if (!user) return;
     setLoading(true);
     try {
-      // Always load full list so "All" stays stable
-      const list = await apiGet(`/notifications?limit=100`);
-      setItems(Array.isArray(list) ? list : []);
+      // Only download the notification list when the bell is opened.
+      const list = await apiGet(`/notifications?limit=30`);
+      const next = Array.isArray(list) ? list : [];
+      setItems(next);
+      setUnreadCount(next.filter((n) => !n.read).length);
     } catch {
       // ignore
     } finally {
@@ -60,12 +68,24 @@ export default function NotificationsBell({ user }) {
 
   useEffect(() => {
     if (!user) return;
-    loadAll();
-    pollRef.current = setInterval(loadAll, 15000);
+
+    const refresh = () => {
+      if (document.visibilityState !== "hidden") loadSummary();
+    };
+
+    refresh();
+    // A tiny summary request every 2 minutes instead of downloading up to
+    // 100 notification objects every 15 seconds.
+    pollRef.current = setInterval(refresh, 120000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
     };
-  }, [user]);
+  }, [user?.id]);
 
   // Close when clicking outside
   useEffect(() => {
@@ -80,21 +100,22 @@ export default function NotificationsBell({ user }) {
   }, [open]);
 
   async function markRead(id) {
+    const wasUnread = items.some((n) => n.id === id && !n.read);
     try {
       await apiPost(`/notifications/${id}/read`, {});
       setItems((prev) =>
         prev.map((n) => (n.id === id ? { ...n, read: true } : n))
       );
+      if (wasUnread) setUnreadCount((n) => Math.max(0, n - 1));
     } catch {}
   }
 
   async function markAllRead() {
-    const unread = items.filter((n) => !n.read);
     try {
-      await Promise.all(
-        unread.map((n) => apiPost(`/notifications/${n.id}/read`, {}))
-      );
+      // One request instead of one POST for every unread notification.
+      await apiPost(`/me/notifications/read-all`, {});
       setItems((prev) => prev.map((n) => ({ ...n, read: true })));
+      setUnreadCount(0);
     } catch {}
   }
 
@@ -163,8 +184,10 @@ export default function NotificationsBell({ user }) {
         aria-controls="notif-popover"
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((v) => !v);
+          const nextOpen = !open;
+          setOpen(nextOpen);
           setTab("all");
+          if (nextOpen) loadAll();
         }}
         style={{ position: "relative" }}
       >
