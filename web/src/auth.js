@@ -1,8 +1,9 @@
 // web/src/auth.js
-const API_BASE =
+const API_BASE = (
   import.meta.env.VITE_API_BASE ||
   import.meta.env.VITE_SERVER_URL ||
-  "https://atag-jobs.onrender.com"; // change if needed
+  (import.meta.env.DEV ? "http://localhost:4000" : "")
+).replace(/\/+$/, "");
 
 export function getToken() {
   return localStorage.getItem("token") || "";
