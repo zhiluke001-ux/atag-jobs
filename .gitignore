@@ -25,6 +25,7 @@ Thumbs.db
 # Project runtime/output
 data/
 *.csv
+server/db.json
 
 # Tests
 coverage/

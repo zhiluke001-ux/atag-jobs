@@ -337,9 +337,15 @@ function ensureBreakEnabled(job) {
   return job.breakEnabled;
 }
 
+function normalizeApplyDueDate(v) {
+  if (!v) return null;
+  const s = String(v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && dayjs(s).isValid() ? s : null;
+}
+
 /* ===== job public view ===== */
 function jobPublicView(job) {
-  const { id, title, venue, description, startTime, endTime, headcount, transportOptions, roleCounts } =
+  const { id, title, venue, description, startTime, endTime, headcount, transportOptions, roleCounts, applyDueDate } =
     job;
 
   const lu = ensureLoadingUnload(job);
@@ -356,6 +362,7 @@ function jobPublicView(job) {
     description,
     startTime,
     endTime,
+    applyDueDate: applyDueDate || null,
     headcount,
     status: computeStatus(job),
     transportOptions: transportOptions || { bus: true, own: true },
@@ -1605,6 +1612,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     ldu,
     roleCounts,
     roleRates,
+    applyDueDate,
   } = req.body || {};
   if (!title || !venue || !startTime || !endTime)
     return res.status(400).json({ error: "missing_fields" });
@@ -1640,6 +1648,7 @@ app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) =
     description: description || "",
     startTime,
     endTime,
+    applyDueDate: normalizeApplyDueDate(applyDueDate),
     status: "upcoming",
     headcount: Number(headcount || countsSum || 5),
     transportOptions: transportOptions || { bus: true, own: true },
@@ -1722,6 +1731,7 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
     roleCounts,
     roleRates,
     breakEnabled,
+    applyDueDate,
   } = req.body || {};
 
   if (title !== undefined) job.title = title;
@@ -1729,6 +1739,7 @@ app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, r
   if (description !== undefined) job.description = description;
   if (startTime !== undefined) job.startTime = startTime;
   if (endTime !== undefined) job.endTime = endTime;
+  if (applyDueDate !== undefined) job.applyDueDate = normalizeApplyDueDate(applyDueDate);
   if (headcount !== undefined) job.headcount = Number(headcount);
   if (transportOptions)
     job.transportOptions = { bus: !!transportOptions.bus, own: !!transportOptions.own };

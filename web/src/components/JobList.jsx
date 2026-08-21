@@ -24,6 +24,16 @@ function fmtHourCompact(d) {
   });
   return h.replace(" ", "");
 }
+function fmtDueDate(d) {
+  if (!d) return "";
+  const dt = new Date(`${d}T00:00:00`);
+  return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("en-GB");
+}
+function isApplyClosed(applyDueDate) {
+  if (!applyDueDate) return false;
+  const end = new Date(`${applyDueDate}T23:59:59`);
+  return !isNaN(end.getTime()) && new Date() > end;
+}
 
 const num = (v) =>
   v === null || v === undefined || v === "" ? null : Number(v);
@@ -280,6 +290,8 @@ export default function JobList({
 
         const dateLine = fmtDateShort(start);
         const timeLine = `${fmtHourCompact(start)} — ${fmtHourCompact(end)}`;
+        const dueDateStr = fmtDueDate(j.applyDueDate);
+        const applyClosed = isApplyClosed(j.applyDueDate);
 
         const approved = Number(j.approvedCount || 0);
         const applied = Number(j.appliedCount || 0);
@@ -336,6 +348,14 @@ export default function JobList({
             return (
               <button className="btn gray" style={COMPACT_BTN} disabled>
                 Full
+              </button>
+            );
+          }
+
+          if (applyClosed) {
+            return (
+              <button className="btn gray" style={COMPACT_BTN} disabled>
+                Applications closed
               </button>
             );
           }
@@ -410,6 +430,37 @@ export default function JobList({
                   <div style={TEXT_MAIN}>{label}</div>
                 </div>
               </div>
+
+              {/* Apply due date */}
+              {dueDateStr && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={LABEL_SM}>Apply By</div>
+                  <div
+                    style={{
+                      ...TEXT_MAIN,
+                      color: applyClosed ? "#b91c1c" : "#111827",
+                      fontWeight: applyClosed ? 700 : 400,
+                    }}
+                  >
+                    {dueDateStr}
+                    {applyClosed && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "#b91c1c",
+                          background: "#fef2f2",
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                        }}
+                      >
+                        Applications closed
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Physical-only options */}
               {isPhysical && (

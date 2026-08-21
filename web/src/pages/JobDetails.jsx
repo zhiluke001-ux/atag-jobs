@@ -42,6 +42,17 @@ function fmtTimeRange(startDt, endDt) {
   return s || e || "-";
 }
 
+function fmtDueDate(d) {
+  if (!d) return "";
+  const dt = new Date(`${d}T00:00:00`);
+  return isNaN(dt.getTime()) ? "" : dt.toLocaleDateString("en-GB");
+}
+function isApplyClosed(applyDueDate) {
+  if (!applyDueDate) return false;
+  const end = new Date(`${applyDueDate}T23:59:59`);
+  return !isNaN(end.getTime()) && new Date() > end;
+}
+
 /* ---- shared helpers (kept in sync with JobList.jsx) ---- */
 const num = (v) =>
   v === null || v === undefined || v === "" ? null : Number(v);
@@ -289,6 +300,8 @@ export default function JobDetails({ navigate, params, user }) {
 
   const dateLine = fmtDateRange(job.startTime, job.endTime);
   const timeLine = fmtTimeRange(job.startTime, job.endTime);
+  const dueDateStr = fmtDueDate(job.applyDueDate);
+  const applyClosed = isApplyClosed(job.applyDueDate);
 
   return (
     <div className="container" style={{ paddingTop: 16 }}>
@@ -344,6 +357,21 @@ export default function JobDetails({ navigate, params, user }) {
             <div style={LABEL_SM}>Session</div>
             <div style={TEXT_MAIN}>{label}</div>
           </div>
+          {dueDateStr && (
+            <div>
+              <div style={LABEL_SM}>Apply By</div>
+              <div
+                style={{
+                  ...TEXT_MAIN,
+                  color: applyClosed ? "#b91c1c" : "#111827",
+                  fontWeight: applyClosed ? 700 : 400,
+                }}
+              >
+                {dueDateStr}
+                {applyClosed ? " · Applications closed" : ""}
+              </div>
+            </div>
+          )}
           <div>
             <div style={LABEL_SM}>Pay (your tier)</div>
             <div style={PAY_STRONG}>{payForViewer}</div>
