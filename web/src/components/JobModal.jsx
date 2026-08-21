@@ -622,6 +622,10 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
   const dateEndRef = useRef(null);
   const timeEndRef = useRef(null);
 
+  /* ---------- Apply due date (optional) ---------- */
+  const applyDueDateRef = useRef(null);
+  const [applyDueDateInit] = useState(job?.applyDueDate || "");
+
   /* ---------- pay state ---------- */
   // hardcoded fallbacks if no global defaults stored
   const defaultsHourly = { jr: "15", sr: "20", lead: "25" };
@@ -902,6 +906,11 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
     const endISO = combineLocal(de, te);
     if (!startISO || !endISO) return alert("Invalid start/end date or time.");
 
+    const applyDueDateVal = applyDueDateRef.current?.value || "";
+    if (applyDueDateVal && dayjs(applyDueDateVal).isAfter(dayjs(ds), "day")) {
+      return alert("Apply due date should be on or before the job's start date.");
+    }
+
     const isPhysical = sessionMode === "physical";
     const transportOptions = isPhysical
       ? { bus: !!optBus, own: !!optOwn, atagTransport: !!optBus, ownTransport: !!optOwn }
@@ -930,6 +939,7 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
         startTime: startISO,
         endTime: endISO,
         headcount: N(headcount, 0),
+        applyDueDate: applyDueDateVal || null,
 
         session: {
           mode: sessionMode,
@@ -1146,6 +1156,20 @@ export default function JobModal({ open, job, onClose, onCreated, onUpdated }) {
               <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
                 Target number of people to hire. Everyone can apply — PM/Admin approval is
                 still required for each person.
+              </div>
+            </div>
+
+            {/* Apply Due Date */}
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>Apply Due Date</div>
+              <input
+                ref={applyDueDateRef}
+                type="date"
+                defaultValue={applyDueDateInit}
+                style={{ maxWidth: 240 }}
+              />
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                Optional. Last day part-timers can apply. Leave blank for no deadline.
               </div>
             </div>
 
