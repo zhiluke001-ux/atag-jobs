@@ -1,31 +1,42 @@
-# Node/JS
+# Node / package manager
 node_modules/
 npm-debug.log*
-yarn.lock
-pnpm-lock.yaml
+yarn-error.log*
+pnpm-debug.log*
 
-# Builds
+# Build outputs
 dist/
 build/
 .out/
 .vercel/
 .next/
 .vite/
+coverage/
 
-# Env & local
+# Environment files and secrets
 .env
-.env.*.local
-*.local
+.env.*
+!.env.example
+!.env.migration.example
+!**/.env.example
+!**/.env.migration.example
+*.pem
+*.key
 
-# OS / editor
+# Database exports / production data
+server/db.json
+server/data/
+data/
+*.dump
+*.sql.gz
+*-db-export.json
+
+# Generated local output
+*.csv
+migration-report*.json
+
+# OS / editors
 .DS_Store
 Thumbs.db
 .vscode/
-
-# Project runtime/output
-data/
-*.csv
-server/db.json
-
-# Tests
-coverage/
+*.local

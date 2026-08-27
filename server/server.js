@@ -1,2899 +1,815 @@
-// server/server.js
 import express from "express";
 import cors from "cors";
-import fs from "fs-extra";
-import path from "path";
 import morgan from "morgan";
 import jwt from "jsonwebtoken";
-import dayjs from "dayjs";
-import { v4 as uuidv4 } from "uuid";
-import { fileURLToPath } from "url";
-import { createWriteStream } from "fs";
-import { format as csvFormat } from "fast-csv";
 import crypto from "crypto";
 import webpush from "web-push";
 import { google } from "googleapis";
-import { loadDB, saveDB } from "./storage.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { pool, withTransaction, healthCheck } from "./db.js";
+import { asyncHandler, HttpError, postgresErrorResponse } from "./lib/errors.js";
+import { hashPassword, verifyPassword, sha256, randomId, stableRequestHash } from "./lib/security.js";
+import { BUSINESS_TIME_ZONE, parseDeadlineInput, isApplicationClosed } from "./lib/time.js";
+import { DEFAULT_RATES, defaultRoleRates, getAppConfig, setConfigValue } from "./lib/config.js";
+import {
+  ROLES, STAFF_ROLES, clampRole, clampGrade, findUserByIdentifier, getUserById, listUsers,
+  listJobsPublic, getJobFull, computeStatus, addAudit, insertNotifications, getPushSubscriptions,
+  listAdminIds, replaceAdjustments,
+} from "./repository.js";
+import {
+  uploadImageDataUrl, removeStoredFile, createSignedUrl, downloadStoredFile, fileApiPath, makeStorageRef,
+} from "./storage.js";
 
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
-// ---- CORS (optional allowlist via env CORS_ORIGINS="https://a.com,https://b.com") ----
-const CORS_ORIGINS = String(process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const PORT = Number(process.env.PORT || 4000);
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET === "dev-secret") {
+  if (process.env.NODE_ENV === "production") throw new Error("JWT_SECRET must be set to a strong non-default value in production.");
+}
+const EFFECTIVE_JWT_SECRET = JWT_SECRET || "development-only-change-me";
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // allow server-to-server/no-origin
-      if (!origin) return cb(null, true);
-      // if no allowlist configured -> allow all (same behavior as your current code)
-      if (!CORS_ORIGINS.length) return cb(null, true);
-      return cb(null, CORS_ORIGINS.includes(origin));
-    },
-  })
-);
-
-app.use(express.json({ limit: "12mb" }));
+const CORS_ORIGINS = String(process.env.CORS_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || !CORS_ORIGINS.length || CORS_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error("Origin not allowed by CORS"));
+  },
+  exposedHeaders: ["Idempotency-Replayed"],
+}));
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "12mb" }));
 app.use(morgan("dev"));
 
-/* ---- uploads (images) ---- */
-const DATA_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : path.join(__dirname, "data");
-
-const uploadsRoot = path.join(DATA_DIR, "uploads");
-
-const avatarsDir = path.join(uploadsRoot, "avatars");
-const verificationsDir = path.join(uploadsRoot, "verifications");
-// legacy/compat (you now mainly use /blob)
-const parkingReceiptsDir = path.join(uploadsRoot, "parking-receipts");
-
-fs.ensureDirSync(avatarsDir);
-fs.ensureDirSync(verificationsDir);
-fs.ensureDirSync(parkingReceiptsDir);
-
-app.use("/uploads", express.static(uploadsRoot));
-
-/* ---------------- DB + defaults ---------------- */
-let db = await loadDB();
-
-/* =========================
-   DB-backed blob store
-   (Render free-safe)
-========================= */
-db.blobs = db.blobs || {}; // { [blobId]: { mime, b64, size, createdAt, meta } }
-db.blobOrder = Array.isArray(db.blobOrder) ? db.blobOrder : []; // insertion order
-const BLOB_CAP = Number(process.env.BLOB_CAP || 80); // default smaller to reduce lag
-const BLOB_MAX_BYTES = Number(process.env.BLOB_MAX_BYTES || 1.5 * 1024 * 1024); // default 1.5MB
-
-db.config = db.config || {};
-db.config.jwtSecret = db.config.jwtSecret || "dev-secret";
-db.config.scanMaxDistanceMeters = db.config.scanMaxDistanceMeters || 500;
-
-const DEFAULT_RATES = {
-  virtualHourly: { junior: 20, senior: 20, lead: 30 },
-  physicalSession: {
-    halfDay: { junior: 80, senior: 100, lead: 44 },
-    fullDay: { junior: 150, senior: 180, lead: 88 },
-    twoD1N: { junior: 230, senior: 270, lead: null },
-    threeD2n: { junior: 300, senior: 350, lead: null },
-  },
-  physicalHourly: { junior: 20, senior: 30, lead: 30 },
-  loadingUnloading: { amount: 30 },
-  earlyCall: { defaultAmount: 20, thresholdHours: 3 },
-};
-
-db.config.rates = db.config.rates || DEFAULT_RATES;
-
-// backfill earlyCall fields
-db.config.rates.earlyCall = db.config.rates.earlyCall || {};
-if (db.config.rates.earlyCall.defaultAmount == null)
-  db.config.rates.earlyCall.defaultAmount = DEFAULT_RATES.earlyCall.defaultAmount;
-if (db.config.rates.earlyCall.thresholdHours == null)
-  db.config.rates.earlyCall.thresholdHours = DEFAULT_RATES.earlyCall.thresholdHours;
-
-// Ensure roleRatesDefaults exists & has all staff grades
-db.config.roleRatesDefaults = db.config.roleRatesDefaults || {};
-const rrd = db.config.roleRatesDefaults;
-
-rrd.junior = rrd.junior || {
-  payMode: "hourly",
-  base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
-  specificPayment: null,
-  otMultiplier: 0,
-};
-rrd.senior = rrd.senior || {
-  payMode: "hourly",
-  base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
-  specificPayment: null,
-  otMultiplier: 0,
-};
-rrd.lead = rrd.lead || {
-  payMode: "hourly",
-  base: Number(db.config.rates?.physicalHourly?.lead ?? 30),
-  specificPayment: null,
-  otMultiplier: 0,
-};
-rrd.junior_emcee = rrd.junior_emcee || {
-  payMode: "hourly",
-  base: Number(db.config.rates?.physicalHourly?.junior ?? 20),
-  specificPayment: null,
-  otMultiplier: 0,
-};
-rrd.senior_emcee = rrd.senior_emcee || {
-  payMode: "hourly",
-  base: Number(db.config.rates?.physicalHourly?.senior ?? 30),
-  specificPayment: null,
-  otMultiplier: 0,
-};
-
-db.pushSubs = db.pushSubs || {};
-db.notifications = db.notifications || {};
-
-await saveDB(db);
-
-/* ------------ globals / helpers ------------- */
-const JWT_SECRET = db.config.jwtSecret;
-const MAX_DISTANCE_METERS = Number(
-  process.env.SCAN_MAX_DISTANCE_METERS || db.config.scanMaxDistanceMeters || 500
-);
-const ROLES = ["part-timer", "pm", "admin"];
-const STAFF_ROLES = ["junior", "senior", "lead", "junior_emcee", "senior_emcee"];
-
-const toRad = (deg) => (deg * Math.PI) / 180;
-const clampRole = (r) => (ROLES.includes(String(r)) ? String(r) : "part-timer");
-
-const clampGrade = (g) => {
-  const x = String(g || "")
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-  return STAFF_ROLES.includes(x) ? x : "junior";
-};
-
-function isValidCoord(lat, lng) {
-  return (
-    typeof lat === "number" &&
-    typeof lng === "number" &&
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    lat >= -90 &&
-    lat <= 90 &&
-    lng >= -180 &&
-    lng <= 180
-  );
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(process.env.VAPID_SUBJECT || "mailto:admin@example.com", VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn("[push] VAPID keys not configured; web push delivery is disabled.");
 }
-function haversineMeters(lat1, lng1, lat2, lng2) {
-  const R = 6371000;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
-
-const signToken = (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 
 function signUserToken(user) {
-  return signToken({
-    id: user.id,
-    email: user.email,
-    role: user.role,
-    name: user.name,
-    grade: user.grade || "junior",
-  });
+  return jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name, grade: user.grade || "junior" }, EFFECTIVE_JWT_SECRET, { expiresIn: "7d" });
+}
+
+function readBearer(req) {
+  const h = req.headers.authorization || "";
+  return h.startsWith("Bearer ") ? h.slice(7) : null;
 }
 
 function authMiddleware(req, res, next) {
-  const h = req.headers.authorization || "";
-  const token = h.startsWith("Bearer ") ? h.slice(7) : null;
+  const token = readBearer(req);
   if (!token) return res.status(401).json({ error: "no_token" });
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({ error: "invalid_token" });
+  try { req.user = jwt.verify(token, EFFECTIVE_JWT_SECRET); return next(); }
+  catch { return res.status(401).json({ error: "invalid_token" }); }
+}
+
+function optionalAuthMiddleware(req, _res, next) {
+  const token = readBearer(req);
+  if (token) {
+    try { req.user = jwt.verify(token, EFFECTIVE_JWT_SECRET); } catch {}
   }
-}
-const requireRole =
-  (...roles) =>
-  (req, res, next) =>
-    roles.includes(req.user.role) ? next() : res.status(403).json({ error: "forbidden" });
-
-function addAudit(action, details, req) {
-  db.audit = db.audit || [];
-  db.audit.unshift({
-    id: "a" + Math.random().toString(36).slice(2, 8),
-    time: dayjs().toISOString(),
-    actor: req?.user?.email || "guest",
-    role: req?.user?.role || "guest",
-    action,
-    details,
-  });
-  if (db.audit.length > 1000) db.audit.length = 1000;
+  next();
 }
 
-function computeStatus(job) {
-  const now = dayjs();
-  const start = dayjs(job.startTime);
-  const end = dayjs(job.endTime);
-  if (job.events?.endedAt) return "ended";
-  if (job.events?.startedAt) return "ongoing";
-  if (now.isBefore(start)) return "upcoming";
-  if (now.isAfter(end)) return "ended";
-  return job.status || "upcoming";
+const requireRole = (...roles) => (req, res, next) => roles.includes(req.user?.role) ? next() : res.status(403).json({ error: "forbidden" });
+
+function isValidCoord(lat, lng) {
+  return typeof lat === "number" && typeof lng === "number" && Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+}
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const toRad = deg => deg * Math.PI / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-// password helpers
-function hashPassword(password) {
-  const iterations = 150000;
-  const salt = crypto.randomBytes(16).toString("hex");
-  const derived = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
-  return `pbkdf2_sha256$${iterations}$${salt}$${derived}`;
-}
-function verifyPassword(password, encoded) {
-  try {
-    const [algo, iterStr, salt, hash] = String(encoded).split("$");
-    if (algo !== "pbkdf2_sha256") return false;
-    const iterations = parseInt(iterStr, 10);
-    const derived = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
-    return crypto.timingSafeEqual(Buffer.from(derived, "hex"), Buffer.from(hash, "hex"));
-  } catch {
-    return false;
-  }
-}
-function findUserByIdentifier(id) {
-  const x = String(id || "").toLowerCase();
-  return (db.users || []).find(
-    (u) =>
-      String(u.email || "").toLowerCase() === x || String(u.username || "").toLowerCase() === x
-  );
-}
+function toNumber(v, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
+function iso(v) { return v ? new Date(v).toISOString() : null; }
 
-/* ---- pay helper ---- */
-function paySummaryFromRate(rate = {}) {
-  const pm = rate.payMode;
-  const hr = Number(rate.base ?? rate.hourlyBase);
-  const fix = Number(rate.specificPayment ?? rate.specificAmount);
-  const otm = Number(rate.otMultiplier || 0);
-  const otTag = otm > 0 ? ` (OT x${otm})` : "";
-
-  if (pm === "specific" && Number.isFinite(fix)) return `RM ${Math.round(fix)} / shift`;
-  if (pm === "specific_plus_hourly" && Number.isFinite(fix) && Number.isFinite(hr))
-    return `RM ${Math.round(fix)} + RM ${Math.round(hr)}/hr${otTag}`;
-  if ((pm === "hourly" || pm == null) && Number.isFinite(hr))
-    return `RM ${Math.round(hr)}/hr${otTag}`;
-
-  const legacyHr = rate?.physicalHourly?.junior ?? rate?.virtualHourly?.junior;
-  if (Number.isFinite(legacyHr)) return `From RM ${Math.round(legacyHr)}/hr`;
-  return "See details";
-}
-
-/* ===== time helpers ===== */
-function hoursBetweenISO(startISO, endISO) {
-  if (!startISO || !endISO) return 0;
-  const s = dayjs(startISO);
-  const e = dayjs(endISO);
-  const ms = Math.max(0, e.diff(s, "millisecond"));
-  return ms / 3600000;
-}
-function scheduledHours(job) {
-  return Number(hoursBetweenISO(job?.startTime, job?.endTime).toFixed(2));
-}
-
-/* ===== Loading/Unloading normalizer ===== */
-function ensureLoadingUnload(job) {
-  const basePrice = Number(db.config?.rates?.loadingUnloading?.amount ?? 0);
-
-  job.loadingUnload = job.loadingUnload || {
-    enabled: false,
-    quota: 0,
-    price: basePrice,
-    applicants: [],
-    participants: [],
-    closed: false,
-  };
-
-  const quota = Number(job.loadingUnload.quota || 0);
-  const applicants = Array.isArray(job.loadingUnload.applicants)
-    ? Array.from(new Set(job.loadingUnload.applicants))
-    : [];
-  const participants = Array.isArray(job.loadingUnload.participants)
-    ? Array.from(new Set(job.loadingUnload.participants))
-    : [];
-
-  const enabled = Boolean(job.loadingUnload.enabled) || quota > 0;
-  const price = Number(job.loadingUnload.price ?? basePrice);
-
-  // quota<=0 => unlimited => never closed
-  const closed = quota > 0 ? participants.length >= quota : false;
-
-  job.loadingUnload.enabled = enabled;
-  job.loadingUnload.quota = quota;
-  job.loadingUnload.price = price;
-  job.loadingUnload.applicants = applicants;
-  job.loadingUnload.participants = participants;
-  job.loadingUnload.closed = closed;
-
-  if (job.loadingUnload.closed) {
-    const keep = new Set(job.loadingUnload.participants);
-    job.loadingUnload.applicants = job.loadingUnload.applicants.filter((uid) => keep.has(uid));
-  }
-
-  return job.loadingUnload;
-}
-
-/* ===== break normalizer (NEW) ===== */
-function ensureBreakEnabled(job) {
-  if (job.breakEnabled === undefined) job.breakEnabled = false;
-  job.breakEnabled = !!job.breakEnabled;
-  return job.breakEnabled;
-}
-
-function normalizeApplyDueDate(v) {
-  if (!v) return null;
-  const s = String(v).slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) && dayjs(s).isValid() ? s : null;
-}
-
-/* ===== job public view ===== */
-function jobPublicView(job) {
-  const { id, title, venue, description, startTime, endTime, headcount, transportOptions, roleCounts, applyDueDate } =
-    job;
-
-  const lu = ensureLoadingUnload(job);
-  const breakEnabled = ensureBreakEnabled(job);
-
-  const apps = Array.isArray(job.applications) ? job.applications : [];
-  const approved = Array.isArray(job.approved) ? job.approved : [];
-  const fullTimers = Array.isArray(job.fullTimers) ? job.fullTimers : [];
-
+async function serializeUser(user, { privatePhoto = false } = {}) {
+  if (!user) return null;
+  const avatarUrl = user.avatarUrl ? fileApiPath(user.avatarUrl) : "";
+  const verificationPhotoUrl = user.verificationPhotoUrl ? fileApiPath(user.verificationPhotoUrl) : "";
+  const verificationPhotoUrlAbs = privatePhoto && user.verificationPhotoUrl ? await createSignedUrl(user.verificationPhotoUrl, 300) : verificationPhotoUrl;
   return {
-    id,
-    title,
-    venue,
-    description,
-    startTime,
-    endTime,
-    applyDueDate: applyDueDate || null,
-    headcount,
-    status: computeStatus(job),
-    transportOptions: transportOptions || { bus: true, own: true },
-    breakEnabled: !!breakEnabled,
-    loadingUnload: {
-      enabled: !!lu.enabled,
-      quota: Number(lu.quota || 0),
-      applicants: lu.applicants?.length || 0,
-      closed: !!lu.closed,
-      participants: (lu.participants || []).length,
-      price: Number(lu.price || db.config.rates.loadingUnloading.amount),
-    },
-    roleCounts: {
-      junior: Number(roleCounts?.junior ?? 0),
-      senior: Number(roleCounts?.senior ?? 0),
-      lead: Number(roleCounts?.lead ?? 0),
-      junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
-      senior_emcee: Number(roleCounts?.senior_emcee ?? 0),
-    },
-    appliedCount: apps.length,
-    approvedCount: approved.length,
-    fullTimersCount: fullTimers.length,
-    paySummary: paySummaryFromRate(job.rate || {}),
+    id: user.id, email: user.email, username: user.username || "", name: user.name || "", role: user.role,
+    grade: user.grade || "junior", phone: user.phone || "", discord: user.discord || "",
+    avatarUrl, avatarUrlAbs: user.avatarUrl ? await createSignedUrl(user.avatarUrl, 3600) : "",
+    verified: !!user.verified,
+    verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
+    verificationPhotoUrl, verificationPhotoUrlAbs,
+    verifiedAt: user.verifiedAt || null, verifiedBy: user.verifiedBy || null,
   };
 }
 
-/* ===== full-timer helpers ===== */
-function hydrateJobFullTimers(job) {
-  if (!job || !Array.isArray(job.fullTimers)) return job;
-
-  const enriched = job.fullTimers.map((ft) => {
-    if (!ft || !ft.userId) return ft;
-    const u = (db.users || []).find((x) => x.id === ft.userId) || {};
-    const role = ft.role || ft.type || ft.grade || "junior";
-
-    return {
-      ...ft,
-      role,
-      name: u.name || ft.name || "",
-      email: u.email || ft.email || "",
-      phone: u.phone || ft.phone || "",
-      grade: u.grade || ft.grade || "junior",
-      accountRole: u.role || ft.accountRole || "",
-    };
-  });
-
-  return { ...job, fullTimers: enriched };
+function stripPrivateJob(job, user) {
+  if (!job) return job;
+  if (user && (user.role === "pm" || user.role === "admin")) return job;
+  const safe = { ...job };
+  delete safe.applications;
+  delete safe.approved;
+  delete safe.rejected;
+  delete safe.attendance;
+  delete safe.adjustments;
+  delete safe.fullTimers;
+  delete safe.parkingReceipts;
+  if (safe.loadingUnload) safe.loadingUnload = { ...safe.loadingUnload, applicants: safe.loadingUnload.applicants?.length || 0, participants: safe.loadingUnload.participants?.length || 0 };
+  if (safe.earlyCall) safe.earlyCall = { ...safe.earlyCall, applicants: undefined, participants: undefined };
+  return safe;
 }
 
-/* ---- adjustments normalizer ---- */
+function knownJobKeys() {
+  return new Set(["title","venue","description","startTime","endTime","headcount","transportOptions","rate","earlyCall","loadingUnload","ldu","roleCounts","roleRates","applyDueDate","applicationDeadline","session","breakEnabled","adjustments"]);
+}
+function extraFromPayload(payload) {
+  const known = knownJobKeys();
+  return Object.fromEntries(Object.entries(payload || {}).filter(([k]) => !known.has(k)));
+}
+function normalizeTransportOptions(v) {
+  if (!v || typeof v !== "object") return { bus: true, own: true };
+  const bus = v.bus ?? v.atagTransport ?? true;
+  const own = v.own ?? v.ownTransport ?? true;
+  return { ...v, bus: !!bus, own: !!own, atagTransport: !!bus, ownTransport: !!own };
+}
+function parseApplicationDeadline(body) {
+  const raw = body?.applicationDeadline !== undefined ? body.applicationDeadline : body?.applyDueDate;
+  const parsed = parseDeadlineInput(raw);
+  if (parsed === undefined) throw new HttpError(400, "invalid_application_deadline");
+  return parsed;
+}
+
+async function sendResetEmail(to, link) {
+  const { GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN, GMAIL_SENDER, RESEND_API_KEY } = process.env;
+  if (GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET && GMAIL_REFRESH_TOKEN && GMAIL_SENDER) {
+    try {
+      const oauth = new google.auth.OAuth2(GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, "urn:ietf:wg:oauth:2.0:oob");
+      oauth.setCredentials({ refresh_token: GMAIL_REFRESH_TOKEN });
+      const gmail = google.gmail({ version: "v1", auth: oauth });
+      const raw = Buffer.from([
+        `From: ${GMAIL_SENDER}`, `To: ${to}`, "Subject: Reset your ATAG Jobs password", 'Content-Type: text/plain; charset="UTF-8"', "",
+        `Click this link to reset your password:\n${link}\n`,
+      ].join("\r\n")).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      await gmail.users.messages.send({ userId: "me", requestBody: { raw } });
+      return true;
+    } catch (err) { console.error("[email] Gmail API error", err?.response?.data || err); }
+  }
+  if (RESEND_API_KEY) {
+    try {
+      const resp = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: process.env.FROM_EMAIL || process.env.MAIL_FROM || "ATAG Jobs <onboarding@resend.dev>", to: [to], subject: "Reset your ATAG Jobs password", html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>` }) });
+      if (resp.ok) return true;
+      console.error("[email] Resend error", await resp.text());
+    } catch (err) { console.error("[email] Resend throw", err); }
+  }
+  console.warn("[email] no provider configured; reset link was not emailed");
+  return false;
+}
+
+async function deliverPush(userIds, payload) {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY || !userIds?.length) return;
+  const subs = await getPushSubscriptions([...new Set(userIds)]);
+  if (!subs.length) return;
+  const results = await Promise.allSettled(subs.map(s => webpush.sendNotification(s.subscription, JSON.stringify(payload))));
+  const invalidEndpoints = [];
+  results.forEach((r, i) => {
+    if (r.status === "rejected") {
+      const code = r.reason?.statusCode;
+      if (code === 404 || code === 410) invalidEndpoints.push(subs[i].endpoint);
+      else console.warn("[push] delivery failed", code, r.reason?.message || r.reason);
+    }
+  });
+  if (invalidEndpoints.length) await pool.query(`DELETE FROM push_subscriptions WHERE endpoint=ANY($1)`, [invalidEndpoints]);
+}
+
+async function notifyAfterCommit(userIds, item) {
+  deliverPush(userIds, { title: item.title, body: item.body, url: item.link }).catch(err => console.warn("[push]", err?.message || err));
+}
+
 function normalizeAdjustments(obj, actor) {
   const out = {};
   if (!obj || typeof obj !== "object") return out;
   for (const [uid, arr] of Object.entries(obj)) {
-    const key = String(uid);
-    const list = Array.isArray(arr) ? arr : [];
-    out[key] = list.map((x) => ({
-      amount: Number(x?.amount) || 0,
-      reason: String(x?.reason || ""),
+    out[String(uid)] = (Array.isArray(arr) ? arr : []).map(x => ({
+      amount: Number(x?.amount) || 0, reason: String(x?.reason || ""),
       ts: x?.ts ? new Date(x.ts).toISOString() : new Date().toISOString(),
-      by:
-        x?.by && typeof x.by === "object"
-          ? { id: x.by.id ?? actor?.id ?? null, email: x.by.email ?? actor?.email ?? null }
-          : actor
-          ? { id: actor.id ?? null, email: actor.email ?? null }
-          : null,
+      by: x?.by && typeof x.by === "object" ? { id: x.by.id ?? actor?.id ?? null, email: x.by.email ?? actor?.email ?? null } : actor ? { id: actor.id ?? null, email: actor.email ?? null } : null,
     }));
   }
   return out;
 }
 
-/* ------------ CSV helpers ------------- */
 function generateJobCSV(job) {
   const rows = [];
-
-  job.applications = Array.isArray(job.applications) ? job.applications : [];
-  job.approved = Array.isArray(job.approved) ? job.approved : [];
-  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
-  job.attendance = job.attendance && typeof job.attendance === "object" ? job.attendance : {};
-
-  const schedStart = job.startTime || "";
-  const schedEnd = job.endTime || "";
-  const schedHrs = scheduledHours(job);
-  const evStart = job.events?.startedAt || "";
-  const evEnd = job.events?.endedAt || "";
-
-  ensureLoadingUnload(job);
-
-  for (const u of job.applications) {
-    const luApplied = !!(job.loadingUnload?.applicants || []).includes(u.userId);
-    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(u.userId);
-    const present = !!job.attendance?.[u.userId]?.in || !!job.attendance?.[u.userId]?.out;
-
-    rows.push({
-      section: "applications",
-      userId: u.userId,
-      email: u.email,
-      transport: u.transport,
-      status: job.approved.includes(u.userId)
-        ? "approved"
-        : job.rejected.includes(u.userId)
-        ? "rejected"
-        : "applied",
-      in: "",
-      out: "",
-      lateMinutes: "",
-      present,
-      scheduledStart: schedStart,
-      scheduledEnd: schedEnd,
-      scheduledHours: schedHrs,
-      eventStartedAt: evStart,
-      eventEndedAt: evEnd,
-      luApplied,
-      luConfirmed,
-    });
+  const applications = job.applications || [], approved = job.approved || [], rejected = job.rejected || [], attendance = job.attendance || {};
+  const scheduledHours = Math.max(0, (new Date(job.endTime) - new Date(job.startTime)) / 3600000).toFixed(2);
+  for (const a of applications) {
+    const rec = attendance[a.userId] || {};
+    rows.push({ section: "applications", userId: a.userId, email: a.email || "", transport: a.transport || "", status: approved.includes(a.userId) ? "approved" : rejected.includes(a.userId) ? "rejected" : "applied", in: "", out: "", lateMinutes: "", present: !!(rec.in || rec.out), scheduledStart: job.startTime, scheduledEnd: job.endTime, scheduledHours, eventStartedAt: job.events?.startedAt || "", eventEndedAt: job.events?.endedAt || "", luApplied: (job.loadingUnload?.applicants || []).includes(a.userId), luConfirmed: (job.loadingUnload?.participants || []).includes(a.userId) });
   }
-
-  for (const [userId, rec] of Object.entries(job.attendance || {})) {
-    const app = job.applications.find((a) => a.userId === userId);
-    const luApplied = !!(job.loadingUnload?.applicants || []).includes(userId);
-    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(userId);
-    const present = !!rec.in || !!rec.out;
-
-    rows.push({
-      section: "attendance",
-      userId,
-      email: app?.email || "",
-      transport: app?.transport || "",
-      status: job.approved.includes(userId)
-        ? "approved"
-        : job.rejected.includes(userId)
-        ? "rejected"
-        : "applied",
-      in: rec.in || "",
-      out: rec.out || "",
-      lateMinutes: rec.lateMinutes ?? "",
-      present,
-      scheduledStart: schedStart,
-      scheduledEnd: schedEnd,
-      scheduledHours: schedHrs,
-      eventStartedAt: evStart,
-      eventEndedAt: evEnd,
-      luApplied,
-      luConfirmed,
-    });
+  for (const [userId, rec] of Object.entries(attendance)) {
+    const a = applications.find(x => x.userId === userId) || {};
+    rows.push({ section: "attendance", userId, email: a.email || "", transport: a.transport || "", status: approved.includes(userId) ? "approved" : rejected.includes(userId) ? "rejected" : "applied", in: rec.in || "", out: rec.out || "", lateMinutes: rec.lateMinutes ?? "", present: !!(rec.in || rec.out), scheduledStart: job.startTime, scheduledEnd: job.endTime, scheduledHours, eventStartedAt: job.events?.startedAt || "", eventEndedAt: job.events?.endedAt || "", luApplied: (job.loadingUnload?.applicants || []).includes(userId), luConfirmed: (job.loadingUnload?.participants || []).includes(userId) });
   }
-
-  const headers = [
-    "section",
-    "userId",
-    "email",
-    "transport",
-    "status",
-    "in",
-    "out",
-    "lateMinutes",
-    "present",
-    "scheduledStart",
-    "scheduledEnd",
-    "scheduledHours",
-    "eventStartedAt",
-    "eventEndedAt",
-    "luApplied",
-    "luConfirmed",
-  ];
-  return { headers, rows };
+  return rows;
 }
+function csvEscape(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }
 
-function exportJobCSV(job) {
-  const dir = path.join(__dirname, "data");
-  fs.ensureDirSync(dir);
-  const file = path.join(dir, `job-${job.id}.csv`);
-  const ws = createWriteStream(file);
-  const csv = csvFormat({ headers: true });
-  csv.pipe(ws);
-  const { rows } = generateJobCSV(job);
-  for (const r of rows) csv.write(r);
-  csv.end();
-}
-
-/* ---------- boot migrations ---------- */
-db.users = db.users || [];
-let mutated = false;
-for (const u of db.users) {
-  if (!u.username) {
-    u.username =
-      (u.email && u.email.split("@")[0]) || `user_${u.id || Math.random().toString(36).slice(2, 8)}`;
-    mutated = true;
-  }
-  if (!u.passwordHash) {
-    u.passwordHash = hashPassword("password");
-    mutated = true;
-  }
-
-  const normGrade = clampGrade(u.grade || "junior");
-  if (u.grade !== normGrade) {
-    u.grade = normGrade;
-    mutated = true;
-  }
-
-  if (u.resetToken && (!u.resetToken.token || !u.resetToken.expiresAt)) {
-    delete u.resetToken;
-    mutated = true;
-  }
-  if (u.phone === undefined) {
-    u.phone = "";
-    mutated = true;
-  }
-  if (u.discord === undefined) {
-    u.discord = "";
-    mutated = true;
-  }
-  if (u.avatarUrl === undefined) {
-    u.avatarUrl = "";
-    mutated = true;
-  }
-  if (u.verified === undefined) {
-    u.verified = true;
-    mutated = true;
-  }
-  if (u.verificationStatus === undefined) {
-    u.verificationStatus = u.verified ? "APPROVED" : "PENDING";
-    mutated = true;
-  }
-  if (u.verificationPhotoUrl === undefined) {
-    u.verificationPhotoUrl = "";
-    mutated = true;
-  }
-  if (u.verifiedAt === undefined) {
-    u.verifiedAt = null;
-    mutated = true;
-  }
-  if (u.verifiedBy === undefined) {
-    u.verifiedBy = null;
-    mutated = true;
-  }
-}
-if (mutated) await saveDB(db);
-
-db.jobs = db.jobs || [];
-let bootMutated = false;
-for (const j of db.jobs) {
-  if (!j.adjustments || typeof j.adjustments !== "object") {
-    j.adjustments = {};
-    bootMutated = true;
-  } else {
-    const norm = normalizeAdjustments(j.adjustments);
-    if (JSON.stringify(j.adjustments) !== JSON.stringify(norm)) {
-      j.adjustments = norm;
-      bootMutated = true;
-    }
-  }
-
-  if (!j.loadingUnload || typeof j.loadingUnload !== "object") {
-    j.loadingUnload = {
-      enabled: false,
-      quota: 0,
-      price: Number(db.config.rates.loadingUnloading.amount),
-      applicants: [],
-      participants: [],
-      closed: false,
-    };
-    bootMutated = true;
-  }
-  const beforeLU = JSON.stringify(j.loadingUnload);
-  ensureLoadingUnload(j);
-  if (JSON.stringify(j.loadingUnload) !== beforeLU) bootMutated = true;
-
-  if (!Array.isArray(j.fullTimers)) {
-    j.fullTimers = [];
-    bootMutated = true;
-  }
-
-  if (j.parkingReceipts && !Array.isArray(j.parkingReceipts)) {
-    j.parkingReceipts = [];
-    bootMutated = true;
-  }
-
-  // ✅ NEW: breakEnabled default migration
-  if (j.breakEnabled === undefined) {
-    j.breakEnabled = false;
-    bootMutated = true;
-  } else if (typeof j.breakEnabled !== "boolean") {
-    j.breakEnabled = !!j.breakEnabled;
-    bootMutated = true;
-  }
-}
-if (bootMutated) await saveDB(db);
-
-/* ---------------- Notifications (feed + web push) ---------------- */
-const NOTIF_CAP = 200;
-
-webpush.setVapidDetails(
-  process.env.VAPID_SUBJECT || "mailto:admin@example.com",
-  process.env.VAPID_PUBLIC_KEY || "",
-  process.env.VAPID_PRIVATE_KEY || ""
-);
-
-async function sendPushToSub(sub, payload) {
-  try {
-    await webpush.sendNotification(sub, JSON.stringify(payload));
-    return true;
-  } catch (err) {
-    if (err.statusCode === 404 || err.statusCode === 410) return false;
-    return true;
-  }
-}
-async function sendPushToUser(userId, payload) {
-  const list = db.pushSubs[userId] || [];
-  if (!list.length) return;
-  const keep = [];
-  for (const sub of list) {
-    const ok = await sendPushToSub(sub, payload);
-    if (ok) keep.push(sub);
-  }
-  db.pushSubs[userId] = keep;
-  await saveDB(db);
-}
-function addNotificationFor(userId, item) {
-  db.notifications[userId] = db.notifications[userId] || [];
-  db.notifications[userId].unshift(item);
-  if (db.notifications[userId].length > NOTIF_CAP) {
-    db.notifications[userId].length = NOTIF_CAP;
-  }
-}
-async function notifyUsers(userIds, { title, body, link, type = "info" }) {
-  const now = new Date().toISOString();
-  const id = "n" + Math.random().toString(36).slice(2, 10);
-  const item = { id, time: now, title, body, link, read: false, type };
-  for (const uid of userIds) {
-    addNotificationFor(uid, item);
-    sendPushToUser(uid, { title, body, url: link }).catch(() => {});
-  }
-  await saveDB(db);
-}
-
-/* ------------ EMAIL HELPER (Gmail API + Resend fallback) ------------- */
-async function sendResetEmail(to, link) {
-  const {
-    GMAIL_CLIENT_ID,
-    GMAIL_CLIENT_SECRET,
-    GMAIL_REFRESH_TOKEN,
-    GMAIL_SENDER,
-    RESEND_API_KEY,
-  } = process.env;
-
-  // 1) Gmail API
-  if (GMAIL_CLIENT_ID && GMAIL_CLIENT_SECRET && GMAIL_REFRESH_TOKEN && GMAIL_SENDER) {
-    try {
-      const oAuth2Client = new google.auth.OAuth2(
-        GMAIL_CLIENT_ID,
-        GMAIL_CLIENT_SECRET,
-        "urn:ietf:wg:oauth:2.0:oob"
-      );
-      oAuth2Client.setCredentials({ refresh_token: GMAIL_REFRESH_TOKEN });
-
-      const gmail = google.gmail({ version: "v1", auth: oAuth2Client });
-
-      const subject = "Reset your ATAG Jobs password";
-      const messageText = `Click this link to reset your password:\n${link}\n`;
-
-      const rawLines = [
-        `From: ${GMAIL_SENDER}`,
-        `To: ${to}`,
-        `Subject: ${subject}`,
-        'Content-Type: text/plain; charset="UTF-8"',
-        "",
-        messageText,
-      ];
-      const raw = Buffer.from(rawLines.join("\r\n"))
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/, "");
-
-      await gmail.users.messages.send({
-        userId: "me",
-        requestBody: { raw },
-      });
-      console.log("[sendResetEmail] sent via Gmail API to", to);
-      return;
-    } catch (err) {
-      console.error("[sendResetEmail] Gmail API error:", err?.response?.data || err);
-    }
-  }
-
-  // 2) Resend
-  if (RESEND_API_KEY) {
-    try {
-      const from =
-        process.env.FROM_EMAIL || process.env.MAIL_FROM || "ATAG Jobs <onboarding@resend.dev>";
-      const resp = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from,
-          to: [to],
-          subject: "Reset your ATAG Jobs password",
-          html: `<p>Click this link to reset your password:</p><p><a href="${link}">${link}</a></p>`,
-        }),
-      });
-      if (!resp.ok) {
-        console.error("[sendResetEmail] Resend error:", await resp.text());
-      }
-      return;
-    } catch (err) {
-      console.error("[sendResetEmail] Resend throw:", err);
-      return;
-    }
-  }
-
-  console.log("[sendResetEmail] no email provider configured, link:", link);
-}
-
-/**
- * Generic image saver for DataURL -> DB blob -> returns public url.
- */
-function parseImageDataUrl(dataUrl) {
-  const s = String(dataUrl || "");
-  const m = s.match(/^data:(image\/(png|jpeg|jpg|webp));base64,(.+)$/i);
-  if (!m) throw new Error("invalid_image_data");
-
-  const mime = m[1].toLowerCase();
-  const extRaw = m[2].toLowerCase();
-  const ext = extRaw === "jpeg" ? "jpg" : extRaw;
-
-  const b64 = m[3];
-  const buf = Buffer.from(b64, "base64");
-
-  if (buf.length > BLOB_MAX_BYTES) throw new Error("image_too_large");
-
-  return { mime, ext, b64, size: buf.length };
-}
-
-function blobIdFromAnyUrl(u) {
-  if (!u) return null;
-  const s = String(u);
-  const noHost = s.replace(/^https?:\/\/[^/]+/i, "");
-  const clean = noHost.split("?")[0];
-  const m = clean.match(/^\/blob\/([a-z0-9]+)/i);
-  return m ? m[1] : null;
-}
-
-// build referenced set so we NEVER prune an in-use blob
-function collectReferencedBlobIds() {
-  const ids = new Set();
-  const grab = (u) => {
-    const id = blobIdFromAnyUrl(u);
-    if (id) ids.add(id);
-  };
-
-  for (const u of db.users || []) {
-    grab(u.avatarUrl);
-    grab(u.verificationPhotoUrl);
-  }
-  for (const j of db.jobs || []) {
-    if (Array.isArray(j.parkingReceipts)) {
-      for (const r of j.parkingReceipts) grab(r?.photoUrl);
-    }
-  }
-  return ids;
-}
-
-function normalizeBlobOrder() {
-  const seen = new Set();
-  db.blobOrder = (db.blobOrder || [])
-    .filter((id) => id && typeof id === "string" && db.blobs?.[id])
-    .filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
-}
-
-function pruneBlobsIfNeeded() {
-  normalizeBlobOrder();
-  if (db.blobOrder.length <= BLOB_CAP) return;
-
-  const refs = collectReferencedBlobIds();
-
-  let guard = db.blobOrder.length * 2; // prevent infinite loops
-  while (db.blobOrder.length > BLOB_CAP && guard-- > 0) {
-    const oldest = db.blobOrder[0];
-
-    if (refs.has(oldest)) {
-      // still referenced -> move to end and try next
-      db.blobOrder.push(db.blobOrder.shift());
-      continue;
-    }
-
-    db.blobOrder.shift();
-    if (db.blobs?.[oldest]) delete db.blobs[oldest];
-  }
-
-  // If still exceeds cap, it means too many referenced blobs. Don't delete referenced.
-  if (db.blobOrder.length > BLOB_CAP) {
-    console.warn(
-      `[blob] BLOB_CAP=${BLOB_CAP} exceeded because many blobs are still referenced. Raise BLOB_CAP or cleanup receipts/users.`
-    );
-  }
-}
-
-/** Save image into DB and return public path: /blob/<id>?v=... */
-async function saveDataUrlBlob(dataUrl, meta = {}) {
-  const { mime, b64, size } = parseImageDataUrl(dataUrl);
-
-  const id = "b" + Math.random().toString(36).slice(2, 12);
-  db.blobs[id] = {
-    mime,
-    b64,
-    size,
-    createdAt: new Date().toISOString(),
-    meta: {
-      kind: meta.kind || "",
-      ownerUserId: meta.ownerUserId || null,
-      jobId: meta.jobId || null,
-    },
-  };
-
-  db.blobOrder.push(id);
-
-  // ✅ safe prune (won't delete referenced)
-  pruneBlobsIfNeeded();
-
-  await saveDB(db);
-  return `/blob/${id}?v=${Date.now()}`;
-}
-
-async function deleteBlobByUrl(u) {
-  const id = blobIdFromAnyUrl(u);
-  if (!id) return false;
-  if (!db.blobs || !db.blobs[id]) return false;
-
-  delete db.blobs[id];
-  db.blobOrder = (db.blobOrder || []).filter((x) => x !== id);
-  await saveDB(db);
-  return true;
-}
-
-/** Backward-compatible delete for old /uploads files (best-effort) */
-async function deleteStoredImage(u) {
-  if (!u) return;
-
-  // new DB blob
-  const blobId = blobIdFromAnyUrl(u);
-  if (blobId) {
-    await deleteBlobByUrl(u);
-    return;
-  }
-
-  // old local uploads
-  try {
-    const s = String(u).replace(/^https?:\/\/[^/]+/i, "");
-    const clean = s.split("?")[0];
-    if (clean.startsWith("/uploads/")) {
-      const rel = clean.replace("/uploads/", "");
-      const abs = path.join(uploadsRoot, rel);
-      if (fs.existsSync(abs)) fs.unlinkSync(abs);
-    }
-  } catch {}
-}
-
-/* ---- Parking receipt helpers ---- */
-function absPathFromReceiptUrl(photoUrl) {
-  try {
-    const clean = String(photoUrl || "").split("?")[0];
-    const prefixes = ["/uploads/parking-receipts/", "/uploads/parking-receceipts/"];
-    for (const pfx of prefixes) {
-      if (clean.startsWith(pfx)) {
-        const filename = clean.slice(pfx.length);
-        return path.join(parkingReceiptsDir, filename);
-      }
-    }
-  } catch {}
-  return null;
-}
-
-/** Build public base URL safely (Render / proxies) */
-function publicBase(req) {
-  const forced = String(process.env.PUBLIC_API_URL || "").replace(/\/$/, "");
-  if (forced) return forced;
-
-  const proto = String(req.headers["x-forwarded-proto"] || req.protocol || "http")
-    .split(",")[0]
-    .trim();
-  const host = String(req.headers["x-forwarded-host"] || req.get("host") || "")
-    .split(",")[0]
-    .trim();
-
-  return `${proto}://${host}`;
-}
-
-/** Convert relative path to absolute URL */
-function toPublicUrl(req, p) {
-  if (!p) return "";
-  if (/^https?:\/\//i.test(p)) return p;
-  return `${publicBase(req)}${p.startsWith("/") ? "" : "/"}${p}`;
-}
-
-function enrichReceipt(req, r) {
-  const u = (db.users || []).find((x) => x.id === r.userId);
-  return {
-    ...r,
-    photoUrlAbs: toPublicUrl(req, r.photoUrl),
-    name: u?.name || r.name || "",
-    phone: u?.phone || "",
-    discord: u?.discord || "",
-  };
-}
-
-/* -------------- AUTH --------------- */
-
-app.post("/login", async (req, res) => {
+// ---------- Auth ----------
+app.post("/login", asyncHandler(async (req, res) => {
   const { identifier, email, username, password } = req.body || {};
   const id = identifier || email || username;
-  if (!id || !password) return res.status(400).json({ error: "missing_credentials" });
+  if (!id || !password) throw new HttpError(400, "missing_credentials");
+  const user = await findUserByIdentifier(id);
+  if (!user) throw new HttpError(401, "unknown_user");
+  if (!verifyPassword(password, user.passwordHash)) throw new HttpError(401, "invalid_password");
+  if (!user.verified) return res.status(403).json({ error: "pending_verification", code: "PENDING_VERIFICATION" });
+  await withTransaction(client => addAudit(client, "login", { identifier: id }, { user }));
+  res.json({ token: signUserToken(user), user: await serializeUser(user, { privatePhoto: true }) });
+}));
 
-  const user = findUserByIdentifier(id);
-  if (!user) return res.status(401).json({ error: "unknown_user" });
-
-  if (!verifyPassword(password, user.passwordHash)) {
-    return res.status(401).json({ error: "invalid_password" });
-  }
-
-  if (!user.verified) {
-    return res.status(403).json({
-      error: "pending_verification",
-      code: "PENDING_VERIFICATION",
-    });
-  }
-
-  const token = signUserToken(user);
-  addAudit("login", { identifier: id }, { user });
-
-  res.json({
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      name: user.name,
-      grade: user.grade || "junior",
-      username: user.username || "",
-      phone: user.phone || "",
-      discord: user.discord || "",
-      avatarUrl: user.avatarUrl || "",
-      verified: !!user.verified,
-      verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
-      verificationPhotoUrl: user.verificationPhotoUrl || "",
-      verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
-      verifiedAt: user.verifiedAt || null,
-      verifiedBy: user.verifiedBy || null,
-    },
-  });
-});
-
-app.post("/register", async (req, res) => {
+app.post("/register", asyncHandler(async (req, res) => {
   const { email, username, name, password, role, phone, discord, verificationDataUrl } = req.body || {};
-
-  if (!email || !password) {
-    return res.status(400).json({ error: "email_and_password_required" });
-  }
-
-  if (!verificationDataUrl || typeof verificationDataUrl !== "string") {
-    return res.status(400).json({ error: "verification_photo_required" });
-  }
-
-  const pickedRole = clampRole(role || "part-timer");
-
-  const emailLower = String(email).toLowerCase();
-  if (db.users.find((u) => String(u.email || "").toLowerCase() === emailLower)) {
-    return res.status(409).json({ error: "email_taken" });
-  }
-
-  if (username) {
-    const userLower = String(username).toLowerCase();
-    if (db.users.find((u) => String(u.username || "").toLowerCase() === userLower)) {
-      return res.status(409).json({ error: "username_taken" });
-    }
-  }
-
-  const id = "u" + Math.random().toString(36).slice(2, 10);
+  if (!email || !password) throw new HttpError(400, "email_and_password_required");
+  if (!verificationDataUrl || typeof verificationDataUrl !== "string") throw new HttpError(400, "verification_photo_required");
+  const id = randomId("u", 6);
   const finalUsername = username || String(email).split("@")[0];
-  const passwordHash = hashPassword(password);
-
-  let verificationPhotoUrl = "";
+  let uploaded;
+  try { uploaded = await uploadImageDataUrl(verificationDataUrl, { kind: "verification", ownerUserId: id }); }
+  catch (e) { throw new HttpError(400, e?.message || "invalid_verification_photo"); }
   try {
-    verificationPhotoUrl = await saveDataUrlBlob(verificationDataUrl, {
-      kind: "verification",
-      ownerUserId: id,
+    const user = await withTransaction(async client => {
+      const { rows } = await client.query(
+        `INSERT INTO users(id,email,username,name,role,grade,password_hash,phone,discord,verified,verification_status,verification_photo_path)
+         VALUES($1,$2,$3,$4,$5,'junior',$6,$7,$8,false,'PENDING',$9) RETURNING *`,
+        [id, String(email), String(finalUsername), String(name || finalUsername), clampRole(role || "part-timer"), hashPassword(String(password)), String(phone || ""), String(discord || ""), uploaded.ref]
+      );
+      const u = rows[0];
+      await addAudit(client, "register_pending_verification", { email, role: u.role }, { user: { id: u.id, email: u.email, role: u.role } });
+      return await getUserById(u.id, client);
     });
-  } catch (e) {
-    return res.status(400).json({ error: e?.message || "invalid_verification_photo" });
-  }
-
-  const newUser = {
-    id,
-    email,
-    username: finalUsername,
-    name: name || finalUsername,
-    role: pickedRole,
-    grade: "junior",
-    passwordHash,
-    phone: String(phone || ""),
-    discord: String(discord || ""),
-    avatarUrl: "",
-    verified: false,
-    verificationStatus: "PENDING",
-    verificationPhotoUrl,
-    verifiedAt: null,
-    verifiedBy: null,
-  };
-
-  db.users.push(newUser);
-  await saveDB(db);
-  addAudit("register_pending_verification", { email, role: pickedRole }, { user: newUser });
-
-  res.json({
-    ok: true,
-    pending: true,
-    user: {
-      id,
-      email,
-      role: newUser.role,
-      name: newUser.name,
-      grade: newUser.grade,
-      username: newUser.username,
-      phone: newUser.phone,
-      discord: newUser.discord,
-      avatarUrl: newUser.avatarUrl,
-      verified: newUser.verified,
-      verificationStatus: newUser.verificationStatus,
-      verificationPhotoUrl: newUser.verificationPhotoUrl,
-    },
-  });
-});
-
-/* ---- forgot + reset password ---- */
-app.post("/forgot-password", async (req, res) => {
-  const { email } = req.body || {};
-  if (!email) return res.status(400).json({ error: "email_required" });
-
-  const emailLower = String(email).toLowerCase();
-  const user = db.users.find((u) => String(u.email || "").toLowerCase() === emailLower);
-
-  // Always return ok (don’t leak user existence)
-  if (!user) return res.json({ ok: true });
-
-  const token = crypto.randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + 60 * 60 * 1000;
-  user.resetToken = { token, expiresAt };
-  await saveDB(db);
-
-  const base = (
-    process.env.PUBLIC_APP_URL ||
-    process.env.FRONTEND_URL ||
-    process.env.APP_ORIGIN ||
-    req.headers?.origin ||
-    ""
-  ).replace(/\/$/, "");
-  const resetLink = `${base}/#/reset?token=${token}`;
-
-  addAudit("forgot_password", { email }, { user });
-
-  try {
-    await sendResetEmail(user.email, resetLink);
+    res.json({ ok: true, pending: true, user: await serializeUser(user, { privatePhoto: true }) });
   } catch (err) {
-    console.error("sendResetEmail error (outer):", err);
+    await removeStoredFile(uploaded.ref).catch(() => {});
+    throw err;
   }
+}));
 
-  // ✅ do NOT return token. Link is OK (still not ideal, but far better than token).
-  res.json({ ok: true, resetLink });
-});
-
-app.post("/reset-password", async (req, res) => {
-  const { token, password } = req.body || {};
-  if (!token || !password) return res.status(400).json({ error: "missing_token_or_password" });
-
-  const user = db.users.find((u) => u.resetToken && u.resetToken.token === token);
-  if (!user) return res.status(400).json({ error: "invalid_token" });
-
-  if (Date.now() > Number(user.resetToken.expiresAt)) {
-    delete user.resetToken;
-    await saveDB(db);
-    return res.status(400).json({ error: "token_expired" });
-  }
-
-  user.passwordHash = hashPassword(password);
-  delete user.resetToken;
-  await saveDB(db);
-  addAudit("reset_password", { userId: user.id }, { user });
-  res.json({ ok: true });
-});
-
-/* ---- legacy paths for old frontend ---- */
-app.post("/auth/forgot", (req, res, next) => {
-  req.url = "/forgot-password";
-  app._router.handle(req, res, next);
-});
-app.post("/auth/reset", (req, res, next) => {
-  req.url = "/reset-password";
-  app._router.handle(req, res, next);
-});
-
-/* ---- ME ---- */
-app.get("/me", authMiddleware, (req, res) => {
-  const user = db.users.find((u) => u.id === req.user.id);
-  if (!user) return res.status(404).json({ error: "user_not_found" });
-
-  res.json({
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      name: user.name,
-      grade: user.grade || "junior",
-      username: user.username || "",
-      phone: user.phone || "",
-      discord: user.discord || "",
-      avatarUrl: user.avatarUrl || "",
-      verified: !!user.verified,
-      verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
-      verificationPhotoUrl: user.verificationPhotoUrl || "",
-      verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
-      verifiedAt: user.verifiedAt || null,
-      verifiedBy: user.verifiedBy || null,
-    },
+async function handleForgotPassword(req, res) {
+  const { email } = req.body || {};
+  if (!email) throw new HttpError(400, "email_required");
+  const user = await findUserByIdentifier(email);
+  // Do not disclose whether an account exists.
+  if (!user || String(user.email).toLowerCase() !== String(email).toLowerCase()) return res.json({ ok: true });
+  const token = crypto.randomBytes(24).toString("hex");
+  const expires = new Date(Date.now() + 3600000);
+  await withTransaction(async client => {
+    await client.query(`DELETE FROM password_reset_tokens WHERE user_id=$1`, [user.id]);
+    await client.query(`INSERT INTO password_reset_tokens(token_hash,user_id,expires_at) VALUES($1,$2,$3)`, [sha256(token), user.id, expires]);
+    await addAudit(client, "forgot_password", { email: user.email }, { user });
   });
-});
+  const base = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || process.env.APP_ORIGIN || req.headers.origin || "").replace(/\/$/, "");
+  const resetLink = `${base}/#/reset?token=${token}`;
+  const emailed = await sendResetEmail(user.email, resetLink);
+  return res.json({ ok: true, ...(process.env.NODE_ENV !== "production" && !emailed ? { resetLink } : {}) });
+}
+
+async function handleResetPassword(req, res) {
+  const { token, password } = req.body || {};
+  if (!token || !password) throw new HttpError(400, "missing_token_or_password");
+  await withTransaction(async client => {
+    const { rows } = await client.query(`SELECT * FROM password_reset_tokens WHERE token_hash=$1 FOR UPDATE`, [sha256(token)]);
+    const rec = rows[0];
+    if (!rec) throw new HttpError(400, "invalid_token");
+    if (Date.now() > new Date(rec.expires_at).getTime()) {
+      await client.query(`DELETE FROM password_reset_tokens WHERE token_hash=$1`, [rec.token_hash]);
+      throw new HttpError(400, "token_expired");
+    }
+    await client.query(`UPDATE users SET password_hash=$1,updated_at=now() WHERE id=$2`, [hashPassword(String(password)), rec.user_id]);
+    await client.query(`DELETE FROM password_reset_tokens WHERE user_id=$1`, [rec.user_id]);
+    const user = await getUserById(rec.user_id, client);
+    await addAudit(client, "reset_password", { userId: rec.user_id }, { user });
+  });
+  return res.json({ ok: true });
+}
+
+app.post("/forgot-password", asyncHandler(handleForgotPassword));
+app.post("/auth/forgot", asyncHandler(handleForgotPassword));
+app.post("/reset-password", asyncHandler(handleResetPassword));
+app.post("/auth/reset", asyncHandler(handleResetPassword));
+
+// ---------- Profile ----------
+app.get("/me", authMiddleware, asyncHandler(async (req, res) => {
+  const user = await getUserById(req.user.id);
+  if (!user) throw new HttpError(404, "user_not_found");
+  res.json({ user: await serializeUser(user, { privatePhoto: true }) });
+}));
 
 async function handleUpdateMe(req, res) {
-  const user = (db.users || []).find((u) => u.id === req.user.id);
-  if (!user) return res.status(404).json({ error: "user_not_found" });
-
   const { email, username, name, phone, discord } = req.body || {};
-
-  if (email && String(email).toLowerCase() !== String(user.email).toLowerCase()) {
-    const taken = (db.users || []).some(
-      (u) => u.id !== user.id && String(u.email || "").toLowerCase() === String(email).toLowerCase()
+  const user = await withTransaction(async client => {
+    const before = await getUserById(req.user.id, client);
+    if (!before) throw new HttpError(404, "user_not_found");
+    await client.query(
+      `UPDATE users SET email=COALESCE($2,email),username=COALESCE($3,username),name=COALESCE($4,name),phone=COALESCE($5,phone),discord=COALESCE($6,discord),updated_at=now() WHERE id=$1`,
+      [req.user.id, email !== undefined ? String(email) : null, username !== undefined ? String(username) : null, name !== undefined ? String(name) : null, phone !== undefined ? String(phone || "") : null, discord !== undefined ? String(discord || "") : null]
     );
-    if (taken) return res.status(409).json({ error: "email_taken" });
-    user.email = String(email);
-  }
-  if (username && String(username).toLowerCase() !== String(user.username || "").toLowerCase()) {
-    const takenU = (db.users || []).some(
-      (u) =>
-        u.id !== user.id && String(u.username || "").toLowerCase() === String(username).toLowerCase()
-    );
-    if (takenU) return res.status(409).json({ error: "username_taken" });
-    user.username = String(username);
-  }
-  if (name !== undefined) user.name = String(name);
-  if (phone !== undefined) user.phone = String(phone || "");
-  if (discord !== undefined) user.discord = String(discord || "");
-
-  await saveDB(db);
-  addAudit("me_update_profile", { userId: user.id }, req);
-
-  const token = signUserToken(user);
-
-  return res.json({
-    ok: true,
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      username: user.username,
-      name: user.name,
-      role: user.role,
-      grade: user.grade || "junior",
-      phone: user.phone || "",
-      discord: user.discord || "",
-      avatarUrl: user.avatarUrl || "",
-      verified: !!user.verified,
-      verificationStatus: user.verificationStatus || (user.verified ? "APPROVED" : "PENDING"),
-      verificationPhotoUrl: user.verificationPhotoUrl || "",
-      verificationPhotoUrlAbs: toPublicUrl(req, user.verificationPhotoUrl || ""),
-      verifiedAt: user.verifiedAt || null,
-      verifiedBy: user.verifiedBy || null,
-    },
+    await addAudit(client, "me_update_profile", { userId: req.user.id }, req);
+    return getUserById(req.user.id, client);
   });
+  res.json({ ok: true, token: signUserToken(user), user: await serializeUser(user, { privatePhoto: true }) });
 }
-app.patch("/me", authMiddleware, handleUpdateMe);
-app.post("/me/update", authMiddleware, handleUpdateMe);
-app.post("/me/profile", authMiddleware, handleUpdateMe);
-app.patch("/me/profile", authMiddleware, handleUpdateMe);
+app.patch("/me", authMiddleware, asyncHandler(handleUpdateMe));
+app.post("/me/update", authMiddleware, asyncHandler(handleUpdateMe));
+app.post("/me/profile", authMiddleware, asyncHandler(handleUpdateMe));
+app.patch("/me/profile", authMiddleware, asyncHandler(handleUpdateMe));
 
-app.post("/me/password", authMiddleware, async (req, res) => {
-  const user = (db.users || []).find((u) => u.id === req.user.id);
-  if (!user) return res.status(404).json({ error: "user_not_found" });
+app.post("/me/password", authMiddleware, asyncHandler(async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
-  if (!currentPassword || !newPassword) return res.status(400).json({ error: "missing_fields" });
-  if (!verifyPassword(currentPassword, user.passwordHash))
-    return res.status(401).json({ error: "invalid_current_password" });
-  if (String(newPassword).length < 6) return res.status(400).json({ error: "weak_password" });
-  user.passwordHash = hashPassword(String(newPassword));
-  await saveDB(db);
-  addAudit("me_change_password", { userId: user.id }, req);
-  return res.json({ ok: true });
-});
+  if (!currentPassword || !newPassword) throw new HttpError(400, "missing_fields");
+  if (String(newPassword).length < 6) throw new HttpError(400, "weak_password");
+  await withTransaction(async client => {
+    const user = await getUserById(req.user.id, client);
+    if (!user) throw new HttpError(404, "user_not_found");
+    if (!verifyPassword(currentPassword, user.passwordHash)) throw new HttpError(401, "invalid_current_password");
+    await client.query(`UPDATE users SET password_hash=$1,updated_at=now() WHERE id=$2`, [hashPassword(String(newPassword)), user.id]);
+    await addAudit(client, "me_change_password", { userId: user.id }, req);
+  });
+  res.json({ ok: true });
+}));
 
-app.post("/me/avatar", authMiddleware, async (req, res) => {
-  const user = (db.users || []).find((u) => u.id === req.user.id);
-  if (!user) return res.status(404).json({ error: "user_not_found" });
-
+app.post("/me/avatar", authMiddleware, asyncHandler(async (req, res) => {
   const dataUrl = req.body?.dataUrl;
-  if (!dataUrl || typeof dataUrl !== "string") return res.status(400).json({ error: "dataUrl_required" });
-
-  const old = user.avatarUrl || "";
-
-  let avatarUrl = "";
+  if (!dataUrl) throw new HttpError(400, "dataUrl_required");
+  const current = await getUserById(req.user.id);
+  if (!current) throw new HttpError(404, "user_not_found");
+  let uploaded;
+  try { uploaded = await uploadImageDataUrl(dataUrl, { kind: "avatar", ownerUserId: current.id }); }
+  catch (e) { throw new HttpError(400, e?.message || "invalid_avatar"); }
   try {
-    avatarUrl = await saveDataUrlBlob(dataUrl, {
-      kind: "avatar",
-      ownerUserId: user.id,
+    await withTransaction(async client => {
+      await client.query(`UPDATE users SET avatar_path=$1,updated_at=now() WHERE id=$2`, [uploaded.ref, current.id]);
+      await addAudit(client, "me_update_avatar", { userId: current.id }, req);
     });
-  } catch (e) {
-    return res.status(400).json({ error: e?.message || "invalid_avatar" });
-  }
+  } catch (e) { await removeStoredFile(uploaded.ref).catch(() => {}); throw e; }
+  if (current.avatarUrl) removeStoredFile(current.avatarUrl).catch(() => {});
+  res.json({ ok: true, avatarUrl: fileApiPath(uploaded.ref), avatarUrlAbs: await createSignedUrl(uploaded.ref, 3600) });
+}));
 
-  user.avatarUrl = avatarUrl;
-  await saveDB(db);
-
-  await deleteStoredImage(old);
-
-  addAudit("me_update_avatar", { userId: user.id }, req);
-  return res.json({ ok: true, avatarUrl: user.avatarUrl });
-});
-
-/* -------- Admin: users -------- */
-app.get("/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
-  const list = (db.users || []).map((u) => ({
-    id: u.id,
-    email: u.email,
-    username: u.username,
-    name: u.name,
-    role: u.role,
-    grade: u.grade || "junior",
-    phone: u.phone || "",
-    discord: u.discord || "",
-    avatarUrl: u.avatarUrl || "",
-    avatarUrlAbs: toPublicUrl(req, u.avatarUrl || ""),
-    verified: !!u.verified,
-    verificationStatus: u.verificationStatus || (u.verified ? "APPROVED" : "PENDING"),
-    verificationPhotoUrl: u.verificationPhotoUrl || "",
-    verificationPhotoUrlAbs: toPublicUrl(req, u.verificationPhotoUrl || ""),
-    verifiedAt: u.verifiedAt || null,
-    verifiedBy: u.verifiedBy || null,
-  }));
-
-  res.json(list);
-});
-
-app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
-  const target = db.users.find((u) => u.id === req.params.id);
-  if (!target) return res.status(404).json({ error: "user_not_found" });
-
-  const { role, grade, verified, verificationStatus } = req.body || {};
-  const before = { role: target.role, grade: target.grade || "junior" };
-
-  if (role && clampRole(role) !== "admin" && target.role === "admin") {
-    const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
-    if (adminCount <= 1) return res.status(400).json({ error: "last_admin" });
-  }
-
-  if (role !== undefined) target.role = clampRole(role);
-  if (grade !== undefined) target.grade = clampGrade(grade);
-
-  if (verified !== undefined) {
-    target.verified = !!verified;
-    target.verificationStatus = target.verified ? "APPROVED" : target.verificationStatus || "PENDING";
-    target.verifiedAt = target.verified ? dayjs().toISOString() : null;
-    target.verifiedBy = target.verified ? req.user.id : null;
-  }
-
-  if (verificationStatus !== undefined) {
-    const s = String(verificationStatus || "").toUpperCase();
-    if (!["PENDING", "APPROVED", "REJECTED"].includes(s)) {
-      return res.status(400).json({ error: "bad_verificationStatus" });
-    }
-    target.verificationStatus = s;
-    if (s === "APPROVED") {
-      target.verified = true;
-      target.verifiedAt = dayjs().toISOString();
-      target.verifiedBy = req.user.id;
-    }
-    if (s === "REJECTED" || s === "PENDING") {
-      target.verified = false;
-      target.verifiedAt = null;
-      target.verifiedBy = null;
-    }
-  }
-
-  // AUTO-DELETE verification photo after APPROVED / REJECTED
+app.post("/me/verification-photo", authMiddleware, asyncHandler(async (req, res) => {
+  const dataUrl = req.body?.dataUrl || req.body?.verificationDataUrl || req.body?.verifyImageDataUrl;
+  if (!dataUrl) throw new HttpError(400, "dataUrl_required");
+  const current = await getUserById(req.user.id);
+  if (!current) throw new HttpError(404, "user_not_found");
+  const uploaded = await uploadImageDataUrl(dataUrl, { kind: "verification", ownerUserId: current.id });
   try {
-    const decided =
-      target.verificationStatus === "APPROVED" || target.verificationStatus === "REJECTED";
-
-    if (decided && target.verificationPhotoUrl) {
-      const old = target.verificationPhotoUrl;
-      target.verificationPhotoUrl = "";
-      await saveDB(db);              // save first so UI stops showing it
-      await deleteStoredImage(old);  // delete blob/local
-    } else {
-      await saveDB(db);
-    }
-  } catch {
-    await saveDB(db);
-  }
-
-  addAudit(
-    "admin_update_user_role_grade",
-    { userId: target.id, before, after: { role: target.role, grade: target.grade } },
-    req
-  );
-
-  try {
-    await notifyUsers([target.id], {
-      title: "Your account was updated",
-      body: `Role: ${target.role} • Grade: ${target.grade || "junior"} • Verified: ${
-        target.verified ? "YES" : "NO"
-      }`,
-      link: "/#/",
-      type: "account_update",
+    const user = await withTransaction(async client => {
+      await client.query(`UPDATE users SET verification_photo_path=$1,verified=false,verification_status='PENDING',verified_at=NULL,verified_by=NULL,updated_at=now() WHERE id=$2`, [uploaded.ref, current.id]);
+      await addAudit(client, "me_update_verification_photo", { userId: current.id }, req);
+      return getUserById(current.id, client);
     });
-  } catch {}
+    if (current.verificationPhotoUrl) removeStoredFile(current.verificationPhotoUrl).catch(() => {});
+    res.json({ ok: true, user: await serializeUser(user, { privatePhoto: true }) });
+  } catch (e) { await removeStoredFile(uploaded.ref).catch(() => {}); throw e; }
+}));
 
-  res.json({
-    ok: true,
-    user: {
-      id: target.id,
-      email: target.email,
-      username: target.username,
-      name: target.name,
-      role: target.role,
-      grade: target.grade || "junior",
-      phone: target.phone || "",
-      discord: target.discord || "",
-      avatarUrl: target.avatarUrl || "",
-      verified: !!target.verified,
-      verificationStatus: target.verificationStatus || (target.verified ? "APPROVED" : "PENDING"),
-      verificationPhotoUrl: target.verificationPhotoUrl || "",
-      verifiedAt: target.verifiedAt || null,
-      verifiedBy: target.verifiedBy || null,
-    },
+app.post("/me/verification-photo/remove", authMiddleware, asyncHandler(async (req, res) => {
+  const current = await getUserById(req.user.id);
+  if (!current) throw new HttpError(404, "user_not_found");
+  const user = await withTransaction(async client => {
+    await client.query(`UPDATE users SET verification_photo_path=NULL,verified=false,verification_status='PENDING',verified_at=NULL,verified_by=NULL,updated_at=now() WHERE id=$1`, [current.id]);
+    await addAudit(client, "me_remove_verification_photo", { userId: current.id }, req);
+    return getUserById(current.id, client);
   });
-});
+  if (current.verificationPhotoUrl) removeStoredFile(current.verificationPhotoUrl).catch(() => {});
+  res.json({ ok: true, user: await serializeUser(user, { privatePhoto: true }) });
+}));
 
-app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
-  const uid = req.params.id;
-  const user = (db.users || []).find((u) => u.id === uid);
+// ---------- Admin users ----------
+app.get("/admin/users", authMiddleware, requireRole("admin"), asyncHandler(async (_req, res) => {
+  const users = await listUsers();
+  res.json(await Promise.all(users.map(u => serializeUser(u, { privatePhoto: true }))));
+}));
 
-  // check existence BEFORE dereferencing user fields
-  if (!user) return res.status(404).json({ error: "user_not_found" });
-
-  // avoid deleting the active admin session by accident
-  if (uid === req.user.id) {
-    return res.status(400).json({ error: "self_delete_not_allowed" });
-  }
-
-  // validate admin safety before deleting files/data
-  if (user.role === "admin") {
-    const adminCount = (db.users || []).filter((u) => u.role === "admin").length;
-    if (adminCount <= 1) {
-      return res.status(400).json({ error: "last_admin" });
+app.patch("/admin/users/:id", authMiddleware, requireRole("admin"), asyncHandler(async (req, res) => {
+  let oldPhoto = null, notify = false;
+  const user = await withTransaction(async client => {
+    const target = await getUserById(req.params.id, client);
+    if (!target) throw new HttpError(404, "user_not_found");
+    const { role, grade, verified, verificationStatus } = req.body || {};
+    if (role !== undefined && target.role === "admin" && clampRole(role) !== "admin") {
+      const { rows } = await client.query(`SELECT count(*)::int AS n FROM users WHERE role='admin'`);
+      if (rows[0].n <= 1) throw new HttpError(400, "last_admin");
     }
-  }
-
-  await deleteStoredImage(user.avatarUrl || "");
-  await deleteStoredImage(user.verificationPhotoUrl || "");
-
-  db.users = (db.users || []).filter((u) => u.id !== uid);
-
-  for (const j of db.jobs || []) {
-    j.applications = (j.applications || []).filter((a) => a.userId !== uid);
-    j.approved = (j.approved || []).filter((x) => x !== uid);
-    j.rejected = (j.rejected || []).filter((x) => x !== uid);
-
-    if (j.attendance && j.attendance[uid]) delete j.attendance[uid];
-
-    if (j.loadingUnload) {
-      ensureLoadingUnload(j);
-      j.loadingUnload.applicants = (j.loadingUnload.applicants || []).filter((x) => x !== uid);
-      j.loadingUnload.participants = (j.loadingUnload.participants || []).filter((x) => x !== uid);
-      ensureLoadingUnload(j);
+    let nextRole = role !== undefined ? clampRole(role) : target.role;
+    let nextGrade = grade !== undefined ? clampGrade(grade) : target.grade;
+    let nextVerified = target.verified;
+    let nextStatus = target.verificationStatus;
+    let verifiedAt = target.verifiedAt;
+    let verifiedBy = target.verifiedBy;
+    if (verified !== undefined) {
+      nextVerified = !!verified;
+      nextStatus = nextVerified ? "APPROVED" : (nextStatus || "PENDING");
+      verifiedAt = nextVerified ? new Date().toISOString() : null;
+      verifiedBy = nextVerified ? req.user.id : null;
     }
-
-    if (Array.isArray(j.fullTimers)) {
-      j.fullTimers = j.fullTimers.filter((ft) => ft && ft.userId !== uid);
+    if (verificationStatus !== undefined) {
+      const s = String(verificationStatus).toUpperCase();
+      if (!["PENDING","APPROVED","REJECTED"].includes(s)) throw new HttpError(400, "bad_verificationStatus");
+      nextStatus = s; nextVerified = s === "APPROVED";
+      verifiedAt = nextVerified ? new Date().toISOString() : null;
+      verifiedBy = nextVerified ? req.user.id : null;
     }
-
-    if (Array.isArray(j.parkingReceipts)) {
-      for (const r of j.parkingReceipts) {
-        if (r?.userId === uid) await deleteStoredImage(r.photoUrl);
-      }
-
-      j.parkingReceipts = j.parkingReceipts.filter((r) => r?.userId !== uid);
-    }
-  }
-
-  delete db.notifications?.[uid];
-  delete db.pushSubs?.[uid];
-
-  await saveDB(db);
-  addAudit("admin_delete_user", { userId: uid, email: user.email }, req);
-
-  res.json({ ok: true, removed: { id: user.id, email: user.email } });
-});
-
-app.post(
-  "/admin/users/:id/verification-photo/remove",
-  authMiddleware,
-  requireRole("admin"),
-  async (req, res) => {
-    const target = db.users.find((u) => u.id === req.params.id);
-    if (!target) return res.status(404).json({ error: "user_not_found" });
-
-    const old = target.verificationPhotoUrl || "";
-    target.verificationPhotoUrl = "";
-    await saveDB(db);
-
-    await deleteStoredImage(old);
-    addAudit("admin_remove_verification_photo", { userId: target.id }, req);
-
-    return res.json({ ok: true });
-  }
-);
-
-/* -------- Config (Admin) -------- */
-app.get("/config/rates", authMiddleware, requireRole("admin"), (_req, res) => {
-  res.json({
-    ...db.config.rates,
-    roleRatesDefaults: db.config.roleRatesDefaults,
+    const decided = nextStatus === "APPROVED" || nextStatus === "REJECTED";
+    oldPhoto = decided ? target.verificationPhotoUrl : null;
+    await client.query(`UPDATE users SET role=$2,grade=$3,verified=$4,verification_status=$5,verified_at=$6,verified_by=$7,verification_photo_path=CASE WHEN $8 THEN NULL ELSE verification_photo_path END,updated_at=now() WHERE id=$1`, [target.id, nextRole, nextGrade, nextVerified, nextStatus, verifiedAt, verifiedBy, decided]);
+    await addAudit(client, "admin_update_user_role_grade", { userId: target.id, before: { role: target.role, grade: target.grade }, after: { role: nextRole, grade: nextGrade, verified: nextVerified, verificationStatus: nextStatus } }, req);
+    const n = await insertNotifications(client, [target.id], { title: "Your account was updated", body: `Role: ${nextRole} • Grade: ${nextGrade} • Verified: ${nextVerified ? "YES" : "NO"}`, link: "/#/", type: "account_update", eventKeyBase: `account_update:${target.id}:${Date.now()}` });
+    notify = n.length > 0;
+    return getUserById(target.id, client);
   });
-});
-app.post("/config/rates", authMiddleware, requireRole("admin"), async (req, res) => {
-  const body = req.body || {};
-  db.config.rates = Object.keys(body).length ? { ...db.config.rates, ...body } : db.config.rates;
-  if (body.roleRatesDefaults && typeof body.roleRatesDefaults === "object") {
-    db.config.roleRatesDefaults = { ...db.config.roleRatesDefaults, ...body.roleRatesDefaults };
+  if (oldPhoto) removeStoredFile(oldPhoto).catch(() => {});
+  if (notify) notifyAfterCommit([user.id], { title: "Your account was updated", body: `Role: ${user.role} • Grade: ${user.grade}`, link: "/#/" });
+  res.json({ ok: true, user: await serializeUser(user, { privatePhoto: true }) });
+}));
+
+app.delete("/admin/users/:id", authMiddleware, requireRole("admin"), asyncHandler(async (req, res) => {
+  if (req.params.id === req.user.id) throw new HttpError(400, "self_delete_not_allowed");
+  let files = [], removed;
+  await withTransaction(async client => {
+    const target = await getUserById(req.params.id, client);
+    if (!target) throw new HttpError(404, "user_not_found");
+    if (target.role === "admin") {
+      const { rows } = await client.query(`SELECT count(*)::int AS n FROM users WHERE role='admin'`);
+      if (rows[0].n <= 1) throw new HttpError(400, "last_admin");
+    }
+    const receipts = await client.query(`SELECT storage_path FROM parking_receipts WHERE user_id=$1`, [target.id]);
+    files = [target.avatarUrl, target.verificationPhotoUrl, ...receipts.rows.map(r => r.storage_path)].filter(Boolean);
+    await client.query(`DELETE FROM users WHERE id=$1`, [target.id]);
+    await addAudit(client, "admin_delete_user", { userId: target.id, email: target.email }, req);
+    removed = { id: target.id, email: target.email };
+  });
+  await Promise.allSettled(files.map(removeStoredFile));
+  res.json({ ok: true, removed });
+}));
+
+app.post("/admin/users/:id/verification-photo/remove", authMiddleware, requireRole("admin"), asyncHandler(async (req, res) => {
+  const target = await getUserById(req.params.id);
+  if (!target) throw new HttpError(404, "user_not_found");
+  await withTransaction(async client => {
+    await client.query(`UPDATE users SET verification_photo_path=NULL,updated_at=now() WHERE id=$1`, [target.id]);
+    await addAudit(client, "admin_remove_verification_photo", { userId: target.id }, req);
+  });
+  if (target.verificationPhotoUrl) removeStoredFile(target.verificationPhotoUrl).catch(() => {});
+  res.json({ ok: true });
+}));
+
+// ---------- Config ----------
+app.get("/config/rates", authMiddleware, requireRole("admin"), asyncHandler(async (_req, res) => {
+  const config = await getAppConfig();
+  res.json({ ...config.rates, roleRatesDefaults: config.roleRatesDefaults });
+}));
+app.post("/config/rates", authMiddleware, requireRole("admin"), asyncHandler(async (req, res) => {
+  const result = await withTransaction(async client => {
+    const current = await getAppConfig(client);
+    const body = req.body || {};
+    const roleRatesDefaults = body.roleRatesDefaults && typeof body.roleRatesDefaults === "object" ? { ...current.roleRatesDefaults, ...body.roleRatesDefaults } : current.roleRatesDefaults;
+    const cleanBody = { ...body }; delete cleanBody.roleRatesDefaults;
+    const rates = { ...current.rates, ...cleanBody, earlyCall: { ...current.rates.earlyCall, ...(cleanBody.earlyCall || {}) } };
+    await setConfigValue(client, "rates", rates);
+    await setConfigValue(client, "roleRatesDefaults", roleRatesDefaults);
+    await addAudit(client, "update_rates_default", { rates, roleRatesDefaults }, req);
+    return { rates, roleRatesDefaults };
+  });
+  res.json({ ok: true, ...result });
+}));
+
+// ---------- Jobs ----------
+app.get("/jobs", asyncHandler(async (req, res) => {
+  const jobs = await listJobsPublic();
+  const limit = Number(req.query.limit || 0);
+  res.json(limit > 0 ? jobs.slice(0, limit) : jobs);
+}));
+
+app.get("/jobs/:id", optionalAuthMiddleware, asyncHandler(async (req, res) => {
+  const job = await getJobFull(req.params.id);
+  if (!job) throw new HttpError(404, "job_not_found");
+  // API paths for assets; private receipt signed links are added only for managers.
+  job.fullTimers = (job.fullTimers || []).map(ft => ({ ...ft }));
+  job.applications = (job.applications || []).map(a => ({ ...a, avatarUrl: a.avatarUrl ? fileApiPath(a.avatarUrl) : "" }));
+  if (req.user && (req.user.role === "pm" || req.user.role === "admin")) {
+    job.parkingReceipts = await Promise.all((job.parkingReceipts || []).map(async r => ({ ...r, photoUrl: fileApiPath(r.photoUrl), photoUrlAbs: await createSignedUrl(r.photoUrl, 300) })));
   }
-  db.config.rates.earlyCall = db.config.rates.earlyCall || {};
-  if (db.config.rates.earlyCall.thresholdHours == null)
-    db.config.rates.earlyCall.thresholdHours = DEFAULT_RATES.earlyCall.thresholdHours;
+  res.json(stripPrivateJob(job, req.user));
+}));
 
-  await saveDB(db);
-  addAudit(
-    "update_rates_default",
-    { rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults },
-    req
-  );
-  res.json({ ok: true, rates: db.config.rates, roleRatesDefaults: db.config.roleRatesDefaults });
-});
-
-/* -------------- jobs --------------- */
-app.get("/jobs", (req, res) => {
-  const jobs = (db.jobs || [])
-    .map((j) => jobPublicView(j))
-    .sort((a, b) => dayjs(a.startTime).valueOf() - dayjs(b.startTime).valueOf());
-  res.json(req.query.limit ? jobs.slice(0, Number(req.query.limit)) : jobs);
-});
-
-app.get("/jobs/:id", (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  ensureLoadingUnload(job);
-  ensureBreakEnabled(job);
-  const hydrated = hydrateJobFullTimers(job);
-  res.json({ ...hydrated, status: computeStatus(hydrated) });
-});
-
-/* =========================
-   ✅ BREAK ROUTES (NEW)
-   Fix frontend 404 spam:
-   /break, /break-time, /break/toggle, /break-enabled
-========================= */
 async function handleBreakToggle(req, res) {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  ensureBreakEnabled(job);
-
   const body = req.body || {};
-  const hasEnabled =
-    typeof body.enabled === "boolean" ||
-    typeof body.breakEnabled === "boolean" ||
-    typeof body.value === "boolean";
-
-  const nextVal = hasEnabled
-    ? !!(body.enabled ?? body.breakEnabled ?? body.value)
-    : !job.breakEnabled;
-
-  job.breakEnabled = nextVal;
-  await saveDB(db);
-
-  addAudit("break_toggle", { jobId: job.id, breakEnabled: job.breakEnabled }, req);
-
-  return res.json({ ok: true, breakEnabled: !!job.breakEnabled });
-}
-
-app.post("/jobs/:id/break", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
-app.post("/jobs/:id/break-time", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
-app.post("/jobs/:id/break/toggle", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
-app.post("/jobs/:id/break-enabled", authMiddleware, requireRole("pm", "admin"), handleBreakToggle);
-
-/* ---- existing helpers ---- */
-function ensureEarlyCall(job) {
-  const defaultAmount = Number(db.config?.rates?.earlyCall?.defaultAmount ?? 0);
-  const defaultThreshold = Number(db.config?.rates?.earlyCall?.thresholdHours ?? 0);
-
-  if (!job.earlyCall || typeof job.earlyCall !== "object") {
-    job.earlyCall = {
-      enabled: false,
-      amount: defaultAmount,
-      thresholdHours: defaultThreshold,
-      participants: [],
-    };
-  }
-
-  job.earlyCall.enabled = Boolean(job.earlyCall.enabled);
-  job.earlyCall.amount = Number.isFinite(Number(job.earlyCall.amount))
-    ? Number(job.earlyCall.amount)
-    : defaultAmount;
-  job.earlyCall.thresholdHours = Number.isFinite(Number(job.earlyCall.thresholdHours))
-    ? Number(job.earlyCall.thresholdHours)
-    : defaultThreshold;
-
-  if (!Array.isArray(job.earlyCall.participants)) job.earlyCall.participants = [];
-  job.earlyCall.participants = Array.from(
-    new Set(job.earlyCall.participants.filter((x) => typeof x === "string" && x.trim()))
-  );
-
-  return job.earlyCall;
-}
-
-app.post("/jobs", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const {
-    title,
-    venue,
-    description,
-    startTime,
-    endTime,
-    headcount,
-    transportOptions,
-    rate,
-    earlyCall,
-    loadingUnload,
-    ldu,
-    roleCounts,
-    roleRates,
-    applyDueDate,
-  } = req.body || {};
-  if (!title || !venue || !startTime || !endTime)
-    return res.status(400).json({ error: "missing_fields" });
-
-  const id = "j" + Math.random().toString(36).slice(2, 8);
-  const lduBody = ldu || loadingUnload || {};
-
-  const counts = {
-    junior: Number(roleCounts?.junior ?? 0),
-    senior: Number(roleCounts?.senior ?? 0),
-    lead: Number(roleCounts?.lead ?? 0),
-    junior_emcee: Number(roleCounts?.junior_emcee ?? 0),
-    senior_emcee: Number(roleCounts?.senior_emcee ?? 0),
-  };
-  const countsSum =
-    counts.junior + counts.senior + counts.lead + counts.junior_emcee + counts.senior_emcee;
-
-  const rrDef = db.config.roleRatesDefaults || {};
-  const roleRatesMerged = {};
-  for (const r of STAFF_ROLES) {
-    roleRatesMerged[r] = {
-      payMode: roleRates?.[r]?.payMode ?? rrDef?.[r]?.payMode ?? "hourly",
-      base: Number(roleRates?.[r]?.base ?? rrDef?.[r]?.base ?? 0),
-      specificPayment: roleRates?.[r]?.specificPayment ?? rrDef?.[r]?.specificPayment ?? null,
-      otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? rrDef?.[r]?.otMultiplier ?? 0),
-    };
-  }
-
-  const job = {
-    id,
-    title,
-    venue,
-    description: description || "",
-    startTime,
-    endTime,
-    applyDueDate: normalizeApplyDueDate(applyDueDate),
-    status: "upcoming",
-    headcount: Number(headcount || countsSum || 5),
-    transportOptions: transportOptions || { bus: true, own: true },
-    rate: rate ? { ...db.config.rates, ...rate } : JSON.parse(JSON.stringify(db.config.rates)),
-    roleCounts: counts,
-    roleRates: roleRatesMerged,
-    earlyCall: {
-      enabled: !!earlyCall?.enabled,
-      amount: Number(earlyCall?.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20),
-      thresholdHours: Number(earlyCall?.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3),
-      participants: Array.isArray(earlyCall?.participants) ? earlyCall.participants : [],
-    },
-    breakEnabled: false, // ✅ NEW default
-    loadingUnload: {
-      enabled: Boolean(lduBody.enabled) || Number(lduBody.quota || 0) > 0,
-      quota: Number(lduBody.quota ?? 0),
-      price: Number(lduBody.price ?? db.config.rates.loadingUnloading.amount),
-      applicants: [],
-      participants: [],
-      closed: false,
-    },
-    applications: [],
-    approved: [],
-    rejected: [],
-    attendance: {},
-    events: { startedAt: null, endedAt: null, scanner: null },
-    adjustments: {},
-    fullTimers: [],
-    parkingReceipts: [],
-  };
-
-  ensureLoadingUnload(job);
-  ensureBreakEnabled(job);
-
-  db.jobs.push(job);
-  await saveDB(db);
-  addAudit("create_job", { jobId: id, title }, req);
-
-  try {
-    const recipients = (db.users || [])
-      .filter((u) => u && (u.role === "part-timer" || u.role === "admin"))
-      .map((u) => u.id);
-
-    if (recipients.length) {
-      notifyUsers(recipients, {
-        title: `New job: ${title}`,
-        body: `${venue} — ${dayjs(startTime).format("DD MMM HH:mm")}`,
-        link: `/#/jobs/${id}`,
-        type: "job_new",
-      }).catch(() => {});
-    }
-  } catch {}
-
-  res.json(job);
-});
-
-/* =========================
-   EVERYTHING BELOW THIS LINE
-   is unchanged from your original
-   (your /patch job, apply, blob, receipts, attendance, scan, etc.)
-========================= */
-
-/* ---- edit job ---- */
-app.patch("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const {
-    title,
-    venue,
-    description,
-    startTime,
-    endTime,
-    headcount,
-    rate,
-    transportOptions,
-    earlyCall,
-    loadingUnload,
-    ldu,
-    roleCounts,
-    roleRates,
-    breakEnabled,
-    applyDueDate,
-  } = req.body || {};
-
-  if (title !== undefined) job.title = title;
-  if (venue !== undefined) job.venue = venue;
-  if (description !== undefined) job.description = description;
-  if (startTime !== undefined) job.startTime = startTime;
-  if (endTime !== undefined) job.endTime = endTime;
-  if (applyDueDate !== undefined) job.applyDueDate = normalizeApplyDueDate(applyDueDate);
-  if (headcount !== undefined) job.headcount = Number(headcount);
-  if (transportOptions)
-    job.transportOptions = { bus: !!transportOptions.bus, own: !!transportOptions.own };
-
-  if (rate && typeof rate === "object") {
-    job.rate = { ...job.rate, ...rate };
-  }
-
-  if (typeof breakEnabled === "boolean") {
-    job.breakEnabled = breakEnabled;
-  }
-  ensureBreakEnabled(job);
-
-  if (earlyCall) {
-    const ec = ensureEarlyCall(job);
-    ec.enabled = !!earlyCall.enabled;
-    ec.amount = Number(
-      earlyCall.amount ?? ec.amount ?? db.config.rates.earlyCall?.defaultAmount ?? 20
-    );
-    ec.thresholdHours = Number(
-      earlyCall.thresholdHours ?? ec.thresholdHours ?? db.config.rates.earlyCall?.thresholdHours ?? 3
-    );
-    if (Array.isArray(earlyCall.participants)) {
-      ec.participants = Array.from(new Set(earlyCall.participants.filter(Boolean)));
-    }
-    job.earlyCall = ec;
-  }
-
-  const lduBody = ldu || loadingUnload;
-  if (lduBody) {
-    ensureLoadingUnload(job);
-    if (lduBody.enabled !== undefined) job.loadingUnload.enabled = !!lduBody.enabled;
-    if (lduBody.quota !== undefined) job.loadingUnload.quota = Number(lduBody.quota ?? 0);
-    if (lduBody.price !== undefined)
-      job.loadingUnload.price = Number(lduBody.price ?? db.config.rates.loadingUnloading.amount);
-    if (lduBody.closed === false) job.loadingUnload.closed = false;
-    if (lduBody.closed === true) job.loadingUnload.closed = true;
-    ensureLoadingUnload(job);
-  }
-
-  if (roleCounts && typeof roleCounts === "object") {
-    job.roleCounts = {
-      junior: Number(roleCounts.junior ?? job.roleCounts?.junior ?? 0),
-      senior: Number(roleCounts.senior ?? job.roleCounts?.senior ?? 0),
-      lead: Number(roleCounts.lead ?? job.roleCounts?.lead ?? 0),
-      junior_emcee: Number(roleCounts.junior_emcee ?? job.roleCounts?.junior_emcee ?? 0),
-      senior_emcee: Number(roleCounts.senior_emcee ?? job.roleCounts?.senior_emcee ?? 0),
-    };
-    const sum =
-      job.roleCounts.junior +
-      job.roleCounts.senior +
-      job.roleCounts.lead +
-      job.roleCounts.junior_emcee +
-      job.roleCounts.senior_emcee;
-    if (!headcount) job.headcount = Number(job.headcount || sum || 5);
-  }
-
-  if (roleRates && typeof roleRates === "object") {
-    job.roleRates = job.roleRates || {};
-    for (const r of STAFF_ROLES) {
-      job.roleRates[r] = {
-        payMode: roleRates?.[r]?.payMode ?? job.roleRates?.[r]?.payMode ?? "hourly",
-        base: Number(roleRates?.[r]?.base ?? job.roleRates?.[r]?.base ?? 0),
-        specificPayment:
-          roleRates?.[r]?.specificPayment ?? job.roleRates?.[r]?.specificPayment ?? null,
-        otMultiplier: Number(roleRates?.[r]?.otMultiplier ?? job.roleRates?.[r]?.otMultiplier ?? 0),
-      };
-    }
-  }
-
-  if (req.body && typeof req.body.adjustments === "object") {
-    job.adjustments = normalizeAdjustments(req.body.adjustments, req.user);
-  }
-
-  await saveDB(db);
-  addAudit("edit_job", { jobId: job.id }, req);
-  res.json(job);
-});
-
-/* ---- rest of your original file continues exactly as you pasted ---- */
-/* NOTE: For brevity, I didn't re-paste the entire remainder again here,
-   because it is unchanged and extremely long. If you want, paste back
-   and I will output a single full file with absolutely everything in one block. */
-
-
-app.post("/jobs/:id/adjustments", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const incoming = req.body?.adjustments || {};
-  job.adjustments = normalizeAdjustments(incoming, req.user);
-
-  await saveDB(db);
-  addAudit(
-    "update_adjustments",
-    {
-      jobId: job.id,
-      entries: Object.values(job.adjustments).reduce(
-        (s, a) => s + (Array.isArray(a) ? a.length : 0),
-        0
-      ),
-    },
-    req
-  );
-
-  const hydrated = hydrateJobFullTimers(job);
-  return res.json({ ok: true, job: { ...hydrated, status: computeStatus(hydrated) } });
-});
-
-/* ---- delete job ---- */
-app.delete("/jobs/:id", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const idx = (db.jobs || []).findIndex((j) => j.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "job_not_found" });
-
-  const removed = db.jobs.splice(idx, 1)[0];
-
-  // ✅ cleanup receipt blobs when deleting job
-  try {
-    if (removed && Array.isArray(removed.parkingReceipts)) {
-      for (const r of removed.parkingReceipts) {
-        await deleteStoredImage(r?.photoUrl);
-      }
-    }
-  } catch {}
-
-  await saveDB(db);
-  addAudit("delete_job", { jobId: removed.id }, req);
-  res.json({ ok: true });
-});
-
-/* ---- apply ---- */
-app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  let { transport, wantsLU } = req.body || {};
-  const opts = job.transportOptions || { bus: true, own: true };
-  const bothDisabled = !opts.bus && !opts.own;
-
-  if (!transport || !["ATAG Bus", "Own Transport"].includes(transport)) {
-    transport = "Own Transport";
-  }
-
-  if (!bothDisabled) {
-    if (!["ATAG Bus", "Own Transport"].includes(transport)) {
-      return res.status(400).json({ error: "invalid_transport" });
-    }
-    if (
-      (transport === "ATAG Bus" && !opts.bus) ||
-      (transport === "Own Transport" && !opts.own)
-    ) {
-      return res.status(400).json({ error: "transport_not_allowed" });
-    }
-  }
-
-  job.applications = Array.isArray(job.applications) ? job.applications : [];
-  job.approved = Array.isArray(job.approved) ? job.approved : [];
-  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
-
-  ensureLoadingUnload(job);
-  const luEnabled = !!job.loadingUnload.enabled || Number(job.loadingUnload.quota || 0) > 0;
-
-  let exists = job.applications.find((a) => a.userId === req.user.id);
-  if (exists) {
-    const wasRejected = job.rejected.includes(req.user.id);
-    if (wasRejected) {
-      if ((job.approved?.length || 0) >= Number(job.headcount || 0)) {
-        return res.status(409).json({ error: "job_full_no_reapply" });
-      }
-      exists.transport = transport;
-      exists.appliedAt = dayjs().toISOString();
-      job.rejected = job.rejected.filter((u) => u !== req.user.id);
-      job.approved = job.approved.filter((u) => u !== req.user.id);
-
-      if (wantsLU === true) {
-        if (luEnabled && !job.loadingUnload.closed) {
-          const a = job.loadingUnload.applicants || [];
-          if (!a.includes(req.user.id)) a.push(req.user.id);
-          job.loadingUnload.applicants = a;
-          ensureLoadingUnload(job);
-        }
-      } else if (wantsLU === false && job.loadingUnload?.applicants) {
-        job.loadingUnload.applicants = job.loadingUnload.applicants.filter((u) => u !== req.user.id);
-        ensureLoadingUnload(job);
-      }
-
-      await saveDB(db);
-      exportJobCSV(job);
-      addAudit("reapply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
-
-      try {
-        const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
-        const me = (db.users || []).find((u) => u.id === req.user.id);
-        if (adminIds.length) {
-          notifyUsers(adminIds, {
-            title: `New application: ${job.title}`,
-            body: `${me?.name || req.user.email} applied • ${transport}`,
-            link: `/#/admin/jobs/${job.id}`,
-            type: "app_new",
-          }).catch(() => {});
-        }
-      } catch {}
-
-      return res.json({ ok: true, reapply: true });
-    }
-
-    exists.transport = transport;
-
-    if (wantsLU === true) {
-      if (luEnabled && !job.loadingUnload.closed) {
-        const a = job.loadingUnload.applicants || [];
-        if (!a.includes(req.user.id)) a.push(req.user.id);
-        job.loadingUnload.applicants = a;
-        ensureLoadingUnload(job);
-      }
-      await saveDB(db);
-      exportJobCSV(job);
-
-      try {
-        const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
-        const me = (db.users || []).find((u) => u.id === req.user.id);
-        if (adminIds.length) {
-          notifyUsers(adminIds, {
-            title: `Application update: ${job.title}`,
-            body: `${me?.name || req.user.email} updated application • ${transport}`,
-            link: `/#/admin/jobs/${job.id}`,
-            type: "app_new",
-          }).catch(() => {});
-        }
-      } catch {}
-
-      return res.json({ ok: true, updated: true });
-    }
-
-    if (wantsLU === false && job.loadingUnload?.applicants) {
-      job.loadingUnload.applicants = job.loadingUnload.applicants.filter((u) => u !== req.user.id);
-      ensureLoadingUnload(job);
-      await saveDB(db);
-      exportJobCSV(job);
-
-      try {
-        const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
-        const me = (db.users || []).find((u) => u.id === req.user.id);
-        if (adminIds.length) {
-          notifyUsers(adminIds, {
-            title: `Application update: ${job.title}`,
-            body: `${me?.name || req.user.email} updated application • ${transport}`,
-            link: `/#/admin/jobs/${job.id}`,
-            type: "app_new",
-          }).catch(() => {});
-        }
-      } catch {}
-
-      return res.json({ ok: true, updated: true });
-    }
-
-    return res.json({ message: "already_applied" });
-  }
-
-  job.applications.push({
-    userId: req.user.id,
-    email: req.user.email,
-    transport,
-    appliedAt: dayjs().toISOString(),
+  const result = await withTransaction(async client => {
+    const { rows } = await client.query(`SELECT break_enabled FROM jobs WHERE id=$1 FOR UPDATE`, [req.params.id]);
+    if (!rows[0]) throw new HttpError(404, "job_not_found");
+    const has = typeof body.enabled === "boolean" || typeof body.breakEnabled === "boolean" || typeof body.value === "boolean";
+    const next = has ? !!(body.enabled ?? body.breakEnabled ?? body.value) : !rows[0].break_enabled;
+    await client.query(`UPDATE jobs SET break_enabled=$2,updated_at=now() WHERE id=$1`, [req.params.id, next]);
+    await addAudit(client, "break_toggle", { jobId: req.params.id, breakEnabled: next }, req);
+    return next;
   });
+  res.json({ ok: true, breakEnabled: result });
+}
+for (const p of ["/jobs/:id/break","/jobs/:id/break-time","/jobs/:id/break/toggle","/jobs/:id/break-enabled"]) app.post(p, authMiddleware, requireRole("pm","admin"), asyncHandler(handleBreakToggle));
 
-  if (wantsLU === true) {
-    if (luEnabled && !job.loadingUnload.closed) {
-      const a = job.loadingUnload.applicants || [];
-      if (!a.includes(req.user.id)) a.push(req.user.id);
-      job.loadingUnload.applicants = a;
-      ensureLoadingUnload(job);
+app.post("/jobs", authMiddleware, requireRole("pm","admin"), asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  if (!body.title || !body.venue || !body.startTime || !body.endTime) throw new HttpError(400, "missing_fields");
+  const start = new Date(body.startTime), end = new Date(body.endTime);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) throw new HttpError(400, "invalid_job_time");
+  const deadline = parseApplicationDeadline(body);
+  if (deadline && new Date(deadline) > start) throw new HttpError(400, "deadline_after_job_start");
+  const config = await getAppConfig();
+  const roleCounts = { junior: toNumber(body.roleCounts?.junior), senior: toNumber(body.roleCounts?.senior), lead: toNumber(body.roleCounts?.lead), junior_emcee: toNumber(body.roleCounts?.junior_emcee), senior_emcee: toNumber(body.roleCounts?.senior_emcee) };
+  const countSum = Object.values(roleCounts).reduce((a,b) => a+b, 0);
+  const rr = {};
+  for (const r of STAFF_ROLES) rr[r] = { ...(config.roleRatesDefaults[r] || defaultRoleRates(config.rates)[r]), ...(body.roleRates?.[r] || {}) };
+  const ldu = body.ldu || body.loadingUnload || {};
+  const ec = body.earlyCall || {};
+  const id = randomId("j", 5);
+  const recipients = await withTransaction(async client => {
+    await client.query(
+      `INSERT INTO jobs(id,title,venue,description,start_time,end_time,application_deadline,status,headcount,transport_options,rate,role_counts,role_rates,session,break_enabled,extra,created_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,'upcoming',$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      [id, String(body.title), String(body.venue), String(body.description || ""), start, end, deadline, toNumber(body.headcount, countSum || 5), normalizeTransportOptions(body.transportOptions), body.rate ? { ...config.rates, ...body.rate } : config.rates, roleCounts, rr, body.session || {}, !!body.breakEnabled, extraFromPayload(body), req.user.id]
+    );
+    await client.query(`INSERT INTO job_loading_config(job_id,enabled,quota,price,closed) VALUES($1,$2,$3,$4,$5)`, [id, !!ldu.enabled || toNumber(ldu.quota) > 0, Math.max(0,toNumber(ldu.quota)), toNumber(ldu.price, config.rates.loadingUnloading.amount), !!ldu.closed]);
+    await client.query(`INSERT INTO job_early_call_config(job_id,enabled,amount,threshold_hours) VALUES($1,$2,$3,$4)`, [id, !!ec.enabled, toNumber(ec.amount, config.rates.earlyCall.defaultAmount), toNumber(ec.thresholdHours, config.rates.earlyCall.thresholdHours)]);
+    await client.query(`INSERT INTO job_events(job_id) VALUES($1)`, [id]);
+    await addAudit(client, "create_job", { jobId: id, title: body.title }, req);
+    const { rows } = await client.query(`SELECT id FROM users WHERE role IN ('part-timer','admin')`);
+    const ids = rows.map(r => r.id);
+    await insertNotifications(client, ids, { title: `New job: ${body.title}`, body: `${body.venue} — ${new Intl.DateTimeFormat("en-MY", { timeZone: BUSINESS_TIME_ZONE, day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" }).format(start)}`, link: `/#/jobs/${id}`, type: "job_new", eventKeyBase: `job_new:${id}` });
+    return ids;
+  });
+  notifyAfterCommit(recipients, { title: `New job: ${body.title}`, body: String(body.venue), link: `/#/jobs/${id}` });
+  res.json(await getJobFull(id));
+}));
+
+app.patch("/jobs/:id", authMiddleware, requireRole("pm","admin"), asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  await withTransaction(async client => {
+    const { rows } = await client.query(`SELECT * FROM jobs WHERE id=$1 FOR UPDATE`, [req.params.id]);
+    const row = rows[0]; if (!row) throw new HttpError(404, "job_not_found");
+    const nextStart = body.startTime !== undefined ? new Date(body.startTime) : new Date(row.start_time);
+    const nextEnd = body.endTime !== undefined ? new Date(body.endTime) : new Date(row.end_time);
+    if (Number.isNaN(nextStart.getTime()) || Number.isNaN(nextEnd.getTime()) || nextEnd < nextStart) throw new HttpError(400, "invalid_job_time");
+    const deadline = body.applicationDeadline !== undefined || body.applyDueDate !== undefined ? parseApplicationDeadline(body) : (row.application_deadline ? new Date(row.application_deadline).toISOString() : null);
+    if (deadline && new Date(deadline) > nextStart) throw new HttpError(400, "deadline_after_job_start");
+    const transport = body.transportOptions !== undefined ? normalizeTransportOptions(body.transportOptions) : row.transport_options;
+    const extra = { ...(row.extra || {}), ...extraFromPayload(body) };
+    await client.query(
+      `UPDATE jobs SET title=COALESCE($2,title),venue=COALESCE($3,venue),description=COALESCE($4,description),start_time=$5,end_time=$6,application_deadline=$7,
+       headcount=COALESCE($8,headcount),transport_options=$9,rate=COALESCE($10,rate),role_counts=COALESCE($11,role_counts),role_rates=COALESCE($12,role_rates),session=COALESCE($13,session),
+       break_enabled=COALESCE($14,break_enabled),extra=$15,updated_at=now() WHERE id=$1`,
+      [req.params.id, body.title !== undefined ? String(body.title) : null, body.venue !== undefined ? String(body.venue) : null, body.description !== undefined ? String(body.description || "") : null, nextStart, nextEnd, deadline, body.headcount !== undefined ? Math.max(0,toNumber(body.headcount)) : null, transport, body.rate !== undefined ? body.rate : null, body.roleCounts !== undefined ? body.roleCounts : null, body.roleRates !== undefined ? body.roleRates : null, body.session !== undefined ? body.session : null, body.breakEnabled !== undefined ? !!body.breakEnabled : null, extra]
+    );
+    const ldu = body.ldu || body.loadingUnload;
+    if (ldu) await client.query(`UPDATE job_loading_config SET enabled=COALESCE($2,enabled),quota=COALESCE($3,quota),price=COALESCE($4,price),closed=COALESCE($5,closed),updated_at=now() WHERE job_id=$1`, [req.params.id, ldu.enabled !== undefined ? !!ldu.enabled : null, ldu.quota !== undefined ? Math.max(0,toNumber(ldu.quota)) : null, ldu.price !== undefined ? toNumber(ldu.price) : null, ldu.closed !== undefined ? !!ldu.closed : null]);
+    if (body.earlyCall) await client.query(`UPDATE job_early_call_config SET enabled=COALESCE($2,enabled),amount=COALESCE($3,amount),threshold_hours=COALESCE($4,threshold_hours),updated_at=now() WHERE job_id=$1`, [req.params.id, body.earlyCall.enabled !== undefined ? !!body.earlyCall.enabled : null, body.earlyCall.amount !== undefined ? toNumber(body.earlyCall.amount) : null, body.earlyCall.thresholdHours !== undefined ? toNumber(body.earlyCall.thresholdHours) : null]);
+    if (body.adjustments && typeof body.adjustments === "object") await replaceAdjustments(client, req.params.id, normalizeAdjustments(body.adjustments, req.user), req.user);
+    await addAudit(client, "edit_job", { jobId: req.params.id }, req);
+  });
+  res.json(await getJobFull(req.params.id));
+}));
+
+app.post("/jobs/:id/adjustments", authMiddleware, requireRole("pm","admin"), asyncHandler(async (req, res) => {
+  const adjustments = normalizeAdjustments(req.body?.adjustments || {}, req.user);
+  await withTransaction(async client => {
+    const exists = await client.query(`SELECT 1 FROM jobs WHERE id=$1`, [req.params.id]); if (!exists.rowCount) throw new HttpError(404, "job_not_found");
+    await replaceAdjustments(client, req.params.id, adjustments, req.user);
+    await addAudit(client, "update_adjustments", { jobId: req.params.id, entries: Object.values(adjustments).reduce((s,a)=>s+a.length,0) }, req);
+  });
+  res.json({ ok: true, job: await getJobFull(req.params.id) });
+}));
+
+app.delete("/jobs/:id", authMiddleware, requireRole("pm","admin"), asyncHandler(async (req, res) => {
+  let paths = [], removed;
+  await withTransaction(async client => {
+    const { rows } = await client.query(`SELECT id,title FROM jobs WHERE id=$1 FOR UPDATE`, [req.params.id]); if (!rows[0]) throw new HttpError(404, "job_not_found");
+    const pr = await client.query(`SELECT storage_path FROM parking_receipts WHERE job_id=$1`, [req.params.id]); paths = pr.rows.map(r=>r.storage_path);
+    await client.query(`DELETE FROM jobs WHERE id=$1`, [req.params.id]);
+    await addAudit(client, "delete_job", { jobId: req.params.id }, req); removed = rows[0];
+  });
+  await Promise.allSettled(paths.map(removeStoredFile));
+  res.json({ ok: true, removed });
+}));
+
+app.post("/jobs/:id/apply", authMiddleware, requireRole("part-timer"), asyncHandler(async (req, res) => {
+  let admins = [], notif = null;
+  const result = await withTransaction(async client => {
+    const { rows } = await client.query(`SELECT * FROM jobs WHERE id=$1 FOR SHARE`, [req.params.id]); const job = rows[0];
+    if (!job) throw new HttpError(404, "job_not_found");
+    if (isApplicationClosed(job.application_deadline)) throw new HttpError(409, "application_closed", "Application deadline has passed.");
+    let transport = req.body?.transport;
+    const opts = normalizeTransportOptions(job.transport_options);
+    if (!transport || !["ATAG Bus","Own Transport"].includes(transport)) transport = "Own Transport";
+    if ((transport === "ATAG Bus" && !opts.bus) || (transport === "Own Transport" && !opts.own)) {
+      if (opts.bus || opts.own) throw new HttpError(400, "transport_not_allowed");
     }
-  }
-
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit("apply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
-
-  try {
-    const adminIds = (db.users || []).filter((u) => u && u.role === "admin").map((u) => u.id);
-    const me = (db.users || []).find((u) => u.id === req.user.id);
-    if (adminIds.length) {
-      notifyUsers(adminIds, {
-        title: `New application: ${job.title}`,
-        body: `${me?.name || req.user.email} applied • ${transport}`,
-        link: `/#/admin/jobs/${job.id}`,
-        type: "app_new",
-      }).catch(() => {});
+    const wantsLU = req.body?.wantsLU;
+    const existingR = await client.query(`SELECT * FROM job_applications WHERE job_id=$1 AND user_id=$2 FOR UPDATE`, [job.id, req.user.id]);
+    const existing = existingR.rows[0];
+    if (existing?.status === "rejected") {
+      const countR = await client.query(`SELECT count(*)::int n FROM job_applications WHERE job_id=$1 AND status='approved'`, [job.id]);
+      if (Number(job.headcount || 0) > 0 && countR.rows[0].n >= Number(job.headcount)) throw new HttpError(409, "job_full_no_reapply");
     }
-  } catch {}
-
-  res.json({ ok: true });
-});
-
-/* ---- Blob serving ---- */
-app.get("/blob/:id", (req, res) => {
-  const id = String(req.params.id || "").trim();
-  const item = db.blobs?.[id];
-  if (!item) return res.status(404).send("Not Found");
-
-  const buf = Buffer.from(item.b64, "base64");
-  res.setHeader("Content-Type", item.mime || "image/jpeg");
-  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  return res.end(buf);
-});
-
-/* ---- Parking receipt APIs ---- */
-app.post(
-  "/jobs/:id/parking-receipt",
-  authMiddleware,
-  requireRole("part-timer", "pm", "admin"),
-  async (req, res) => {
-    const job = (db.jobs || []).find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const uid = req.user.id;
-    const isApproved = Array.isArray(job.approved) && job.approved.includes(uid);
-    const isPMorAdmin = req.user.role === "pm" || req.user.role === "admin";
-    if (!isPMorAdmin && !isApproved) return res.status(403).json({ error: "not_approved" });
-
-    const dataUrl =
-      req.body?.dataUrl ||
-      req.body?.receiptDataUrl ||
-      req.body?.imageDataUrl ||
-      req.body?.parkingReceiptDataUrl;
-
-    if (!dataUrl || typeof dataUrl !== "string") {
-      return res.status(400).json({ error: "dataUrl_required" });
+    const now = new Date();
+    if (!existing) {
+      await client.query(`INSERT INTO job_applications(job_id,user_id,email_snapshot,transport,status,wants_loading,applied_at,updated_at) VALUES($1,$2,$3,$4,'applied',$5,$6,$6)`, [job.id, req.user.id, req.user.email || "", transport, wantsLU === true, now]);
+    } else if (existing.status === "rejected") {
+      await client.query(`UPDATE job_applications SET transport=$3,status='applied',wants_loading=CASE WHEN $4::boolean IS NULL THEN wants_loading ELSE $4 END,applied_at=$5,updated_at=$5 WHERE job_id=$1 AND user_id=$2`, [job.id, req.user.id, transport, typeof wantsLU === "boolean" ? wantsLU : null, now]);
+    } else {
+      if (existing.transport === transport && typeof wantsLU !== "boolean") return { message: "already_applied", changed: false };
+      await client.query(`UPDATE job_applications SET transport=$3,wants_loading=CASE WHEN $4::boolean IS NULL THEN wants_loading ELSE $4 END,updated_at=now() WHERE job_id=$1 AND user_id=$2`, [job.id, req.user.id, transport, typeof wantsLU === "boolean" ? wantsLU : null]);
     }
-
-    const amount = req.body?.amount;
-    const note = req.body?.note ?? req.body?.remark ?? "";
-
-    let photoUrl = "";
-    try {
-      photoUrl = await saveDataUrlBlob(dataUrl, {
-        kind: "parking-receipt",
-        ownerUserId: uid,
-        jobId: job.id,
-      });
-    } catch (e) {
-      return res.status(400).json({ error: e?.message || "invalid_receipt_image" });
+    if (typeof wantsLU === "boolean") {
+      await client.query(`INSERT INTO job_loading_members(job_id,user_id,applied,present) VALUES($1,$2,$3,false) ON CONFLICT(job_id,user_id) DO UPDATE SET applied=EXCLUDED.applied,updated_at=now()`, [job.id, req.user.id, wantsLU]);
     }
-
-    job.parkingReceipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-
-    const receipt = {
-      id: "pr" + Math.random().toString(36).slice(2, 10),
-      jobId: job.id,
-      userId: uid,
-      email: req.user.email,
-      amount: amount == null || amount === "" ? null : Number(amount),
-      note: String(note || ""),
-      photoUrl,
-      createdAt: dayjs().toISOString(),
-      status: "SUBMITTED",
-    };
-
-    job.parkingReceipts.unshift(receipt);
-    await saveDB(db);
-
-    addAudit("parking_receipt_submit", { jobId: job.id, userId: uid, receiptId: receipt.id }, req);
-
-    const enriched = enrichReceipt(req, receipt);
-
-    return res.json({
-      ok: true,
-      receipt: enriched,
-      photoUrl: receipt.photoUrl,
-      photoUrlAbs: enriched.photoUrlAbs,
-    });
-  }
-);
-
-app.get(
-  "/jobs/:id/parking-receipts",
-  authMiddleware,
-  requireRole("pm", "admin"),
-  async (req, res) => {
-    const job = (db.jobs || []).find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-    const enriched = receipts.map((r) => enrichReceipt(req, r));
-
-    return res.json({ ok: true, receipts: enriched });
-  }
-);
-
-app.get(
-  "/jobs/:id/parking-receipt/me",
-  authMiddleware,
-  requireRole("part-timer", "pm", "admin"),
-  async (req, res) => {
-    const job = (db.jobs || []).find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const uid = req.user.id;
-    const receipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-    const mine = receipts.filter((r) => r.userId === uid).map((r) => enrichReceipt(req, r));
-
-    return res.json({
-      ok: true,
-      receipt: mine[0] || null,
-      receipts: mine,
-    });
-  }
-);
-
-// ✅ FIXED: remove mine also deletes blob entries (prevents DB bloat + lag)
-app.post(
-  "/jobs/:id/parking-receipt/me/remove",
-  authMiddleware,
-  requireRole("part-timer", "pm", "admin"),
-  async (req, res) => {
-    const job = (db.jobs || []).find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const uid = req.user.id;
-    job.parkingReceipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-
-    const mineIdxs = [];
-    for (let i = 0; i < job.parkingReceipts.length; i++) {
-      if (job.parkingReceipts[i]?.userId === uid) mineIdxs.push(i);
-    }
-    if (!mineIdxs.length) return res.json({ ok: true, removed: 0 });
-
-    const toDelete = mineIdxs.map((i) => job.parkingReceipts[i]).filter(Boolean);
-
-    for (const i of mineIdxs.slice().reverse()) {
-      job.parkingReceipts.splice(i, 1);
-    }
-
-    // delete blobs + legacy files best-effort
-    for (const r of toDelete) {
-      await deleteStoredImage(r.photoUrl);
-      const abs = absPathFromReceiptUrl(r.photoUrl);
-      try {
-        if (abs && fs.existsSync(abs)) fs.unlinkSync(abs);
-      } catch {}
-    }
-
-    await saveDB(db);
-    addAudit("parking_receipt_me_remove", { jobId: job.id, userId: uid, removed: toDelete.length }, req);
-
-    return res.json({ ok: true, removed: toDelete.length });
-  }
-);
-
-app.post(
-  "/jobs/:id/parking-receipt/:rid/delete",
-  authMiddleware,
-  requireRole("part-timer", "pm", "admin"),
-  async (req, res) => {
-    const job = (db.jobs || []).find((j) => j.id === req.params.id);
-    if (!job) return res.status(404).json({ error: "job_not_found" });
-
-    const rid = req.params.rid;
-    job.parkingReceipts = Array.isArray(job.parkingReceipts) ? job.parkingReceipts : [];
-
-    const idx = job.parkingReceipts.findIndex((r) => r && r.id === rid);
-    if (idx === -1) return res.status(404).json({ error: "receipt_not_found" });
-
-    const receipt = job.parkingReceipts[idx];
-    const isPMorAdmin = req.user.role === "pm" || req.user.role === "admin";
-    if (!isPMorAdmin && receipt.userId !== req.user.id) {
-      return res.status(403).json({ error: "forbidden" });
-    }
-
-    job.parkingReceipts.splice(idx, 1);
-    await deleteStoredImage(receipt.photoUrl);
-
-    const abs = absPathFromReceiptUrl(receipt.photoUrl);
-    try {
-      if (abs && fs.existsSync(abs)) fs.unlinkSync(abs);
-    } catch {}
-
-    await saveDB(db);
-    addAudit("parking_receipt_delete", { jobId: job.id, userId: req.user.id, receiptId: rid }, req);
-
-    return res.json({ ok: true });
-  }
-);
-
-/* ---- part-timer "my jobs" ---- */
-app.get("/me/jobs", authMiddleware, requireRole("part-timer"), (req, res) => {
-  const result = [];
-  for (const j of db.jobs || []) {
-    j.applications = Array.isArray(j.applications) ? j.applications : [];
-    j.approved = Array.isArray(j.approved) ? j.approved : [];
-    j.rejected = Array.isArray(j.rejected) ? j.rejected : [];
-
-    const applied = j.applications.find((a) => a.userId === req.user.id);
-    if (applied) {
-      ensureLoadingUnload(j);
-      const state = j.approved.includes(req.user.id)
-        ? "approved"
-        : j.rejected.includes(req.user.id)
-        ? "rejected"
-        : "applied";
-      const luApplied = !!(j.loadingUnload?.applicants || []).includes(req.user.id);
-      const luConfirmed = !!(j.loadingUnload?.participants || []).includes(req.user.id);
-      result.push({
-        id: j.id,
-        title: j.title,
-        venue: j.venue,
-        startTime: j.startTime,
-        endTime: j.endTime,
-        status: computeStatus(j),
-        myStatus: state,
-        luApplied,
-        luConfirmed,
-      });
-    }
-  }
-  result.sort((a, b) => dayjs(a.startTime).valueOf() - dayjs(b.startTime).valueOf());
+    await addAudit(client, existing?.status === "rejected" ? "reapply" : existing ? "apply_update" : "apply", { jobId: job.id, userId: req.user.id, transport, wantsLU: !!wantsLU }, req);
+    admins = await listAdminIds(client);
+    const me = await getUserById(req.user.id, client);
+    notif = { title: existing ? `Application update: ${job.title}` : `New application: ${job.title}`, body: `${me?.name || req.user.email} ${existing ? "updated application" : "applied"} • ${transport}`, link: `/#/admin/jobs/${job.id}`, type: "app_new" };
+    await insertNotifications(client, admins, { ...notif, eventKeyBase: `app_event:${job.id}:${req.user.id}:${now.getTime()}` });
+    return { ok: true, ...(existing?.status === "rejected" ? { reapply: true } : existing ? { updated: true } : {}) };
+  });
+  if (result.changed === false) return res.json({ message: "already_applied" });
+  if (admins.length) notifyAfterCommit(admins, notif);
   res.json(result);
-});
+}));
 
-/* ---- PM: applicants list + approve ---- */
-app.get("/jobs/:id/applicants", authMiddleware, requireRole("pm", "admin"), (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  job.applications = Array.isArray(job.applications) ? job.applications : [];
-  job.approved = Array.isArray(job.approved) ? job.approved : [];
-  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
-
-  ensureLoadingUnload(job);
-
-  const list = job.applications.map((a) => {
-    let state = "applied";
-    if (job.approved.includes(a.userId)) state = "approved";
-    if (job.rejected.includes(a.userId)) state = "rejected";
-    const luApplied = !!(job.loadingUnload?.applicants || []).includes(a.userId);
-    const luConfirmed = !!(job.loadingUnload?.participants || []).includes(a.userId);
-    const u = (db.users || []).find((x) => x.id === a.userId);
-    return {
-      ...a,
-      status: state,
-      userId: a.userId,
-      luApplied,
-      luConfirmed,
-      name: u?.name || "",
-      phone: u?.phone || "",
-      discord: u?.discord || "",
-      avatarUrl: u?.avatarUrl || "",
-    };
-  });
-  res.json(list);
-});
-
-app.post("/jobs/:id/approve", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const { userId, approve } = req.body || {};
-  if (!userId || typeof approve !== "boolean") return res.status(400).json({ error: "bad_request" });
-
-  job.applications = Array.isArray(job.applications) ? job.applications : [];
-  job.approved = Array.isArray(job.approved) ? job.approved : [];
-  job.rejected = Array.isArray(job.rejected) ? job.rejected : [];
-
-  if (approve) {
-    const otherApprovedCount = job.approved.filter((u) => u !== userId).length;
-    if (otherApprovedCount >= Number(job.headcount || 0)) {
-      return res.status(409).json({ error: "job_full" });
-    }
-  }
-
-  const applied = job.applications.find((a) => a.userId === userId);
-  if (!applied) return res.status(400).json({ error: "user_not_applied" });
-
-  job.approved = job.approved.filter((u) => u !== userId);
-  job.rejected = job.rejected.filter((u) => u !== userId);
-
-  ensureLoadingUnload(job);
-
-  if (approve) {
-    job.approved.push(userId);
-
-    const wantsLU = (job.loadingUnload.applicants || []).includes(userId);
-    const partsSet = new Set(job.loadingUnload.participants || []);
-    const quota = Number(job.loadingUnload.quota || 0);
-
-    if (wantsLU && !job.loadingUnload.closed) {
-      if (quota <= 0 || partsSet.size < quota) {
-        partsSet.add(userId);
-        job.loadingUnload.participants = Array.from(partsSet);
-      }
-      ensureLoadingUnload(job);
-    }
-  } else {
-    job.rejected.push(userId);
-  }
-
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit(approve ? "approve" : "reject", { jobId: job.id, userId }, req);
-
+// ---------- Parking receipts / storage ----------
+app.post("/jobs/:id/parking-receipt", authMiddleware, requireRole("part-timer","pm","admin"), asyncHandler(async (req, res) => {
+  const full = await getJobFull(req.params.id); if (!full) throw new HttpError(404, "job_not_found");
+  const isManager = req.user.role === "pm" || req.user.role === "admin";
+  if (!isManager && !(full.approved || []).includes(req.user.id)) throw new HttpError(403, "not_approved");
+  const dataUrl = req.body?.dataUrl || req.body?.receiptDataUrl || req.body?.imageDataUrl || req.body?.parkingReceiptDataUrl;
+  if (!dataUrl) throw new HttpError(400, "dataUrl_required");
+  const uploaded = await uploadImageDataUrl(dataUrl, { kind: "parking-receipt", ownerUserId: req.user.id, jobId: full.id });
+  const rid = randomId("pr", 7);
   try {
-    if (approve) {
-      notifyUsers([userId], {
-        title: "Your application was approved ✅",
-        body: job.title,
-        link: `/#/jobs/${job.id}`,
-        type: "app_approved",
-      }).catch(() => {});
-    }
-  } catch {}
-
-  res.json({ ok: true });
-});
-
-/* ---- Early Call (per-person toggles) ---- */
-app.get("/jobs/:id/earlycall", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const ec = ensureEarlyCall(job);
-  const participantDetails = ec.participants
-    .map((uid) => {
-      const u = (db.users || []).find((x) => x.id === uid);
-      if (!u) return null;
-      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
-    })
-    .filter(Boolean);
-
-  return res.json({ ...ec, participantDetails });
-});
-
-app.post("/jobs/:id/earlycall/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const { userId } = req.body || {};
-  const present =
-    typeof req.body?.present === "boolean"
-      ? req.body.present
-      : typeof req.body?.enabled === "boolean"
-      ? req.body.enabled
-      : undefined;
-
-  if (!userId || typeof userId !== "string") return res.status(400).json({ error: "userId_required" });
-  if (typeof present !== "boolean") return res.status(400).json({ error: "present_boolean_required" });
-
-  const ec = ensureEarlyCall(job);
-  const set = new Set(ec.participants);
-
-  if (present) set.add(userId);
-  else set.delete(userId);
-
-  ec.participants = Array.from(set);
-
-  await saveDB(db);
-
-  const participantDetails = ec.participants
-    .map((uid) => {
-      const u = (db.users || []).find((x) => x.id === uid);
-      if (!u) return null;
-      return { userId: u.id, email: u.email, name: u.name || "", phone: u.phone || "", discord: u.discord || "" };
-    })
-    .filter(Boolean);
-
-  return res.json({ ok: true, participants: ec.participants, participantDetails });
-});
-
-app.post("/jobs/:id/earlycall/config", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const ec = ensureEarlyCall(job);
-  const { enabled, amount, thresholdHours } = req.body || {};
-
-  if (typeof enabled === "boolean") ec.enabled = enabled;
-  if (amount !== undefined) {
-    const n = Number(amount);
-    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: "amount_must_be_non_negative_number" });
-    ec.amount = n;
-  }
-  if (thresholdHours !== undefined) {
-    const n = Number(thresholdHours);
-    if (!Number.isFinite(n) || n < 0)
-      return res.status(400).json({ error: "thresholdHours_must_be_non_negative_number" });
-    ec.thresholdHours = n;
-  }
-
-  await saveDB(db);
-  return res.json({ ok: true, earlyCall: ec });
-});
-
-// aliases
-app.get("/jobs/:id/early-call", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  req.url = `/jobs/${req.params.id}/earlycall`;
-  app._router.handle(req, res);
-});
-app.post("/jobs/:id/early-call/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  req.url = `/jobs/${req.params.id}/earlycall/mark`;
-  app._router.handle(req, res);
-});
-
-/* ---- Loading & Unloading (per-person toggles) ---- */
-app.get("/jobs/:id/loading", authMiddleware, requireRole("pm", "admin"), (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const l = ensureLoadingUnload(job);
-
-  const details = (ids) =>
-    ids.map((uid) => {
-      const u = (db.users || []).find((x) => x.id === uid) || { email: "unknown", id: uid };
-      return { userId: uid, email: u.email, name: u.name || "" };
+    await withTransaction(async client => {
+      await client.query(`INSERT INTO parking_receipts(id,job_id,user_id,email_snapshot,amount,note,storage_path,status) VALUES($1,$2,$3,$4,$5,$6,$7,'SUBMITTED')`, [rid, full.id, req.user.id, req.user.email || "", req.body?.amount === "" || req.body?.amount == null ? null : toNumber(req.body.amount), String(req.body?.note ?? req.body?.remark ?? ""), uploaded.ref]);
+      await addAudit(client, "parking_receipt_submit", { jobId: full.id, userId: req.user.id, receiptId: rid }, req);
     });
+  } catch (e) { await removeStoredFile(uploaded.ref).catch(()=>{}); throw e; }
+  const user = await getUserById(req.user.id);
+  const receipt = { id: rid, jobId: full.id, userId: req.user.id, email: req.user.email, amount: req.body?.amount === "" || req.body?.amount == null ? null : toNumber(req.body.amount), note: String(req.body?.note ?? req.body?.remark ?? ""), photoUrl: fileApiPath(uploaded.ref), photoUrlAbs: await createSignedUrl(uploaded.ref, 300), createdAt: new Date().toISOString(), status: "SUBMITTED", name: user?.name || "", phone: user?.phone || "", discord: user?.discord || "" };
+  res.json({ ok: true, receipt, photoUrl: receipt.photoUrl, photoUrlAbs: receipt.photoUrlAbs });
+}));
 
-  res.json({
-    enabled: !!l.enabled,
-    price: Number(l.price || 0),
-    quota: Number(l.quota || 0),
-    closed: !!l.closed,
-    applicants: details(l.applicants || []),
-    participants: details(l.participants || []),
-  });
-});
+async function receiptRows(jobId, userId = null) {
+  const params = [jobId];
+  let where = `p.job_id=$1`;
+  if (userId) { params.push(userId); where += ` AND p.user_id=$2`; }
+  const { rows } = await pool.query(`SELECT p.*,u.name,u.phone,u.discord FROM parking_receipts p LEFT JOIN users u ON u.id=p.user_id WHERE ${where} ORDER BY p.created_at DESC`, params);
+  return Promise.all(rows.map(async r => ({ id:r.id,jobId:r.job_id,userId:r.user_id,email:r.email_snapshot,amount:r.amount==null?null:Number(r.amount),note:r.note||"",photoUrl:fileApiPath(r.storage_path),photoUrlAbs:await createSignedUrl(r.storage_path,300),createdAt:iso(r.created_at),status:r.status||"SUBMITTED",name:r.name||"",phone:r.phone||"",discord:r.discord||"" })));
+}
+app.get("/jobs/:id/parking-receipts", authMiddleware, requireRole("pm","admin"), asyncHandler(async (req,res)=>{
+  const exists = await pool.query(`SELECT 1 FROM jobs WHERE id=$1`,[req.params.id]); if(!exists.rowCount) throw new HttpError(404,"job_not_found");
+  res.json({ok:true,receipts:await receiptRows(req.params.id)});
+}));
+app.get("/jobs/:id/parking-receipt/me", authMiddleware, requireRole("part-timer","pm","admin"), asyncHandler(async (req,res)=>{
+  const exists = await pool.query(`SELECT 1 FROM jobs WHERE id=$1`,[req.params.id]); if(!exists.rowCount) throw new HttpError(404,"job_not_found");
+  const receipts=await receiptRows(req.params.id,req.user.id); res.json({ok:true,receipt:receipts[0]||null,receipts});
+}));
+app.post("/jobs/:id/parking-receipt/me/remove", authMiddleware, requireRole("part-timer","pm","admin"), asyncHandler(async (req,res)=>{
+  let paths=[]; await withTransaction(async client=>{const r=await client.query(`DELETE FROM parking_receipts WHERE job_id=$1 AND user_id=$2 RETURNING storage_path`,[req.params.id,req.user.id]);paths=r.rows.map(x=>x.storage_path);await addAudit(client,"parking_receipt_me_remove",{jobId:req.params.id,userId:req.user.id,removed:paths.length},req);});
+  await Promise.allSettled(paths.map(removeStoredFile)); res.json({ok:true,removed:paths.length});
+}));
+app.post("/jobs/:id/parking-receipt/:rid/delete", authMiddleware, requireRole("part-timer","pm","admin"), asyncHandler(async (req,res)=>{
+  let pathRef; await withTransaction(async client=>{const r=await client.query(`SELECT * FROM parking_receipts WHERE id=$1 AND job_id=$2 FOR UPDATE`,[req.params.rid,req.params.id]);const x=r.rows[0];if(!x)throw new HttpError(404,"receipt_not_found");if(!["pm","admin"].includes(req.user.role)&&x.user_id!==req.user.id)throw new HttpError(403,"forbidden");pathRef=x.storage_path;await client.query(`DELETE FROM parking_receipts WHERE id=$1`,[x.id]);await addAudit(client,"parking_receipt_delete",{jobId:req.params.id,userId:req.user.id,receiptId:x.id},req);});
+  if(pathRef)removeStoredFile(pathRef).catch(()=>{});res.json({ok:true});
+}));
 
-app.post("/jobs/:id/loading/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const { userId } = req.body || {};
-  const present =
-    typeof req.body?.present === "boolean"
-      ? req.body.present
-      : typeof req.body?.enabled === "boolean"
-      ? req.body.enabled
-      : undefined;
-
-  if (!userId || typeof present !== "boolean") {
-    return res.status(400).json({ error: "bad_request" });
+app.get("/files/:bucket/*", optionalAuthMiddleware, asyncHandler(async (req,res)=>{
+  const bucket=decodeURIComponent(req.params.bucket);const objectPath=String(req.params[0]||"").split("/").map(decodeURIComponent).join("/");const ref=makeStorageRef(bucket,objectPath);
+  if(bucket!=="avatars"){
+    if(!req.user)throw new HttpError(401,"no_token");
+    if(bucket==="verification-photos"){
+      const r=await pool.query(`SELECT id FROM users WHERE verification_photo_path=$1`,[ref]);if(!r.rowCount)throw new HttpError(404,"file_not_found");if(req.user.role!=="admin"&&r.rows[0].id!==req.user.id)throw new HttpError(403,"forbidden");
+    }else if(bucket==="parking-receipts"){
+      const r=await pool.query(`SELECT user_id FROM parking_receipts WHERE storage_path=$1`,[ref]);if(!r.rowCount)throw new HttpError(404,"file_not_found");if(!["pm","admin"].includes(req.user.role)&&r.rows[0].user_id!==req.user.id)throw new HttpError(403,"forbidden");
+    }else throw new HttpError(404,"file_not_found");
   }
+  const f=await downloadStoredFile(ref);res.setHeader("Content-Type",f.contentType);res.setHeader("Cache-Control",bucket==="avatars"?"public, max-age=3600":"private, no-store");res.end(f.buffer);
+}));
 
-  ensureLoadingUnload(job);
 
-  const quota = Number(job.loadingUnload.quota || 0);
-  const p = new Set(job.loadingUnload.participants || []);
-  const alreadyIn = p.has(userId);
+// ---------- My jobs / applicants ----------
+app.get("/me/jobs", authMiddleware, requireRole("part-timer"), asyncHandler(async (req,res)=>{
+  const { rows }=await pool.query(`SELECT j.id,j.title,j.venue,j.start_time,j.end_time,j.status,a.status AS my_status,a.wants_loading,COALESCE(lm.present,false) AS lu_confirmed,e.started_at,e.ended_at FROM job_applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_loading_members lm ON lm.job_id=a.job_id AND lm.user_id=a.user_id LEFT JOIN job_events e ON e.job_id=j.id WHERE a.user_id=$1 ORDER BY j.start_time`,[req.user.id]);
+  res.json(rows.map(r=>{const tmp={startTime:iso(r.start_time),endTime:iso(r.end_time),status:r.status,events:{startedAt:iso(r.started_at),endedAt:iso(r.ended_at)}};return{id:r.id,title:r.title,venue:r.venue,startTime:tmp.startTime,endTime:tmp.endTime,status:computeStatus(tmp),myStatus:r.my_status,luApplied:!!r.wants_loading,luConfirmed:!!r.lu_confirmed};}));
+}));
 
-  if (quota <= 0) job.loadingUnload.closed = false;
+app.get("/jobs/:id/applicants", authMiddleware, requireRole("pm","admin"), asyncHandler(async (req,res)=>{
+  const { rows }=await pool.query(`SELECT a.*,u.name,u.phone,u.discord,u.avatar_path,COALESCE(lm.applied,false) lu_applied,COALESCE(lm.present,false) lu_confirmed FROM job_applications a JOIN users u ON u.id=a.user_id LEFT JOIN job_loading_members lm ON lm.job_id=a.job_id AND lm.user_id=a.user_id WHERE a.job_id=$1 ORDER BY a.applied_at`,[req.params.id]);
+  const exists=await pool.query(`SELECT 1 FROM jobs WHERE id=$1`,[req.params.id]);if(!exists.rowCount)throw new HttpError(404,"job_not_found");
+  res.json(rows.map(a=>({userId:a.user_id,email:a.email_snapshot||a.email,transport:a.transport,appliedAt:iso(a.applied_at),status:a.status,luApplied:!!a.lu_applied,luConfirmed:!!a.lu_confirmed,name:a.name||"",phone:a.phone||"",discord:a.discord||"",avatarUrl:a.avatar_path?fileApiPath(a.avatar_path):""})));
+}));
 
-  if (present) {
-    if (!alreadyIn && quota > 0 && p.size >= quota) {
-      return res.status(409).json({ error: "lu_quota_full", quota, count: p.size });
+app.post("/jobs/:id/approve", authMiddleware, requireRole("pm","admin"), asyncHandler(async (req,res)=>{
+  const { userId, approve }=req.body||{};if(!userId||typeof approve!=="boolean")throw new HttpError(400,"bad_request");
+  const idemKey=String(req.headers["idempotency-key"]||"").trim();if(idemKey.length>200)throw new HttpError(400,"idempotency_key_too_long");
+  const routeKey=`POST /jobs/${req.params.id}/approve`;const requestHash=stableRequestHash({jobId:req.params.id,userId,approve});
+  let pushIds=[];let pushPayload=null;let replayed=false;
+  const output=await withTransaction(async client=>{
+    if(idemKey){
+      const ins=await client.query(`INSERT INTO idempotency_requests(actor_user_id,route_key,idempotency_key,request_hash,state) VALUES($1,$2,$3,$4,'processing') ON CONFLICT DO NOTHING RETURNING idempotency_key`,[req.user.id,routeKey,idemKey,requestHash]);
+      if(!ins.rowCount){const ex=await client.query(`SELECT * FROM idempotency_requests WHERE actor_user_id=$1 AND route_key=$2 AND idempotency_key=$3 FOR UPDATE`,[req.user.id,routeKey,idemKey]);const r=ex.rows[0];if(!r)throw new HttpError(409,"idempotency_retry");if(r.request_hash!==requestHash)throw new HttpError(409,"idempotency_key_reused");if(r.state==="completed"){replayed=true;return{status:r.response_status,body:r.response_body};}throw new HttpError(409,"idempotency_in_progress");}
     }
-    p.add(userId);
-  } else {
-    p.delete(userId);
-  }
-
-  job.loadingUnload.participants = [...p];
-  ensureLoadingUnload(job);
-
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit("lu_mark", { jobId: job.id, userId, present }, req);
-
-  return res.json({
-    ok: true,
-    participants: job.loadingUnload.participants,
-    closed: job.loadingUnload.closed,
-    quota: job.loadingUnload.quota,
-  });
-});
-
-/* ---- Manual attendance ---- */
-app.post("/jobs/:id/attendance/mark", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const { userId, inAt, outAt, clear } = req.body || {};
-  if (!userId) return res.status(400).json({ error: "userId_required" });
-
-  job.attendance = job.attendance || {};
-
-  if (clear === true) {
-    delete job.attendance[userId];
-    await saveDB(db);
-    exportJobCSV(job);
-    addAudit("attendance_clear", { jobId: job.id, userId }, req);
-    return res.json({ ok: true, record: null });
-  }
-
-  const rec = job.attendance[userId] || { in: null, out: null, lateMinutes: 0 };
-
-  if (inAt !== undefined && inAt !== null) {
-    const d = dayjs(inAt);
-    if (!d.isValid()) return res.status(400).json({ error: "invalid_inAt" });
-    rec.in = d.toISOString();
-    rec.lateMinutes = Math.max(0, d.diff(dayjs(job.startTime), "minute"));
-  }
-
-  if (outAt !== undefined && outAt !== null) {
-    const d2 = dayjs(outAt);
-    if (!d2.isValid()) return res.status(400).json({ error: "invalid_outAt" });
-    rec.out = d2.toISOString();
-  }
-
-  job.attendance[userId] = rec;
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit("attendance_mark", { jobId: job.id, userId, inAt, outAt }, req);
-
-  return res.json({ ok: true, record: rec, jobId: job.id, status: computeStatus(job) });
-});
-
-/* ---- Start / End / Reset ---- */
-app.post("/jobs/:id/start", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  job.events = job.events || {};
-  if (job.events.startedAt) return res.json({ message: "already_started", startedAt: job.events.startedAt });
-  job.events.startedAt = dayjs().toISOString();
-  await saveDB(db);
-  addAudit("start_event", { jobId: job.id }, req);
-  res.json({ ok: true, startedAt: job.events.startedAt });
-});
-
-app.post("/jobs/:id/end", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  job.events = job.events || {};
-  job.events.endedAt = dayjs().toISOString();
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit("end_event", { jobId: job.id }, req);
-  res.json({ ok: true, endedAt: job.events.endedAt });
-});
-
-async function handleReset(req, res) {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const keepAttendance = !!req.body?.keepAttendance;
-  job.events = { startedAt: null, endedAt: null, scanner: null };
-  if (!keepAttendance) job.attendance = {};
-
-  await saveDB(db);
-  exportJobCSV(job);
-  addAudit("reset_event", { jobId: job.id, keepAttendance }, req);
-  const hydrated = hydrateJobFullTimers(job);
-  const status = computeStatus(hydrated);
-
-  res.json({ ok: true, job: { ...hydrated, status } });
-}
-
-app.post("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleReset);
-app.patch("/jobs/:id/reset", authMiddleware, requireRole("pm", "admin"), handleReset);
-
-/* ---- QR + scan ---- */
-const VALID_DIR = new Set(["in", "out", "break_in", "break_out"]);
-const isBreakDir = (d) => d === "break_in" || d === "break_out";
-const getBreakEnabled = (job) =>
-  !!(job.breakEnabled ?? job.events?.breakEnabled ?? job.break?.enabled ?? job.rate?.breakEnabled);
-
-app.post("/jobs/:id/qr", authMiddleware, requireRole("part-timer"), (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-
-  const state = (job.approved || []).includes(req.user.id)
-    ? "approved"
-    : (job.rejected || []).includes(req.user.id)
-    ? "rejected"
-    : "applied";
-  if (state !== "approved") return res.status(400).json({ error: "not_approved" });
-  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
-
-  const { direction, lat, lng } = req.body || {};
-  const latN = Number(lat),
-    lngN = Number(lng);
-
-  if (!VALID_DIR.has(direction)) return res.status(400).json({ error: "bad_direction" });
-
-  // Break direction requires breakEnabled = true
-  const breakEnabled = getBreakEnabled(job);
-  if (isBreakDir(direction) && !breakEnabled) return res.status(400).json({ error: "break_disabled" });
-
-  if (!isValidCoord(latN, lngN)) return res.status(400).json({ error: "location_required" });
-
-  const encLat = Math.round(latN * 1e5) / 1e5;
-  const encLng = Math.round(lngN * 1e5) / 1e5;
-
-  const payload = {
-    typ: "scan",
-    j: job.id,
-    u: req.user.id,
-    dir: direction, // "in" | "out" | "break_in" | "break_out"
-    lat: encLat,
-    lng: encLng,
-    iat: Math.floor(Date.now() / 1000),
-    nonce: uuidv4(),
-  };
-
-  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "60s" });
-  addAudit(
-    "gen_qr",
-    { jobId: job.id, dir: direction, userId: req.user.id, lat: encLat, lng: encLng },
-    req
-  );
-
-  res.json({ token, maxDistanceMeters: MAX_DISTANCE_METERS });
-});
-
-app.post("/scan", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const { token, scannerLat, scannerLng } = req.body || {};
-  if (!token) return res.status(400).json({ error: "missing_token" });
-
-  let payload;
-  try {
-    payload = jwt.verify(token, JWT_SECRET);
-  } catch {
-    addAudit("scan_error", { reason: "jwt_error" }, req);
-    return res.status(400).json({ error: "jwt_error" });
-  }
-
-  if (payload.typ !== "scan") return res.status(400).json({ error: "bad_token_type" });
-  if (!VALID_DIR.has(payload.dir)) return res.status(400).json({ error: "bad_direction" });
-
-  const job = (db.jobs || []).find((j) => j.id === payload.j);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
-
-  // Break direction requires breakEnabled = true
-  const breakEnabled = getBreakEnabled(job);
-  if (isBreakDir(payload.dir) && !breakEnabled) return res.status(400).json({ error: "break_disabled" });
-
-  const sLat = Number(scannerLat),
-    sLng = Number(scannerLng);
-  if (!isValidCoord(payload.lat, payload.lng)) return res.status(400).json({ error: "token_missing_location" });
-  if (!isValidCoord(sLat, sLng)) return res.status(400).json({ error: "scanner_location_required" });
-
-  const dist = haversineMeters(payload.lat, payload.lng, sLat, sLng);
-  if (dist > MAX_DISTANCE_METERS) {
-    addAudit("scan_rejected_distance", { jobId: job.id, userId: payload.u, dist }, req);
-    return res.status(400).json({
-      error: "too_far",
-      distanceMeters: Math.round(dist),
-      maxDistanceMeters: MAX_DISTANCE_METERS,
-    });
-  }
-
-  job.attendance = job.attendance || {};
-  job.attendance[payload.u] =
-    job.attendance[payload.u] || { in: null, out: null, breakIn: null, breakOut: null, lateMinutes: 0, breakMinutes: 0 };
-
-  const rec = job.attendance[payload.u];
-
-  // prevent duplicates (first scan wins)
-  if (payload.dir === "in" && rec.in) return res.status(400).json({ error: "already_checked_in" });
-  if (payload.dir === "out" && rec.out) return res.status(400).json({ error: "already_checked_out" });
-  if (payload.dir === "break_in" && rec.breakIn) return res.status(400).json({ error: "already_break_in" });
-  if (payload.dir === "break_out" && rec.breakOut) return res.status(400).json({ error: "already_break_out" });
-
-  // simple rules to avoid nonsense states
-  if (payload.dir === "break_in") {
-    if (!rec.in) return res.status(400).json({ error: "must_check_in_first" });
-    if (rec.out) return res.status(400).json({ error: "already_checked_out" });
-  }
-  if (payload.dir === "break_out") {
-    if (!rec.in) return res.status(400).json({ error: "must_check_in_first" });
-    if (rec.out) return res.status(400).json({ error: "already_checked_out" });
-    if (!rec.breakIn) return res.status(400).json({ error: "break_in_missing" });
-  }
-
-  const now = dayjs();
-
-  if (payload.dir === "in") {
-    rec.in = now.toISOString();
-    rec.lateMinutes = Math.max(0, now.diff(dayjs(job.startTime), "minute"));
-  } else if (payload.dir === "out") {
-    rec.out = now.toISOString();
-  } else if (payload.dir === "break_in") {
-    rec.breakIn = now.toISOString();
-  } else if (payload.dir === "break_out") {
-    rec.breakOut = now.toISOString();
-    // optional: compute break minutes if breakIn exists
-    const bi = dayjs(rec.breakIn);
-    const bm = Math.max(0, now.diff(bi, "minute"));
-    rec.breakMinutes = bm;
-  }
-
-  await saveDB(db);
-  exportJobCSV(job);
-
-  addAudit("scan_" + payload.dir, { jobId: job.id, userId: payload.u, distanceMeters: Math.round(dist) }, req);
-
-  res.json({
-    ok: true,
-    jobId: job.id,
-    userId: payload.u,
-    direction: payload.dir,
-    time: now.toISOString(),
-    record: rec,
-  });
-});
-
-
-/* ---- CSV download ---- */
-app.get("/jobs/:id/csv", authMiddleware, requireRole("admin"), (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  const { headers, rows } = generateJobCSV(job);
-  res.setHeader("Content-Type", "text/csv");
-  res.setHeader("Content-Disposition", `attachment; filename="job-${job.id}.csv"`);
-  res.write(headers.join(",") + "\n");
-  for (const r of rows) {
-    const line = headers.map((h) => (r[h] !== undefined ? String(r[h]).replace(/"/g, '""') : "")).join(",");
-    res.write(line + "\n");
-  }
-  res.end();
-});
-
-/* ---- audit & misc ---- */
-app.get("/admin/audit", authMiddleware, requireRole("admin"), (req, res) => {
-  const limit = Number(req.query.limit || 200);
-  res.json((db.audit || []).slice(0, limit));
-});
-
-/* ---- Push + Notifications API ---- */
-app.get("/push/public-key", (_req, res) => {
-  res.json({ key: process.env.VAPID_PUBLIC_KEY || "" });
-});
-
-app.post("/push/subscribe", authMiddleware, async (req, res) => {
-  const sub = req.body?.subscription;
-  if (!sub || !sub.endpoint) return res.status(400).json({ error: "bad_subscription" });
-  const uid = req.user.id;
-  const list = db.pushSubs[uid] || [];
-  const exists = new Set(list.map((s) => s && s.endpoint));
-  if (!exists.has(sub.endpoint)) list.push(sub);
-  db.pushSubs[uid] = list;
-  await saveDB(db);
-  addAudit("push_subscribe", { userId: uid }, req);
-  res.json({ ok: true });
-});
-
-app.post("/push/unsubscribe", authMiddleware, async (req, res) => {
-  const ep = req.body?.endpoint;
-  const uid = req.user.id;
-  if (!ep) return res.status(400).json({ error: "endpoint_required" });
-  db.pushSubs[uid] = (db.pushSubs[uid] || []).filter((s) => (s && s.endpoint) !== ep);
-  await saveDB(db);
-  addAudit("push_unsubscribe", { userId: uid }, req);
-  res.json({ ok: true });
-});
-
-app.get("/notifications/summary", authMiddleware, (req, res) => {
-  const items = db.notifications[req.user.id] || [];
-  let unreadCount = 0;
-  for (const item of items) {
-    if (!item.read) unreadCount += 1;
-  }
-  res.json({ unreadCount, total: items.length });
-});
-
-app.get("/notifications", authMiddleware, (req, res) => {
-  const requested = Number(req.query.limit || 30);
-  const limit = Math.min(Math.max(Number.isFinite(requested) ? requested : 30, 1), 50);
-  const onlyUnread = String(req.query.unread || "") === "1";
-  let items = (db.notifications[req.user.id] || []).slice(0, limit);
-  if (onlyUnread) items = items.filter((n) => !n.read);
-  res.json(items);
-});
-
-app.post("/notifications/:id/read", authMiddleware, async (req, res) => {
-  const uid = req.user.id;
-  const list = db.notifications[uid] || [];
-  const n = list.find((x) => x.id === req.params.id);
-  if (!n) return res.status(404).json({ error: "not_found" });
-  n.read = true;
-  await saveDB(db);
-  res.json({ ok: true });
-});
-
-app.get("/me/notifications", authMiddleware, (req, res) => {
-  const items = (db.notifications[req.user.id] || []).slice(0, Number(req.query.limit || 50));
-  res.json({ items });
-});
-
-app.post("/me/notifications/read-all", authMiddleware, async (req, res) => {
-  const uid = req.user.id;
-  const list = db.notifications[uid] || [];
-  for (const it of list) it.read = true;
-  await saveDB(db);
-  res.json({ ok: true });
-});
-
-app.post("/push/test", authMiddleware, requireRole("admin"), async (req, res) => {
-  await notifyUsers([req.user.id], { title: "Test notification", body: "Push is working ✅", link: "/#/", type: "test" });
-  res.json({ ok: true });
-});
-
-/* ---- reset + health ---- */
-app.post("/__reset", async (_req, res) => {
-  db = await loadDB();
-  res.json({ ok: true });
-});
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
-/* ---- scanner location heartbeat ---- */
-function setScannerLocation(job, lat, lng) {
-  job.events = job.events || {};
-  job.events.scanner = { lat, lng, updatedAt: dayjs().toISOString() };
-}
-app.post("/jobs/:id/scanner/heartbeat", authMiddleware, requireRole("pm", "admin"), async (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
-  const { lat, lng } = req.body || {};
-  const latN = Number(lat),
-    lngN = Number(lng);
-  if (!isValidCoord(latN, lngN)) return res.status(400).json({ error: "scanner_location_required" });
-  setScannerLocation(job, latN, lngN);
-  await saveDB(db);
-  addAudit("scanner_heartbeat", { jobId: job.id, lat: latN, lng: lngN }, req);
-  res.json({ ok: true, updatedAt: job.events.scanner.updatedAt });
-});
-app.get("/jobs/:id/scanner", authMiddleware, (req, res) => {
-  const job = (db.jobs || []).find((j) => j.id === req.params.id);
-  if (!job) return res.status(404).json({ error: "job_not_found" });
-  if (!job.events?.startedAt) return res.status(400).json({ error: "event_not_started" });
-  const s = job.events?.scanner;
-  if (!s) return res.status(404).json({ error: "scanner_unknown" });
-  res.json({ lat: s.lat, lng: s.lng, updatedAt: s.updatedAt });
-});
-
-function listRoutes(appInstance) {
-  const out = [];
-  appInstance._router?.stack?.forEach((m) => {
-    if (m.route?.path) {
-      const methods = Object.keys(m.route.methods).map((s) => s.toUpperCase());
-      out.push(`${methods.join(",")} ${m.route.path}`);
+    const jr=await client.query(`SELECT id,title,headcount FROM jobs WHERE id=$1 FOR UPDATE`,[req.params.id]);const job=jr.rows[0];if(!job)throw new HttpError(404,"job_not_found");
+    const ar=await client.query(`SELECT * FROM job_applications WHERE job_id=$1 AND user_id=$2 FOR UPDATE`,[job.id,userId]);const appRow=ar.rows[0];if(!appRow)throw new HttpError(400,"user_not_applied");
+    const target=approve?"approved":"rejected";
+    let changed=appRow.status!==target;
+    if(changed&&approve){const c=await client.query(`SELECT count(*)::int n FROM job_applications WHERE job_id=$1 AND status='approved' AND user_id<>$2`,[job.id,userId]);if(Number(job.headcount||0)>0&&c.rows[0].n>=Number(job.headcount))throw new HttpError(409,"job_full");}
+    if(changed){
+      await client.query(`UPDATE job_applications SET status=$3,updated_at=now() WHERE job_id=$1 AND user_id=$2`,[job.id,userId,target]);
+      if(approve&&appRow.wants_loading){const cfgR=await client.query(`SELECT * FROM job_loading_config WHERE job_id=$1 FOR UPDATE`,[job.id]);const cfg=cfgR.rows[0];if(cfg&&!cfg.closed){const cnt=await client.query(`SELECT count(*)::int n FROM job_loading_members WHERE job_id=$1 AND present=true`,[job.id]);if(Number(cfg.quota)<=0||cnt.rows[0].n<Number(cfg.quota)){await client.query(`INSERT INTO job_loading_members(job_id,user_id,applied,present) VALUES($1,$2,true,true) ON CONFLICT(job_id,user_id) DO UPDATE SET applied=true,present=true,updated_at=now()`,[job.id,userId]);const nextCount=cnt.rows[0].n+1;if(Number(cfg.quota)>0&&nextCount>=Number(cfg.quota))await client.query(`UPDATE job_loading_config SET closed=true,updated_at=now() WHERE job_id=$1`,[job.id]);}}}
+      await addAudit(client,approve?"approve":"reject",{jobId:job.id,userId},req);
+      if(approve){const n=await insertNotifications(client,[userId],{title:"Your application was approved ✅",body:job.title,link:`/#/jobs/${job.id}`,type:"app_approved",eventKeyBase:`app_approved:${job.id}:${userId}:${Date.now()}`});if(n.length){pushIds=[userId];pushPayload={title:"Your application was approved ✅",body:job.title,link:`/#/jobs/${job.id}`};}}
     }
+    const body={ok:true,status:target,idempotent:!changed};
+    if(idemKey)await client.query(`UPDATE idempotency_requests SET state='completed',response_status=200,response_body=$4 WHERE actor_user_id=$1 AND route_key=$2 AND idempotency_key=$3`,[req.user.id,routeKey,idemKey,body]);
+    return{status:200,body};
   });
-  return out.sort();
-}
-app.get("/__routes", (_req, res) => {
-  res.json({ routes: listRoutes(app) });
+  if(replayed)res.setHeader("Idempotency-Replayed","true");
+  if(pushIds.length)notifyAfterCommit(pushIds,pushPayload);
+  res.status(output.status).json(output.body);
+}));
+
+// ---------- Early call ----------
+async function getEarlyCall(jobId){const cfg=await pool.query(`SELECT * FROM job_early_call_config WHERE job_id=$1`,[jobId]);if(!cfg.rowCount){const j=await pool.query(`SELECT 1 FROM jobs WHERE id=$1`,[jobId]);if(!j.rowCount)throw new HttpError(404,"job_not_found");return{enabled:false,amount:0,thresholdHours:0,applicants:[],participants:[],participantDetails:[]};}const m=await pool.query(`SELECT m.*,u.email,u.name,u.phone,u.discord FROM job_early_call_members m JOIN users u ON u.id=m.user_id WHERE m.job_id=$1`,[jobId]);return{enabled:!!cfg.rows[0].enabled,amount:Number(cfg.rows[0].amount),thresholdHours:Number(cfg.rows[0].threshold_hours),applicants:m.rows.filter(x=>x.applied).map(x=>x.user_id),participants:m.rows.filter(x=>x.present).map(x=>x.user_id),participantDetails:m.rows.filter(x=>x.present).map(x=>({userId:x.user_id,email:x.email,name:x.name||"",phone:x.phone||"",discord:x.discord||""}))};}
+app.get("/jobs/:id/earlycall",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>res.json(await getEarlyCall(req.params.id))));
+const markEarlyCall = asyncHandler(async(req,res)=>{const {userId}=req.body||{};const present=typeof req.body?.present==="boolean"?req.body.present:typeof req.body?.enabled==="boolean"?req.body.enabled:undefined;if(!userId)throw new HttpError(400,"userId_required");if(typeof present!=="boolean")throw new HttpError(400,"present_boolean_required");await withTransaction(async client=>{const j=await client.query(`SELECT 1 FROM jobs WHERE id=$1`,[req.params.id]);if(!j.rowCount)throw new HttpError(404,"job_not_found");await client.query(`INSERT INTO job_early_call_members(job_id,user_id,present) VALUES($1,$2,$3) ON CONFLICT(job_id,user_id) DO UPDATE SET present=EXCLUDED.present,updated_at=now()`,[req.params.id,userId,present]);await addAudit(client,"early_call_mark",{jobId:req.params.id,userId,present},req);});const ec=await getEarlyCall(req.params.id);res.json({ok:true,participants:ec.participants,participantDetails:ec.participantDetails});});
+app.post("/jobs/:id/earlycall/mark",authMiddleware,requireRole("pm","admin"),markEarlyCall);
+app.post("/jobs/:id/earlycall/config",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>{const {enabled,amount,thresholdHours}=req.body||{};if(amount!==undefined&&toNumber(amount,-1)<0)throw new HttpError(400,"amount_must_be_non_negative_number");if(thresholdHours!==undefined&&toNumber(thresholdHours,-1)<0)throw new HttpError(400,"thresholdHours_must_be_non_negative_number");await withTransaction(async client=>{const j=await client.query(`SELECT 1 FROM jobs WHERE id=$1`,[req.params.id]);if(!j.rowCount)throw new HttpError(404,"job_not_found");await client.query(`INSERT INTO job_early_call_config(job_id,enabled,amount,threshold_hours) VALUES($1,COALESCE($2,false),COALESCE($3,0),COALESCE($4,0)) ON CONFLICT(job_id) DO UPDATE SET enabled=COALESCE($2,job_early_call_config.enabled),amount=COALESCE($3,job_early_call_config.amount),threshold_hours=COALESCE($4,job_early_call_config.threshold_hours),updated_at=now()`,[req.params.id,typeof enabled==="boolean"?enabled:null,amount!==undefined?toNumber(amount):null,thresholdHours!==undefined?toNumber(thresholdHours):null]);await addAudit(client,"early_call_config",{jobId:req.params.id,enabled,amount,thresholdHours},req);});res.json({ok:true,earlyCall:await getEarlyCall(req.params.id)});}));
+app.get("/jobs/:id/early-call",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>res.json(await getEarlyCall(req.params.id))));
+app.post("/jobs/:id/early-call/mark",authMiddleware,requireRole("pm","admin"),markEarlyCall);
+
+// ---------- Loading ----------
+async function getLoading(jobId){const cfg=await pool.query(`SELECT * FROM job_loading_config WHERE job_id=$1`,[jobId]);if(!cfg.rowCount){const j=await pool.query(`SELECT 1 FROM jobs WHERE id=$1`,[jobId]);if(!j.rowCount)throw new HttpError(404,"job_not_found");return{enabled:false,price:0,quota:0,closed:false,applicants:[],participants:[]};}const m=await pool.query(`SELECT m.*,u.email,u.name FROM job_loading_members m JOIN users u ON u.id=m.user_id WHERE m.job_id=$1`,[jobId]);const detail=x=>({userId:x.user_id,email:x.email,name:x.name||""});return{enabled:!!cfg.rows[0].enabled,price:Number(cfg.rows[0].price),quota:Number(cfg.rows[0].quota),closed:!!cfg.rows[0].closed,applicants:m.rows.filter(x=>x.applied).map(detail),participants:m.rows.filter(x=>x.present).map(detail)};}
+app.get("/jobs/:id/loading",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>res.json(await getLoading(req.params.id))));
+app.post("/jobs/:id/loading/mark",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>{const {userId}=req.body||{};const present=typeof req.body?.present==="boolean"?req.body.present:typeof req.body?.enabled==="boolean"?req.body.enabled:undefined;if(!userId||typeof present!=="boolean")throw new HttpError(400,"bad_request");const out=await withTransaction(async client=>{const cfgR=await client.query(`SELECT * FROM job_loading_config WHERE job_id=$1 FOR UPDATE`,[req.params.id]);const cfg=cfgR.rows[0];if(!cfg)throw new HttpError(404,"job_not_found");const cur=await client.query(`SELECT present FROM job_loading_members WHERE job_id=$1 AND user_id=$2 FOR UPDATE`,[req.params.id,userId]);const already=!!cur.rows[0]?.present;const c=await client.query(`SELECT count(*)::int n FROM job_loading_members WHERE job_id=$1 AND present=true`,[req.params.id]);if(present&&!already&&Number(cfg.quota)>0&&c.rows[0].n>=Number(cfg.quota))throw new HttpError(409,"lu_quota_full","Loading/unloading quota is full.",{quota:Number(cfg.quota),count:c.rows[0].n});await client.query(`INSERT INTO job_loading_members(job_id,user_id,present) VALUES($1,$2,$3) ON CONFLICT(job_id,user_id) DO UPDATE SET present=EXCLUDED.present,updated_at=now()`,[req.params.id,userId,present]);const next=c.rows[0].n+(present&&!already?1:0)-(!present&&already?1:0);const closed=Number(cfg.quota)>0&&next>=Number(cfg.quota);await client.query(`UPDATE job_loading_config SET closed=$2,updated_at=now() WHERE job_id=$1`,[req.params.id,closed]);await addAudit(client,"lu_mark",{jobId:req.params.id,userId,present},req);return{quota:Number(cfg.quota),closed};});const l=await getLoading(req.params.id);res.json({ok:true,participants:l.participants.map(x=>x.userId),closed:out.closed,quota:out.quota});}));
+
+// ---------- Attendance / events ----------
+app.post("/jobs/:id/attendance/mark",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>{const {userId,inAt,outAt,clear}=req.body||{};if(!userId)throw new HttpError(400,"userId_required");let record=null;await withTransaction(async client=>{const j=await client.query(`SELECT start_time FROM jobs WHERE id=$1`,[req.params.id]);if(!j.rowCount)throw new HttpError(404,"job_not_found");if(clear===true){await client.query(`DELETE FROM job_attendance WHERE job_id=$1 AND user_id=$2`,[req.params.id,userId]);await addAudit(client,"attendance_clear",{jobId:req.params.id,userId},req);return;}const cur=await client.query(`SELECT * FROM job_attendance WHERE job_id=$1 AND user_id=$2 FOR UPDATE`,[req.params.id,userId]);let inDate=cur.rows[0]?.in_at||null,outDate=cur.rows[0]?.out_at||null,late=Number(cur.rows[0]?.late_minutes||0);if(inAt!==undefined&&inAt!==null){inDate=new Date(inAt);if(Number.isNaN(inDate.getTime()))throw new HttpError(400,"invalid_inAt");late=Math.max(0,Math.floor((inDate-new Date(j.rows[0].start_time))/60000));}if(outAt!==undefined&&outAt!==null){outDate=new Date(outAt);if(Number.isNaN(outDate.getTime()))throw new HttpError(400,"invalid_outAt");}const r=await client.query(`INSERT INTO job_attendance(job_id,user_id,in_at,out_at,late_minutes) VALUES($1,$2,$3,$4,$5) ON CONFLICT(job_id,user_id) DO UPDATE SET in_at=EXCLUDED.in_at,out_at=EXCLUDED.out_at,late_minutes=EXCLUDED.late_minutes,updated_at=now() RETURNING *`,[req.params.id,userId,inDate,outDate,late]);const x=r.rows[0];record={in:iso(x.in_at),out:iso(x.out_at),breakIn:iso(x.break_in_at),breakOut:iso(x.break_out_at),lateMinutes:Number(x.late_minutes||0),breakMinutes:Number(x.break_minutes||0)};await addAudit(client,"attendance_mark",{jobId:req.params.id,userId,inAt,outAt},req);});const job=await getJobFull(req.params.id);res.json({ok:true,record,jobId:req.params.id,status:computeStatus(job)});}));
+app.post("/jobs/:id/start",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>{const startedAt=await withTransaction(async client=>{const r=await client.query(`SELECT started_at FROM job_events WHERE job_id=$1 FOR UPDATE`,[req.params.id]);if(!r.rowCount)throw new HttpError(404,"job_not_found");if(r.rows[0].started_at)return iso(r.rows[0].started_at);const t=new Date();await client.query(`UPDATE job_events SET started_at=$2,ended_at=NULL,updated_at=now() WHERE job_id=$1`,[req.params.id,t]);await addAudit(client,"start_event",{jobId:req.params.id},req);return t.toISOString();});res.json({ok:true,startedAt});}));
+app.post("/jobs/:id/end",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>{const endedAt=await withTransaction(async client=>{const r=await client.query(`SELECT 1 FROM job_events WHERE job_id=$1 FOR UPDATE`,[req.params.id]);if(!r.rowCount)throw new HttpError(404,"job_not_found");const t=req.body?.actualEndAt?new Date(req.body.actualEndAt):new Date();if(Number.isNaN(t.getTime()))throw new HttpError(400,"invalid_actualEndAt");await client.query(`UPDATE job_events SET ended_at=$2,updated_at=now() WHERE job_id=$1`,[req.params.id,t]);await addAudit(client,"end_event",{jobId:req.params.id},req);return t.toISOString();});res.json({ok:true,endedAt});}));
+async function handleReset(req,res){const keep=!!req.body?.keepAttendance;await withTransaction(async client=>{const r=await client.query(`UPDATE job_events SET started_at=NULL,ended_at=NULL,scanner_lat=NULL,scanner_lng=NULL,scanner_updated_at=NULL,updated_at=now() WHERE job_id=$1 RETURNING job_id`,[req.params.id]);if(!r.rowCount)throw new HttpError(404,"job_not_found");if(!keep)await client.query(`DELETE FROM job_attendance WHERE job_id=$1`,[req.params.id]);await addAudit(client,"reset_event",{jobId:req.params.id,keepAttendance:keep},req);});res.json({ok:true,job:await getJobFull(req.params.id)});}
+app.post("/jobs/:id/reset",authMiddleware,requireRole("pm","admin"),asyncHandler(handleReset));app.patch("/jobs/:id/reset",authMiddleware,requireRole("pm","admin"),asyncHandler(handleReset));
+
+const VALID_DIR=new Set(["in","out","break_in","break_out"]);const isBreakDir=d=>d==="break_in"||d==="break_out";
+app.post("/jobs/:id/qr",authMiddleware,requireRole("part-timer"),asyncHandler(async(req,res)=>{const job=await getJobFull(req.params.id);if(!job)throw new HttpError(404,"job_not_found");if(!(job.approved||[]).includes(req.user.id))throw new HttpError(400,"not_approved");if(!job.events?.startedAt)throw new HttpError(400,"event_not_started");const {direction,lat,lng}=req.body||{};const latN=Number(lat),lngN=Number(lng);if(!VALID_DIR.has(direction))throw new HttpError(400,"bad_direction");if(isBreakDir(direction)&&!job.breakEnabled)throw new HttpError(400,"break_disabled");if(!isValidCoord(latN,lngN))throw new HttpError(400,"location_required");const payload={typ:"scan",j:job.id,u:req.user.id,dir:direction,lat:Math.round(latN*1e5)/1e5,lng:Math.round(lngN*1e5)/1e5,iat:Math.floor(Date.now()/1000),nonce:crypto.randomUUID()};const token=jwt.sign(payload,EFFECTIVE_JWT_SECRET,{expiresIn:"60s"});await withTransaction(client=>addAudit(client,"gen_qr",{jobId:job.id,dir:direction,userId:req.user.id,lat:payload.lat,lng:payload.lng},req));const config=await getAppConfig();res.json({token,maxDistanceMeters:config.scanMaxDistanceMeters});}));
+
+app.post("/scan",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>{const {token,scannerLat,scannerLng}=req.body||{};if(!token)throw new HttpError(400,"missing_token");let payload;try{payload=jwt.verify(token,EFFECTIVE_JWT_SECRET);}catch{throw new HttpError(400,"jwt_error");}if(payload.typ!=="scan")throw new HttpError(400,"bad_token_type");if(!VALID_DIR.has(payload.dir))throw new HttpError(400,"bad_direction");const sLat=Number(scannerLat),sLng=Number(scannerLng);if(!isValidCoord(payload.lat,payload.lng))throw new HttpError(400,"token_missing_location");if(!isValidCoord(sLat,sLng))throw new HttpError(400,"scanner_location_required");const config=await getAppConfig();const dist=haversineMeters(payload.lat,payload.lng,sLat,sLng);if(dist>config.scanMaxDistanceMeters)throw new HttpError(400,"too_far","Scanner is too far from QR location.",{distanceMeters:Math.round(dist),maxDistanceMeters:config.scanMaxDistanceMeters});let record,time;await withTransaction(async client=>{const jR=await client.query(`SELECT j.start_time,j.break_enabled,e.started_at FROM jobs j JOIN job_events e ON e.job_id=j.id WHERE j.id=$1 FOR UPDATE OF e`,[payload.j]);const j=jR.rows[0];if(!j)throw new HttpError(404,"job_not_found");if(!j.started_at)throw new HttpError(400,"event_not_started");if(isBreakDir(payload.dir)&&!j.break_enabled)throw new HttpError(400,"break_disabled");const a=await client.query(`SELECT * FROM job_attendance WHERE job_id=$1 AND user_id=$2 FOR UPDATE`,[payload.j,payload.u]);const r=a.rows[0]||{};if(payload.dir==="in"&&r.in_at)throw new HttpError(400,"already_checked_in");if(payload.dir==="out"&&r.out_at)throw new HttpError(400,"already_checked_out");if(payload.dir==="break_in"&&r.break_in_at)throw new HttpError(400,"already_break_in");if(payload.dir==="break_out"&&r.break_out_at)throw new HttpError(400,"already_break_out");if(payload.dir==="break_in"&&(!r.in_at||r.out_at))throw new HttpError(400,!r.in_at?"must_check_in_first":"already_checked_out");if(payload.dir==="break_out"&&(!r.in_at||r.out_at||!r.break_in_at))throw new HttpError(400,!r.in_at?"must_check_in_first":r.out_at?"already_checked_out":"break_in_missing");time=new Date();let inAt=r.in_at||null,outAt=r.out_at||null,bi=r.break_in_at||null,bo=r.break_out_at||null,late=Number(r.late_minutes||0),bm=Number(r.break_minutes||0);if(payload.dir==="in"){inAt=time;late=Math.max(0,Math.floor((time-new Date(j.start_time))/60000));}if(payload.dir==="out")outAt=time;if(payload.dir==="break_in")bi=time;if(payload.dir==="break_out"){bo=time;bm=Math.max(0,Math.floor((time-new Date(bi))/60000));}const up=await client.query(`INSERT INTO job_attendance(job_id,user_id,in_at,out_at,break_in_at,break_out_at,late_minutes,break_minutes) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(job_id,user_id) DO UPDATE SET in_at=EXCLUDED.in_at,out_at=EXCLUDED.out_at,break_in_at=EXCLUDED.break_in_at,break_out_at=EXCLUDED.break_out_at,late_minutes=EXCLUDED.late_minutes,break_minutes=EXCLUDED.break_minutes,updated_at=now() RETURNING *`,[payload.j,payload.u,inAt,outAt,bi,bo,late,bm]);const x=up.rows[0];record={in:iso(x.in_at),out:iso(x.out_at),breakIn:iso(x.break_in_at),breakOut:iso(x.break_out_at),lateMinutes:Number(x.late_minutes),breakMinutes:Number(x.break_minutes)};await addAudit(client,"scan_"+payload.dir,{jobId:payload.j,userId:payload.u,distanceMeters:Math.round(dist)},req);});res.json({ok:true,jobId:payload.j,userId:payload.u,direction:payload.dir,time:time.toISOString(),record});}));
+
+app.get("/jobs/:id/csv",authMiddleware,requireRole("admin"),asyncHandler(async(req,res)=>{const job=await getJobFull(req.params.id);if(!job)throw new HttpError(404,"job_not_found");const headers=["section","userId","email","transport","status","in","out","lateMinutes","present","scheduledStart","scheduledEnd","scheduledHours","eventStartedAt","eventEndedAt","luApplied","luConfirmed"];const rows=generateJobCSV(job);res.setHeader("Content-Type","text/csv; charset=utf-8");res.setHeader("Content-Disposition",`attachment; filename="job-${job.id}.csv"`);res.write(headers.map(csvEscape).join(",")+"\n");for(const row of rows)res.write(headers.map(h=>csvEscape(row[h])).join(",")+"\n");res.end();}));
+
+// ---------- Audit / push / notifications ----------
+app.get("/admin/audit",authMiddleware,requireRole("admin"),asyncHandler(async(req,res)=>{const limit=Math.min(1000,Math.max(1,Number(req.query.limit||200)));const {rows}=await pool.query(`SELECT id,audit_time AS time,actor,role,action,details FROM audit_logs ORDER BY audit_time DESC LIMIT $1`,[limit]);res.json(rows.map(r=>({...r,time:iso(r.time)})));}));
+app.get("/push/public-key",(_req,res)=>res.json({key:VAPID_PUBLIC_KEY}));
+app.post("/push/subscribe",authMiddleware,asyncHandler(async(req,res)=>{const sub=req.body?.subscription;if(!sub?.endpoint)throw new HttpError(400,"bad_subscription");await withTransaction(async client=>{await client.query(`INSERT INTO push_subscriptions(user_id,endpoint,subscription) VALUES($1,$2,$3) ON CONFLICT(user_id,endpoint) DO UPDATE SET subscription=EXCLUDED.subscription,updated_at=now()`,[req.user.id,sub.endpoint,sub]);await addAudit(client,"push_subscribe",{userId:req.user.id},req);});res.json({ok:true});}));
+app.post("/push/unsubscribe",authMiddleware,asyncHandler(async(req,res)=>{const ep=req.body?.endpoint;if(!ep)throw new HttpError(400,"endpoint_required");await withTransaction(async client=>{await client.query(`DELETE FROM push_subscriptions WHERE user_id=$1 AND endpoint=$2`,[req.user.id,ep]);await addAudit(client,"push_unsubscribe",{userId:req.user.id},req);});res.json({ok:true});}));
+app.get("/notifications/summary",authMiddleware,asyncHandler(async(req,res)=>{const {rows}=await pool.query(`SELECT count(*)::int total,count(*) FILTER(WHERE read=false)::int unread FROM notifications WHERE user_id=$1`,[req.user.id]);res.json({unreadCount:rows[0].unread,total:rows[0].total});}));
+app.get("/notifications",authMiddleware,asyncHandler(async(req,res)=>{const limit=Math.min(50,Math.max(1,Number(req.query.limit||30)));const unread=String(req.query.unread||"")==="1";const {rows}=await pool.query(`SELECT id,notification_time AS time,title,body,link,read,type FROM notifications WHERE user_id=$1 ${unread?"AND read=false":""} ORDER BY notification_time DESC LIMIT $2`,[req.user.id,limit]);res.json(rows.map(r=>({...r,time:iso(r.time)})));}));
+app.post("/notifications/:id/read",authMiddleware,asyncHandler(async(req,res)=>{const r=await pool.query(`UPDATE notifications SET read=true WHERE id=$1 AND user_id=$2 RETURNING id`,[req.params.id,req.user.id]);if(!r.rowCount)throw new HttpError(404,"not_found");res.json({ok:true});}));
+app.get("/me/notifications",authMiddleware,asyncHandler(async(req,res)=>{const limit=Math.min(200,Math.max(1,Number(req.query.limit||50)));const {rows}=await pool.query(`SELECT id,notification_time AS time,title,body,link,read,type FROM notifications WHERE user_id=$1 ORDER BY notification_time DESC LIMIT $2`,[req.user.id,limit]);res.json({items:rows.map(r=>({...r,time:iso(r.time)}))});}));
+app.post("/me/notifications/read-all",authMiddleware,asyncHandler(async(req,res)=>{await pool.query(`UPDATE notifications SET read=true WHERE user_id=$1 AND read=false`,[req.user.id]);res.json({ok:true});}));
+app.post("/push/test",authMiddleware,requireRole("admin"),asyncHandler(async(req,res)=>{await withTransaction(client=>insertNotifications(client,[req.user.id],{title:"Test notification",body:"Push is working ✅",link:"/#/",type:"test",eventKeyBase:`push_test:${Date.now()}`}));notifyAfterCommit([req.user.id],{title:"Test notification",body:"Push is working ✅",link:"/#/"});res.json({ok:true});}));
+
+// ---------- Scanner heartbeat ----------
+app.post("/jobs/:id/scanner/heartbeat",authMiddleware,requireRole("pm","admin"),asyncHandler(async(req,res)=>{const lat=Number(req.body?.lat),lng=Number(req.body?.lng);if(!isValidCoord(lat,lng))throw new HttpError(400,"scanner_location_required");const updatedAt=await withTransaction(async client=>{const r=await client.query(`SELECT started_at FROM job_events WHERE job_id=$1 FOR UPDATE`,[req.params.id]);if(!r.rowCount)throw new HttpError(404,"job_not_found");if(!r.rows[0].started_at)throw new HttpError(400,"event_not_started");const t=new Date();await client.query(`UPDATE job_events SET scanner_lat=$2,scanner_lng=$3,scanner_updated_at=$4,updated_at=now() WHERE job_id=$1`,[req.params.id,lat,lng,t]);await addAudit(client,"scanner_heartbeat",{jobId:req.params.id,lat,lng},req);return t.toISOString();});res.json({ok:true,updatedAt});}));
+app.get("/jobs/:id/scanner",authMiddleware,asyncHandler(async(req,res)=>{const {rows}=await pool.query(`SELECT started_at,scanner_lat,scanner_lng,scanner_updated_at FROM job_events WHERE job_id=$1`,[req.params.id]);const s=rows[0];if(!s)throw new HttpError(404,"job_not_found");if(!s.started_at)throw new HttpError(400,"event_not_started");if(!s.scanner_updated_at)throw new HttpError(404,"scanner_unknown");res.json({lat:Number(s.scanner_lat),lng:Number(s.scanner_lng),updatedAt:iso(s.scanner_updated_at)});}));
+
+// Stateless no-op compatibility endpoint, now protected.
+app.post("/__reset",authMiddleware,requireRole("admin"),(req,res)=>res.json({ok:true,message:"stateless_backend_no_cache_to_reset"}));
+app.get("/health",asyncHandler(async(_req,res)=>{const db=await healthCheck();res.json({ok:true,database:"ok",databaseLatencyMs:db.latencyMs,storageConfigured:!!(process.env.SUPABASE_URL&&(process.env.SUPABASE_SECRET_KEY||process.env.SUPABASE_SERVICE_ROLE_KEY)),timeZone:BUSINESS_TIME_ZONE});}));
+
+function listRoutes(appInstance){const out=[];appInstance._router?.stack?.forEach(m=>{if(m.route?.path){const methods=Object.keys(m.route.methods).map(s=>s.toUpperCase());out.push(`${methods.join(",")} ${m.route.path}`);}});return out.sort();}
+app.get("/__routes",authMiddleware,requireRole("admin"),(_req,res)=>res.json({routes:listRoutes(app)}));
+
+// ---------- Final error middleware ----------
+app.use((err, req, res, _next) => {
+  if (res.headersSent) return;
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ error: err.error, message: err.message, ...(err.details ? err.details : {}) });
+  }
+  const pg = postgresErrorResponse(err);
+  if (pg) return res.status(pg.status).json(pg.body);
+  if (err?.message === "Origin not allowed by CORS") return res.status(403).json({ error: "cors_forbidden" });
+  console.error(`[${req.method} ${req.originalUrl}]`, err);
+  return res.status(500).json({ error: "internal_server_error", message: "The request could not be completed." });
 });
 
-/* ---- start ---- */
-const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-  console.log("ATAG server running on http://localhost:" + PORT);
-  console.log("Booting server from:", new URL(import.meta.url).pathname);
+  console.log(`ATAG server running on http://localhost:${PORT}`);
+  console.log("Persistence: normalized PostgreSQL tables; files: Supabase Storage");
 });
-setTimeout(() => {
-  console.log("Registered routes:\n" + listRoutes(app).join("\n"));
-}, 100);

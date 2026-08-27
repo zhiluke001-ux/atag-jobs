@@ -381,7 +381,7 @@ function CollapsibleSection({ title, count, open, onToggle, subtitle, children }
 }
 
 /* Applicants table body */
-function ApplicantsTable({ rows, onApprove, onReject }) {
+function ApplicantsTable({ rows, onApprove, onReject, busy = {} }) {
   const normStatus = (s) => String(s || "applied").trim().toLowerCase();
 
   return (
@@ -417,8 +417,9 @@ function ApplicantsTable({ rows, onApprove, onReject }) {
               const id = a.userId || a.email || String(idx);
               const st = normStatus(a.status);
 
-              const approveDisabled = st === "approved";
-              const rejectDisabled = st === "rejected";
+              const isBusy = !!busy[id];
+              const approveDisabled = st === "approved" || isBusy;
+              const rejectDisabled = st === "rejected" || isBusy;
 
               return (
                 <tr key={id} style={{ borderTop: "1px solid #f1f5f9", background: idx % 2 ? "#ffffff" : "#fbfbfb" }}>
@@ -459,7 +460,7 @@ function ApplicantsTable({ rows, onApprove, onReject }) {
                         disabled={approveDisabled}
                         title={approveDisabled ? "Already approved" : "Approve"}
                       >
-                        {approveDisabled ? "Approved" : "Approve"}
+                        {isBusy ? "Saving..." : st === "approved" ? "Approved" : "Approve"}
                       </button>
                       <button
                         className="btn danger"
@@ -472,7 +473,7 @@ function ApplicantsTable({ rows, onApprove, onReject }) {
                         disabled={rejectDisabled}
                         title={rejectDisabled ? "Already rejected" : "Reject"}
                       >
-                        {rejectDisabled ? "Rejected" : "Reject"}
+                        {isBusy ? "Saving..." : st === "rejected" ? "Rejected" : "Reject"}
                       </button>
                     </div>
                   </td>
@@ -507,6 +508,9 @@ export default function PMJobDetails({ jobId }) {
 
   // addon toggles busy
   const [addonBusy, setAddonBusy] = useState({}); // { "<userId>:<kind>": boolean }
+
+  // approval/rejection per-applicant busy lock
+  const [approvalBusy, setApprovalBusy] = useState({});
 
   // break toggle busy
   const [breakBusy, setBreakBusy] = useState(false);
@@ -1068,8 +1072,15 @@ export default function PMJobDetails({ jobId }) {
   }
 
   async function setApproval(userId, approve) {
-    await apiPost(`/jobs/${jobId}/approve`, { userId, approve });
-    await load();
+    if (approvalBusy[userId]) return;
+    setApprovalBusy((p) => ({ ...p, [userId]: true }));
+    try {
+      const idem = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+      await apiPost(`/jobs/${jobId}/approve`, { userId, approve }, { headers: { "Idempotency-Key": idem } });
+      await load();
+    } finally {
+      setApprovalBusy((p) => ({ ...p, [userId]: false }));
+    }
   }
 
   // Loading/Unloading confirm (existing endpoint)
@@ -1367,7 +1378,7 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("applied")}
         subtitle="New / pending applications waiting for approval"
       >
-        <ApplicantsTable rows={appliedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} />
+        <ApplicantsTable rows={appliedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} busy={approvalBusy} />
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -1377,7 +1388,7 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("approved")}
         subtitle="Approved applicants (can still Reject if needed)"
       >
-        <ApplicantsTable rows={approvedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} />
+        <ApplicantsTable rows={approvedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} busy={approvalBusy} />
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -1387,7 +1398,7 @@ export default function PMJobDetails({ jobId }) {
         onToggle={() => toggleSection("rejected")}
         subtitle="Rejected applicants (can still Approve back if needed)"
       >
-        <ApplicantsTable rows={rejectedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} />
+        <ApplicantsTable rows={rejectedApplicants} onApprove={(uid) => setApproval(uid, true)} onReject={(uid) => setApproval(uid, false)} busy={approvalBusy} />
       </CollapsibleSection>
 
       {/* Attendance (black toggle) */}

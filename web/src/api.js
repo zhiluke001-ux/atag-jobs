@@ -344,10 +344,11 @@ export const apiGet = (path) =>
     method: "GET",
   });
 
-export const apiPost = (path, body) =>
+export const apiPost = (path, body, options = {}) =>
   doFetch(path, {
     method: "POST",
     body,
+    ...(options || {}),
   });
 
 export const apiPatch = (path, body) =>
