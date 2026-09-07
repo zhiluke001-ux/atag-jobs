@@ -4,6 +4,7 @@ import { apiGet, apiPost, apiDelete } from "../api";
 import JobList from "../components/JobList";
 import JobModal from "../components/JobModal";
 import ApplyModal from "../components/ApplyModal";
+import { byNewestPosted, byMostRecentlyFinished } from "../utils/sortJobs";
 
 /* Optional: kind derivation if you need to branch UI later */
 function deriveKind(job) {
@@ -115,11 +116,13 @@ export default function Home({ navigate, user }) {
     return { present, past };
   }, [jobs]);
 
-  // Filter jobs into Present / Past
+  // Filter jobs into Present / Past, then sort:
+  //  - Past tab  -> most recently finished first
+  //  - Present / marshal sign-up list -> newest posted first
   const filteredJobs = useMemo(() => {
     const now = Date.now();
 
-    return (jobs || []).filter((j) => {
+    const list = (jobs || []).filter((j) => {
       // Safely handle missing endTime: treat as present/ongoing
       const endMs = j?.endTime ? new Date(j.endTime).getTime() : null;
       const isPast = endMs != null && endMs < now;
@@ -133,6 +136,9 @@ export default function Home({ navigate, user }) {
       // Non-admin users: always see only ongoing/upcoming jobs
       return !isPast;
     });
+
+    const showingPast = canManage && viewMode === "past";
+    return [...list].sort(showingPast ? byMostRecentlyFinished : byNewestPosted);
   }, [jobs, canManage, viewMode]);
 
   function onView(j) {
