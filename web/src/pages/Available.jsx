@@ -3,6 +3,7 @@ import { apiGet, apiPost, apiPatch, apiDelete } from "../api";
 import JobList from "../components/JobList";
 import JobModal from "../components/JobModal";
 import ApplyModal from "../components/ApplyModal";
+import { byNewestPosted } from "../utils/sortJobs";
 
 export default function Available({ navigate, user }) {
   const [jobs, setJobs] = useState([]);
@@ -23,7 +24,7 @@ export default function Available({ navigate, user }) {
     setLoading(true);
     try {
       const j = await apiGet("/jobs");
-      setJobs(j);
+      setJobs(Array.isArray(j) ? [...j].sort(byNewestPosted) : j);
       if (user?.role === "part-timer") {
         const list = await apiGet("/me/jobs").catch(() => []);
         const m = {}; list.forEach(it => { m[it.id] = it.myStatus; });
