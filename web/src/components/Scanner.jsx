@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { apiPost } from "../api";
+import { scanErrorMessage } from "../lib/scanErrors";
 
 /** Only support #/jobs/:id/scanner */
 function resolveJobId() {
@@ -74,7 +75,8 @@ export default function Scanner({ navigate }) {
       alert(`OK: ${r.direction.toUpperCase()} recorded at ${new Date(r.time).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`);
       setToken("");
     } catch (e) {
-      alert("Scan failed: " + (e?.message || e));
+      const { text, hint } = scanErrorMessage(e?.payload, e?.status);
+      alert(hint ? `${text}\n${hint}` : text);
     } finally {
       setScanning(false);
     }
