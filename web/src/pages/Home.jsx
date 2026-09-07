@@ -51,6 +51,13 @@ export default function Home({ navigate, user }) {
   // Present / Past view (for admin/pm only)
   const [viewMode, setViewMode] = useState("present"); // "present" | "past"
 
+  // Search + event date-range filter (all users)
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState(""); // "YYYY-MM-DD"
+  const [dateTo, setDateTo] = useState("");
+  const hasActiveFilter =
+    search.trim() !== "" || dateFrom !== "" || dateTo !== "";
+
   const canManage = useMemo(
     () => !!user && (user.role === "pm" || user.role === "admin"),
     [user]
@@ -116,30 +123,51 @@ export default function Home({ navigate, user }) {
     return { present, past };
   }, [jobs]);
 
-  // Filter jobs into Present / Past, then sort:
+  // Filter jobs into Present / Past + search + event date range, then sort:
   //  - Past tab  -> most recently finished first
   //  - Present / marshal sign-up list -> newest posted first
   const filteredJobs = useMemo(() => {
     const now = Date.now();
+    const term = search.trim().toLowerCase();
+    const fromTs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
+    const toTs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
 
     const list = (jobs || []).filter((j) => {
       // Safely handle missing endTime: treat as present/ongoing
       const endMs = j?.endTime ? new Date(j.endTime).getTime() : null;
       const isPast = endMs != null && endMs < now;
 
+      // Present / Past gate
       if (canManage) {
         // Admin / PM: respect Present | Past toggle
-        if (viewMode === "past") return isPast;
-        return !isPast; // "present" view: ongoing or upcoming
+        if (viewMode === "past" ? !isPast : isPast) return false;
+      } else if (isPast) {
+        // Non-admin users: always see only ongoing/upcoming jobs
+        return false;
       }
 
-      // Non-admin users: always see only ongoing/upcoming jobs
-      return !isPast;
+      // Text search: title / venue / client / description / status
+      if (term) {
+        const hay = [j.title, j.venue, j.clientName, j.description, j.status]
+          .map((v) => String(v || "").toLowerCase())
+          .join(" ");
+        if (!hay.includes(term)) return false;
+      }
+
+      // Event start-date range (both bounds optional)
+      if (fromTs != null || toTs != null) {
+        const startMs = j?.startTime ? new Date(j.startTime).getTime() : null;
+        if (startMs == null) return false;
+        if (fromTs != null && startMs < fromTs) return false;
+        if (toTs != null && startMs > toTs) return false;
+      }
+
+      return true;
     });
 
     const showingPast = canManage && viewMode === "past";
     return [...list].sort(showingPast ? byMostRecentlyFinished : byNewestPosted);
-  }, [jobs, canManage, viewMode]);
+  }, [jobs, canManage, viewMode, search, dateFrom, dateTo]);
 
   function onView(j) {
     navigate(`#/jobs/${j.id}`);
@@ -226,7 +254,22 @@ export default function Home({ navigate, user }) {
           fontSize: 14,
         }}
       >
-        {canManage ? (
+        {hasActiveFilter ? (
+          <>
+            No jobs match your search or date filter.{" "}
+            <button
+              className="btn"
+              style={{ marginLeft: 8 }}
+              onClick={() => {
+                setSearch("");
+                setDateFrom("");
+                setDateTo("");
+              }}
+            >
+              Clear filters
+            </button>
+          </>
+        ) : canManage ? (
           <>
             No jobs in this view yet.
             <br />
@@ -284,6 +327,9 @@ export default function Home({ navigate, user }) {
               <>
                 Present: <strong>{jobStats.present}</strong> · Past:{" "}
                 <strong>{jobStats.past}</strong>
+                {hasActiveFilter && (
+                  <> · <strong>{filteredJobs.length}</strong> shown</>
+                )}
               </>
             ) : (
               <>
@@ -348,6 +394,77 @@ export default function Home({ navigate, user }) {
               + Create Job
             </button>
           </div>
+        )}
+      </div>
+
+      {/* Search + event date range (all users) */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+          alignItems: "center",
+          marginBottom: 16,
+        }}
+      >
+        <input
+          type="search"
+          placeholder="Search title, venue, client…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ flex: "1 1 240px", minWidth: 0, maxWidth: 360 }}
+        />
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            margin: 0,
+            fontSize: 13,
+            color: "#6b7280",
+            fontWeight: 600,
+          }}
+        >
+          From
+          <input
+            type="date"
+            value={dateFrom}
+            max={dateTo || undefined}
+            onChange={(e) => setDateFrom(e.target.value)}
+            style={{ width: "auto" }}
+          />
+        </label>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            margin: 0,
+            fontSize: 13,
+            color: "#6b7280",
+            fontWeight: 600,
+          }}
+        >
+          To
+          <input
+            type="date"
+            value={dateTo}
+            min={dateFrom || undefined}
+            onChange={(e) => setDateTo(e.target.value)}
+            style={{ width: "auto" }}
+          />
+        </label>
+        {hasActiveFilter && (
+          <button
+            className="btn"
+            onClick={() => {
+              setSearch("");
+              setDateFrom("");
+              setDateTo("");
+            }}
+          >
+            Clear
+          </button>
         )}
       </div>
 
