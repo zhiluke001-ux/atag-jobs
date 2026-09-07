@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import dayjs from "dayjs";
 import { apiGet, apiPost } from "../api";
+import { scanErrorMessage } from "../lib/scanErrors";
 
 /* ---------------- helpers ---------------- */
 const toRad = (d) => (d * Math.PI) / 180;
@@ -158,26 +159,6 @@ function isHourlyJob(job) {
   return false;
 }
 
-/* better error extraction */
-function readApiError(err) {
-  if (!err) return {};
-  if (typeof err === "string") {
-    try {
-      return JSON.parse(err);
-    } catch {
-      return { message: err };
-    }
-  }
-  if (err.message) {
-    try {
-      return JSON.parse(err.message);
-    } catch {
-      return { message: err.message };
-    }
-  }
-  return {};
-}
-
 /* normalize helpers for sets */
 function normalizeUserKey(v) {
   if (!v) return null;
@@ -257,6 +238,18 @@ function extractBreakTimes(rec) {
 }
 
 /* ---------------- UI helpers ---------------- */
+const miniBtn = (bg) => ({
+  background: bg,
+  color: "#fff",
+  border: "none",
+  borderRadius: 8,
+  padding: "3px 8px",
+  fontSize: 11,
+  fontWeight: 800,
+  cursor: "pointer",
+  lineHeight: 1.4,
+});
+
 function Chip({ children, tone = "gray" }) {
   const tones = {
     gray: { bg: "#f3f4f6", fg: "#111827", bd: "#e5e7eb" },
@@ -505,6 +498,10 @@ export default function PMJobDetails({ jobId }) {
   const [scanBusy, setScanBusy] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [scanPopup, setScanPopup] = useState(null); // {kind,text}
+  const [scanLog, setScanLog] = useState([]); // [{id,name,dir,ok,text,at}] newest first, session-only
+  const [manualOpen, setManualOpen] = useState(false); // "mark manually" panel inside overlay
+  const [manualQuery, setManualQuery] = useState("");
+  const [attBusy, setAttBusy] = useState({}); // `${userId}:${field}` -> bool (manual attendance writes)
 
   // addon toggles busy
   const [addonBusy, setAddonBusy] = useState({}); // { "<userId>:<kind>": boolean }
@@ -562,14 +559,6 @@ export default function PMJobDetails({ jobId }) {
     scannerOpenRef.current = scannerOpen;
   }, [scannerOpen]);
 
-  // ✅ local lock to prevent overwrite within the same open session (fast double scans etc.)
-  const scanLockRef = useRef({
-    in: new Set(),
-    out: new Set(),
-    break_in: new Set(),
-    break_out: new Set(),
-  });
-
   // geo
   const [loc, setLoc] = useState(null);
   const locRef = useRef(null);
@@ -580,6 +569,7 @@ export default function PMJobDetails({ jobId }) {
   const watchIdRef = useRef(null);
   const hbTimerRef = useRef(null);
   const pendingTokenRef = useRef(null); // for “GPS not ready yet”
+  const settledTokenRef = useRef({ token: "", at: 0 }); // last token that got a final answer (success / already-*)
 
   // end time cache
   const endedAtRef = useRef(null);
@@ -731,15 +721,9 @@ export default function PMJobDetails({ jobId }) {
     setToken("");
     lastDecodedRef.current = "";
     pendingTokenRef.current = null;
-
-    // reset local scan locks each time scanner opens
-    scanLockRef.current = {
-      in: new Set(),
-      out: new Set(),
-      break_in: new Set(),
-      break_out: new Set(),
-    };
-
+    setManualOpen(false);
+    setManualQuery("");
+    setScanPopup(null);
     setScannerOpen(true);
   }
 
@@ -870,25 +854,83 @@ export default function PMJobDetails({ jobId }) {
     } catch {}
   }
 
-  function popupError(text) {
-    setScanMsg("❌ " + text);
-    setScanPopup({ kind: "error", text });
-    setTimeout(() => setScanPopup(null), 1800);
+  const shortDir = (dir) => {
+    switch (dir) {
+      case "in": return "IN";
+      case "out": return "OUT";
+      case "break_in": return "BREAK IN";
+      case "break_out": return "BREAK OUT";
+      default: return "SCAN";
+    }
+  };
+
+  function pushScanLog({ name, dir, ok, text }) {
+    setScanLog((prev) =>
+      [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          name: name || "",
+          dir: dir || null,
+          ok: !!ok,
+          text: text || "",
+          at: new Date().toISOString(),
+        },
+        ...prev,
+      ].slice(0, 12)
+    );
+  }
+
+  function vibrateErr() {
+    try {
+      if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
+    } catch {}
+  }
+
+  // Error stays on screen until the next scan attempt clears it (no auto-dismiss).
+  function popupError(text, { hint, name, dir, log = true } = {}) {
+    const full = hint ? `${text} ${hint}` : text;
+    setScanMsg("❌ " + full);
+    setScanPopup({ kind: "error", text, hint });
     setToken("");
+    vibrateErr();
+    if (log) pushScanLog({ name, dir, ok: false, text });
     setTimeout(() => {
       lastDecodedRef.current = "";
     }, 600);
   }
 
+  function popupOk(text, { name, dir, log = true } = {}) {
+    setScanMsg("✅ " + text);
+    setScanPopup({ kind: "success", text });
+    vibrateOk();
+    if (log) pushScanLog({ name, dir, ok: true, text });
+    setTimeout(() => setScanPopup(null), 1600);
+  }
+
+  const TERMINAL_CODES = ["already_checked_in", "already_checked_out", "already_break_in", "already_break_out"];
+
   async function doScan(manualToken) {
-    const useToken = manualToken || token;
+    const useToken = (manualToken || token || "").trim();
+
+    // Camera keeps decoding the same QR frame after frame — once a token got a
+    // final answer, don't keep re-hitting the server (and re-buzzing) with it.
+    if (
+      useToken &&
+      useToken === settledTokenRef.current.token &&
+      Date.now() - settledTokenRef.current.at < 8000
+    ) {
+      return;
+    }
+
+    setScanPopup(null); // clear any lingering error before a new attempt
+
     if (!useToken) {
-      setScanMsg("No token detected.");
+      setScanMsg("No QR detected — line the code up inside the box.");
       return;
     }
 
     if (!loc) {
-      setScanMsg("Getting your location… allow location and try again.");
+      setScanMsg("⏳ Waiting for GPS lock — hold still, it will scan automatically…");
       pendingTokenRef.current = useToken;
       setTimeout(() => {
         lastDecodedRef.current = "";
@@ -896,77 +938,18 @@ export default function PMJobDetails({ jobId }) {
       return;
     }
 
+    const tokenDir = extractDirFromToken(useToken); // "in" | "out" | "break_in" | "break_out" | null
+
+    // Fast client-side distance check; the server re-checks authoritatively.
     const applicantLL = extractLatLngFromToken(useToken);
     const maxM = Number(job?.scanMaxMeters) || 500;
     if (applicantLL) {
       const d = haversineMeters(loc, applicantLL);
       if (d != null && d > maxM) {
-        popupError("Too far from part-timer.");
-        return;
-      }
-    }
-
-    // ✅ First-scan-wins guard
-    const tokenDir = extractDirFromToken(useToken); // "in" | "out" | "break_in" | "break_out" | null
-    const tokenUserKey = extractUserKeyFromToken(useToken); // userId/email/sub (best effort)
-
-    // Build candidate keys to match attendance map (userId/email)
-    const candidateKeys = [];
-    if (tokenUserKey) candidateKeys.push(tokenUserKey);
-
-    if (tokenUserKey) {
-      const app = (applicants || []).find((a) => a.userId === tokenUserKey || a.email === tokenUserKey) || null;
-      if (app?.userId && app.userId !== tokenUserKey) candidateKeys.push(app.userId);
-      if (app?.email && app.email !== tokenUserKey) candidateKeys.push(app.email);
-    }
-
-    // local lock (fast repeated scans before reload)
-    if (tokenDir && candidateKeys.length) {
-      const lockSet = scanLockRef.current?.[tokenDir];
-      if (lockSet) {
-        const hit = candidateKeys.find((k) => lockSet.has(k));
-        if (hit) {
-          const when =
-            tokenDir === "in"
-              ? "Already checked-in (locked). Please scan OUT QR."
-              : tokenDir === "out"
-              ? "Already checked-out (locked)."
-              : tokenDir === "break_in"
-              ? "Already BREAK-IN (locked). Please scan BREAK-OUT QR."
-              : "Already BREAK-OUT (locked).";
-          popupError(when);
-          return;
-        }
-      }
-    }
-
-    // server-known attendance check (prevents overwrite across reloads)
-    if (tokenDir && candidateKeys.length) {
-      const attendanceMap = job?.attendance || {};
-      let rec = null;
-      for (const k of candidateKeys) {
-        if (attendanceMap?.[k]) {
-          rec = attendanceMap[k];
-          break;
-        }
-      }
-
-      const { breakIn, breakOut } = extractBreakTimes(rec || {});
-
-      if (tokenDir === "in" && rec?.in) {
-        popupError(`Already checked-in at ${fmtTime(rec.in)}. Please scan OUT QR.`);
-        return;
-      }
-      if (tokenDir === "out" && rec?.out) {
-        popupError(`Already checked-out at ${fmtTime(rec.out)}.`);
-        return;
-      }
-      if (tokenDir === "break_in" && breakIn) {
-        popupError(`Already BREAK-IN at ${fmtTime(breakIn)}. Please scan BREAK-OUT QR.`);
-        return;
-      }
-      if (tokenDir === "break_out" && breakOut) {
-        popupError(`Already BREAK-OUT at ${fmtTime(breakOut)}.`);
+        popupError(`Too far from the person (about ${d} m away, limit ${maxM} m).`, {
+          hint: "Stand next to them and scan again.",
+          dir: tokenDir,
+        });
         return;
       }
     }
@@ -980,38 +963,62 @@ export default function PMJobDetails({ jobId }) {
         scannerLng: loc.lng,
       });
 
-      const msg = `Scan OK at ${dayjs(r.time).format("HH:mm:ss")}`;
-      setScanMsg("✅ " + msg);
-      setScanPopup({ kind: "success", text: msg });
-      vibrateOk();
-      setTimeout(() => setScanPopup(null), 1500);
-
-      // ✅ lock after success
-      if (tokenDir && candidateKeys.length) {
-        const lockSet = scanLockRef.current?.[tokenDir];
-        if (lockSet) candidateKeys.forEach((k) => lockSet.add(k));
-      }
-
+      settledTokenRef.current = { token: useToken, at: Date.now() };
+      const who = findApplicant(r.userId)?.name || "";
+      const t = dayjs(r.time).format("HH:mm:ss");
+      popupOk(`${shortDir(r.direction)} · ${who || "recorded"} · ${t}`, { name: who, dir: r.direction });
       setToken("");
       load(true);
     } catch (e) {
-      let msg = "Scan failed.";
-      const j = readApiError(e);
-      if (j?.error === "jwt_error") msg = "Invalid/expired QR. Ask to regenerate.";
-      else if (j?.error === "too_far") msg = "Too far from user.";
-      else if (j?.error === "event_not_started") msg = "Event not started.";
-      else if (j?.error === "scanner_location_required") msg = "Scanner location missing.";
-      else if (j?.error) msg = j.error;
-
-      setScanMsg("❌ " + msg);
-      setScanPopup({ kind: "error", text: msg });
-      setTimeout(() => setScanPopup(null), 2000);
+      if (TERMINAL_CODES.includes(e?.payload?.error)) {
+        settledTokenRef.current = { token: useToken, at: Date.now() };
+      }
+      const { text, hint } = scanErrorMessage(e?.payload, e?.status);
+      popupError(text, { hint, dir: tokenDir });
       console.error("scan error", e);
     } finally {
       setScanBusy(false);
       setTimeout(() => {
         lastDecodedRef.current = "";
       }, 600);
+    }
+  }
+
+  async function markAttendanceManual(userId, field, { fromScanner = false } = {}) {
+    if (!userId || (field !== "in" && field !== "out")) return;
+    const key = `${userId}:${field}`;
+    setAttBusy((m) => ({ ...m, [key]: true }));
+    try {
+      const now = new Date().toISOString();
+      await apiPost(`/jobs/${jobId}/attendance/mark`, field === "in" ? { userId, inAt: now } : { userId, outAt: now });
+      await load(true);
+      if (fromScanner) {
+        const who = findApplicant(userId)?.name || "";
+        popupOk(`${shortDir(field)} · ${who || "recorded"} · ${dayjs().format("HH:mm:ss")} (manual)`, { name: who, dir: field });
+      }
+    } catch (e) {
+      const { text, hint } = scanErrorMessage(e?.payload, e?.status);
+      if (fromScanner) popupError(`Manual mark failed — ${text}`, { hint });
+      else alert(`Could not mark attendance: ${text}${hint ? ` ${hint}` : ""}`);
+    } finally {
+      setAttBusy((m) => ({ ...m, [key]: false }));
+    }
+  }
+
+  async function clearAttendanceManual(userId) {
+    if (!userId) return;
+    const who = findApplicant(userId)?.name || userId;
+    if (!window.confirm(`Clear ALL attendance (IN, OUT, break) for ${who}? This cannot be undone.`)) return;
+    const key = `${userId}:clear`;
+    setAttBusy((m) => ({ ...m, [key]: true }));
+    try {
+      await apiPost(`/jobs/${jobId}/attendance/mark`, { userId, clear: true });
+      await load(true);
+    } catch (e) {
+      const { text, hint } = scanErrorMessage(e?.payload, e?.status);
+      alert(`Could not clear attendance: ${text}${hint ? ` ${hint}` : ""}`);
+    } finally {
+      setAttBusy((m) => ({ ...m, [key]: false }));
     }
   }
 
@@ -1531,11 +1538,45 @@ export default function PMJobDetails({ jobId }) {
                       </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
-                        <Chip tone={inTone}>{fmtTime(r.in) || "—"}</Chip>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                          <Chip tone={inTone}>{fmtTime(r.in) || "—"}</Chip>
+                          {!isVirtual &&
+                            (r.in ? (
+                              <button
+                                onClick={() => clearAttendanceManual(r.userId)}
+                                disabled={!!attBusy[`${r.userId}:clear`]}
+                                title="Clear all attendance for this person"
+                                style={miniBtn("#b91c1c")}
+                              >
+                                {attBusy[`${r.userId}:clear`] ? "…" : "✕ clear"}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => markAttendanceManual(r.userId, "in")}
+                                disabled={!!attBusy[`${r.userId}:in`]}
+                                title="Mark checked in now"
+                                style={miniBtn("#16a34a")}
+                              >
+                                {attBusy[`${r.userId}:in`] ? "…" : "+ IN"}
+                              </button>
+                            ))}
+                        </div>
                       </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
-                        <Chip tone={outTone}>{fmtTime(r.out) || "—"}</Chip>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                          <Chip tone={outTone}>{fmtTime(r.out) || "—"}</Chip>
+                          {!isVirtual && !r.out && (
+                            <button
+                              onClick={() => markAttendanceManual(r.userId, "out")}
+                              disabled={!!attBusy[`${r.userId}:out`]}
+                              title="Mark checked out now"
+                              style={miniBtn("#dc2626")}
+                            >
+                              {attBusy[`${r.userId}:out`] ? "…" : "+ OUT"}
+                            </button>
+                          )}
+                        </div>
                       </td>
 
                       <td style={{ padding: "10px 10px", textAlign: "center", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" }}>
@@ -1762,9 +1803,125 @@ export default function PMJobDetails({ jobId }) {
             </div>
 
             <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 12, fontWeight: 700 }}>
-              {loc ? `Location: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}` : "Getting your location…"}
+              {loc
+                ? `Location locked: ${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`
+                : "⏳ Getting your location… (scanning won't work until this locks)"}
             </div>
             {scanMsg ? <div style={{ color: "white", fontSize: 12, fontWeight: 800 }}>{scanMsg}</div> : null}
+
+            <button
+              onClick={() => setManualOpen((v) => !v)}
+              style={{
+                alignSelf: "flex-start",
+                background: "rgba(255,255,255,0.14)",
+                color: "white",
+                border: "1px solid rgba(255,255,255,0.2)",
+                padding: "8px 12px",
+                borderRadius: 10,
+                fontSize: 12,
+                fontWeight: 900,
+              }}
+            >
+              {manualOpen ? "✕ Close manual mark" : "Can't scan? Mark manually"}
+            </button>
+
+            {manualOpen && (
+              <div
+                style={{
+                  background: "rgba(17,24,39,0.92)",
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  borderRadius: 12,
+                  padding: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  maxHeight: "40vh",
+                  overflowY: "auto",
+                }}
+              >
+                <input
+                  value={manualQuery}
+                  onChange={(e) => setManualQuery(e.target.value)}
+                  placeholder="Search name or email…"
+                  autoFocus
+                  style={{
+                    borderRadius: 10,
+                    border: "1px solid rgba(255,255,255,0.28)",
+                    background: "rgba(0,0,0,0.35)",
+                    color: "white",
+                    padding: "9px 10px",
+                    fontSize: 13,
+                    outline: "none",
+                  }}
+                />
+                {(() => {
+                  const q = manualQuery.trim().toLowerCase();
+                  const rows = approvedRows
+                    .filter((r) => !q || `${r.name} ${r.email}`.toLowerCase().includes(q))
+                    .slice(0, 30);
+                  if (rows.length === 0) {
+                    return <div style={{ color: "rgba(255,255,255,0.6)", fontSize: 12 }}>No approved people match.</div>;
+                  }
+                  return rows.map((r) => {
+                    const inB = !!attBusy[`${r.userId}:in`];
+                    const outB = !!attBusy[`${r.userId}:out`];
+                    return (
+                      <div
+                        key={r.userId || r.email}
+                        style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8 }}
+                      >
+                        <div style={{ flex: "1 1 140px", minWidth: 0 }}>
+                          <div style={{ color: "white", fontSize: 13, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {r.name || r.email || r.userId}
+                          </div>
+                          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+                            {r.in ? `IN ${fmtTime(r.in)}` : "no IN"} · {r.out ? `OUT ${fmtTime(r.out)}` : "no OUT"}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => markAttendanceManual(r.userId, "in", { fromScanner: true })}
+                          disabled={inB}
+                          style={{ background: r.in ? "rgba(148,163,184,0.5)" : "#22c55e", color: "white", border: "none", padding: "7px 10px", borderRadius: 9, fontSize: 12, fontWeight: 900 }}
+                        >
+                          {inB ? "…" : r.in ? "Re-mark IN" : "Mark IN"}
+                        </button>
+                        <button
+                          onClick={() => markAttendanceManual(r.userId, "out", { fromScanner: true })}
+                          disabled={outB}
+                          style={{ background: r.out ? "rgba(148,163,184,0.5)" : "#ef4444", color: "white", border: "none", padding: "7px 10px", borderRadius: 9, fontSize: 12, fontWeight: 900 }}
+                        >
+                          {outB ? "…" : r.out ? "Re-mark OUT" : "Mark OUT"}
+                        </button>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            )}
+
+            {scanLog.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: "22vh", overflowY: "auto" }}>
+                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, fontWeight: 800 }}>Recent scans</div>
+                {scanLog.map((s) => (
+                  <div
+                    key={s.id}
+                    style={{
+                      fontSize: 11,
+                      color: s.ok ? "rgba(187,247,208,0.95)" : "rgba(254,202,202,0.95)",
+                      display: "flex",
+                      gap: 6,
+                      alignItems: "baseline",
+                    }}
+                  >
+                    <span>{s.ok ? "✓" : "✗"}</span>
+                    <span style={{ fontWeight: 800 }}>{s.dir ? shortDir(s.dir) : "—"}</span>
+                    <span style={{ opacity: 0.9 }}>{s.name || "—"}</span>
+                    <span style={{ opacity: 0.6 }}>{dayjs(s.at).format("HH:mm")}</span>
+                    {!s.ok && <span style={{ opacity: 0.8 }}>· {s.text}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {scanPopup && (
@@ -1774,17 +1931,21 @@ export default function PMJobDetails({ jobId }) {
                 top: "50%",
                 left: "50%",
                 transform: "translate(-50%, -50%)",
-                background: scanPopup.kind === "success" ? "rgba(34,197,94,0.92)" : "rgba(248,113,113,0.92)",
+                background: scanPopup.kind === "success" ? "rgba(34,197,94,0.95)" : "rgba(220,38,38,0.95)",
                 color: "white",
-                padding: "10px 20px",
-                borderRadius: 999,
+                padding: "12px 22px",
+                borderRadius: 16,
                 fontWeight: 900,
                 textAlign: "center",
-                maxWidth: "80%",
-                boxShadow: "0 10px 40px rgba(0,0,0,0.35)",
+                maxWidth: "82%",
+                boxShadow: "0 10px 40px rgba(0,0,0,0.4)",
               }}
+              onClick={() => setScanPopup(null)}
             >
-              {scanPopup.text}
+              <div>{scanPopup.text}</div>
+              {scanPopup.hint && (
+                <div style={{ fontWeight: 600, fontSize: 12, marginTop: 4, opacity: 0.95 }}>{scanPopup.hint}</div>
+              )}
             </div>
           )}
         </div>
